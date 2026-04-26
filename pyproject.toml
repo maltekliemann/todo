@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "todo"
+version = "0.1.0"
+description = "A persistent, SQLite-backed todo app with CLI and TUI"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Malte Kliemann", email = "mail@maltekliemann.com" }]
+requires-python = ">=3.10"
+dependencies = [
+    "click>=8.1",
+    "rich>=13.0",
+    "textual>=0.80",
+]
+
+[project.scripts]
+todo = "todo.infra.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/todo"]
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.mypy]
+strict = true
+packages = ["todo"]
+mypy_path = "src"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

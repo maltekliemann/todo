@@ -1,0 +1,268 @@
+from __future__ import annotations
+
+import sys
+from datetime import date
+
+import click
+
+from todo.adapters.output import create_output
+from todo.adapters.sqlite_storage import SqliteStorage
+from todo.application.commands import (
+    add_todo,
+    complete_todo,
+    delete_todo,
+    edit_todo,
+    move_todo,
+)
+from todo.application.contracts.storage import UNSET
+from todo.application.queries import list_todos, show_todo, summary
+from todo.config import get_db_path
+from todo.domain.enums import Priority, Status
+from todo.exceptions import NotFoundError, TodoError
+
+_PRIORITY_CHOICES = [p.value for p in Priority]
+_STATUS_CHOICES = [s.value for s in Status]
+
+
+def _storage() -> SqliteStorage:
+    return SqliteStorage(get_db_path())
+
+
+@click.group()
+def main() -> None:
+    """A persistent, SQLite-backed todo app."""
+
+
+@main.command()
+@click.argument("title")
+@click.option(
+    "--priority", "-p",
+    type=click.Choice(_PRIORITY_CHOICES, case_sensitive=False),
+    default="medium",
+)
+@click.option(
+    "--status", "-s",
+    type=click.Choice(_STATUS_CHOICES, case_sensitive=False),
+    default="todo",
+)
+@click.option("--body", "-b", default="")
+@click.option("--deadline", "-d", default=None, help="Due date (YYYY-MM-DD)")
+@click.option("--tag", "-t", multiple=True, help="Tag (repeatable)")
+@click.option("--json", "as_json", is_flag=True, help="Output JSON")
+def add(
+    title: str,
+    priority: str,
+    status: str,
+    body: str,
+    deadline: str | None,
+    tag: tuple[str, ...],
+    as_json: bool,
+) -> None:
+    """Add a new todo item."""
+    storage = _storage()
+    out = create_output()
+    dl = date.fromisoformat(deadline) if deadline else None
+    item = add_todo(
+        storage,
+        title,
+        body=body,
+        priority=Priority.from_string(priority),
+        status=Status.from_string(status),
+        deadline=dl,
+        tags=list(tag) if tag else None,
+    )
+    if as_json:
+        out.print_json_item(item)
+    else:
+        out.print_item(item)
+
+
+@main.command("list")
+@click.option(
+    "--status", "-s",
+    type=click.Choice(_STATUS_CHOICES, case_sensitive=False),
+    default=None,
+)
+@click.option(
+    "--priority", "-p",
+    type=click.Choice(_PRIORITY_CHOICES, case_sensitive=False),
+    default=None,
+)
+@click.option("--tag", "-t", default=None)
+@click.option("--all", "include_all", is_flag=True, help="Include done items")
+@click.option("--json", "as_json", is_flag=True, help="Output JSON")
+def list_cmd(
+    status: str | None,
+    priority: str | None,
+    tag: str | None,
+    include_all: bool,
+    as_json: bool,
+) -> None:
+    """List todo items."""
+    storage = _storage()
+    out = create_output()
+    items = list_todos(
+        storage,
+        status=Status.from_string(status) if status else None,
+        priority=Priority.from_string(priority) if priority else None,
+        tag=tag,
+        include_done=include_all,
+    )
+    if as_json:
+        out.print_json_list(items)
+    else:
+        out.print_list(items)
+
+
+@main.command()
+@click.argument("item_id", type=int)
+@click.option("--json", "as_json", is_flag=True, help="Output JSON")
+def show(item_id: int, as_json: bool) -> None:
+    """Show details for a todo item."""
+    storage = _storage()
+    out = create_output()
+    try:
+        item = show_todo(storage, item_id)
+    except NotFoundError as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
+    if as_json:
+        out.print_json_item(item)
+    else:
+        out.print_item(item)
+
+
+@main.command()
+@click.argument("item_id", type=int)
+@click.option("--title", default=None)
+@click.option("--body", default=None)
+@click.option(
+    "--priority", "-p",
+    type=click.Choice(_PRIORITY_CHOICES, case_sensitive=False),
+    default=None,
+)
+@click.option(
+    "--status", "-s",
+    type=click.Choice(_STATUS_CHOICES, case_sensitive=False),
+    default=None,
+)
+@click.option("--deadline", "-d", default=None, help="Due date (YYYY-MM-DD or 'none')")
+@click.option("--tag", "-t", multiple=True, help="Replace tags (repeatable)")
+@click.option("--json", "as_json", is_flag=True, help="Output JSON")
+def edit(
+    item_id: int,
+    title: str | None,
+    body: str | None,
+    priority: str | None,
+    status: str | None,
+    deadline: str | None,
+    tag: tuple[str, ...],
+    as_json: bool,
+) -> None:
+    """Edit a todo item."""
+    storage = _storage()
+    out = create_output()
+
+    dl: date | None | type[UNSET] = type(UNSET)
+    if deadline is not None:
+        if deadline.lower() == "none":
+            dl = None
+        else:
+            dl = date.fromisoformat(deadline)
+
+    try:
+        item = edit_todo(
+            storage,
+            item_id,
+            title=title,
+            body=body,
+            priority=Priority.from_string(priority) if priority else None,
+            status=Status.from_string(status) if status else None,
+            deadline=UNSET if dl is type(UNSET) else dl,
+            tags=list(tag) if tag else None,
+        )
+    except NotFoundError as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
+    if as_json:
+        out.print_json_item(item)
+    else:
+        out.print_item(item)
+
+
+@main.command()
+@click.argument("item_id", type=int)
+@click.argument("status", type=click.Choice(_STATUS_CHOICES, case_sensitive=False))
+@click.option("--json", "as_json", is_flag=True, help="Output JSON")
+def mv(item_id: int, status: str, as_json: bool) -> None:
+    """Move a todo item to a new status."""
+    storage = _storage()
+    out = create_output()
+    try:
+        item = move_todo(storage, item_id, Status.from_string(status))
+    except NotFoundError as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
+    if as_json:
+        out.print_json_item(item)
+    else:
+        out.print_item(item)
+
+
+@main.command()
+@click.argument("item_id", type=int)
+@click.option("--json", "as_json", is_flag=True, help="Output JSON")
+def done(item_id: int, as_json: bool) -> None:
+    """Mark a todo item as done."""
+    storage = _storage()
+    out = create_output()
+    try:
+        item = complete_todo(storage, item_id)
+    except NotFoundError as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
+    if as_json:
+        out.print_json_item(item)
+    else:
+        out.print_item(item)
+
+
+@main.command()
+@click.argument("item_id", type=int)
+def rm(item_id: int) -> None:
+    """Delete a todo item."""
+    storage = _storage()
+    out = create_output()
+    try:
+        delete_todo(storage, item_id)
+    except NotFoundError as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
+    out.print_deleted(item_id)
+
+
+@main.command("summary")
+@click.option("--since", required=True, help="'7 days', '2 weeks', or '2025-04-01'")
+@click.option("--json", "as_json", is_flag=True, help="Output JSON")
+def summary_cmd(since: str, as_json: bool) -> None:
+    """Show a summary of completed items."""
+    storage = _storage()
+    out = create_output()
+    try:
+        since_dt, items = summary(storage, since)
+    except ValueError as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
+    if as_json:
+        out.print_json_summary(since_dt, items)
+    else:
+        out.print_summary(since_dt, items)
+
+
+@main.command()
+def ui() -> None:
+    """Launch the interactive TUI."""
+    from todo.tui.app import TodoApp
+
+    app = TodoApp()
+    app.run()

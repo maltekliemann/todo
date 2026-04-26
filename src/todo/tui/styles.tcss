@@ -1,0 +1,101 @@
+Screen {
+    background: $surface;
+}
+
+TodoListView {
+    layout: vertical;
+    height: 100%;
+}
+
+#item-list {
+    height: 1fr;
+    min-height: 5;
+}
+
+#detail-panel {
+    height: auto;
+    max-height: 10;
+    padding: 1 2;
+    background: $panel;
+    border-top: solid $primary;
+}
+
+#detail-title {
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+#detail-meta {
+    color: $text-muted;
+}
+
+#detail-body {
+    margin-top: 1;
+}
+
+#search-status {
+    height: 1;
+    padding: 0 1;
+    background: $boost;
+}
+
+NewItemDialog {
+    align: center middle;
+}
+
+NewItemDialog > #dialog-container {
+    width: 60;
+    height: auto;
+    padding: 1 2;
+    background: $surface;
+    border: thick $primary;
+}
+
+NewItemDialog Label {
+    margin-top: 1;
+}
+
+#dialog-title {
+    text-style: bold;
+    margin-top: 0;
+}
+
+#dialog-error {
+    color: $error;
+    margin-top: 1;
+    height: 1;
+}
+
+#dialog-hint {
+    color: $text-muted;
+    margin-top: 1;
+}
+
+ConfirmDialog {
+    align: center middle;
+}
+
+ConfirmDialog > #confirm-container {
+    width: 40;
+    height: auto;
+    padding: 1 2;
+    background: $surface;
+    border: thick $error;
+}
+
+#confirm-hint {
+    color: $text-muted;
+    margin-top: 1;
+}
+
+SearchDialog {
+    align: center middle;
+}
+
+SearchDialog > #search-container {
+    width: 60;
+    height: auto;
+    padding: 1 2;
+    background: $surface;
+    border: thick $primary;
+}
