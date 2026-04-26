@@ -14,7 +14,7 @@ TodoListView {
 
 #detail-panel {
     height: auto;
-    max-height: 10;
+    max-height: 15;
     padding: 1 2;
     background: $panel;
     border-top: solid $primary;
@@ -98,4 +98,38 @@ SearchDialog > #search-container {
     padding: 1 2;
     background: $surface;
     border: thick $primary;
+}
+
+InspectDialog {
+    align: center middle;
+}
+
+InspectDialog > #inspect-container {
+    width: 80%;
+    height: 80%;
+    max-width: 100;
+    padding: 1 2;
+    background: $surface;
+    border: thick $primary;
+}
+
+#inspect-title {
+    margin-bottom: 1;
+}
+
+#inspect-meta {
+    color: $text-muted;
+    margin-bottom: 1;
+}
+
+#inspect-body-scroll {
+    height: 1fr;
+    border-top: solid $primary 30%;
+    padding-top: 1;
+    margin-bottom: 1;
+}
+
+#inspect-hint {
+    color: $text-muted;
+    text-align: center;
 }

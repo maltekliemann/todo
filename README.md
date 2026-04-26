@@ -108,6 +108,7 @@ Launch with `todo ui`. A footer at the bottom shows the available keys.
 | `>` | Advance status (backlog → todo → in-progress → done) |
 | `<` | Move status back |
 | `d` | Mark as done |
+| `i` | Inspect (full read-only view, scrollable body) |
 | `e` / `Enter` | Edit in `$EDITOR` |
 | `n` | New item |
 | `x` / `Delete` | Delete (with confirmation) |

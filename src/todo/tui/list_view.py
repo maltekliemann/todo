@@ -8,7 +8,7 @@ from datetime import date, datetime
 from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Vertical
+from textual.containers import Container, Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widget import Widget
@@ -28,7 +28,49 @@ from todo.domain.enums import Priority, Status
 from todo.domain.models import TodoItem
 from todo.exceptions import NotFoundError
 
-_SEPARATOR_KEY = "__separator__"
+_SEPARATOR_PREFIX = "__sep_"
+
+
+def _is_separator(value: object) -> bool:
+    return isinstance(value, str) and value.startswith(_SEPARATOR_PREFIX)
+
+
+class TodoTable(DataTable[str]):
+    """DataTable that skips over separator rows when navigating with up/down."""
+
+    def _current_row_key(self) -> object:
+        if self.row_count == 0:
+            return None
+        try:
+            return self.coordinate_to_cell_key(
+                (self.cursor_row, 0)
+            ).row_key.value
+        except Exception:
+            return None
+
+    def _skip_separators(self, direction: int) -> None:
+        # direction: +1 = down, -1 = up
+        while _is_separator(self._current_row_key()):
+            new_row = self.cursor_row + direction
+            if new_row < 0 or new_row >= self.row_count:
+                # Hit a boundary — try the opposite direction so the cursor
+                # never rests on a separator.
+                opposite = -direction
+                while _is_separator(self._current_row_key()):
+                    other_row = self.cursor_row + opposite
+                    if other_row < 0 or other_row >= self.row_count:
+                        return
+                    self.move_cursor(row=other_row)
+                return
+            self.move_cursor(row=new_row)
+
+    def action_cursor_down(self) -> None:  # type: ignore[override]
+        super().action_cursor_down()
+        self._skip_separators(1)
+
+    def action_cursor_up(self) -> None:  # type: ignore[override]
+        super().action_cursor_up()
+        self._skip_separators(-1)
 
 
 def _priority_label(p: Priority) -> str:
@@ -365,13 +407,57 @@ class SearchDialog(ModalScreen[str | None]):
         self.dismiss(None)
 
 
+class InspectDialog(ModalScreen[None]):
+    """Read-only modal showing the full content of a todo item."""
+
+    BINDINGS = [
+        Binding("escape", "close", "Close"),
+        Binding("q", "close", "Close"),
+        Binding("i", "close", "Close"),
+    ]
+
+    def __init__(self, item: TodoItem) -> None:
+        super().__init__()
+        self._item = item
+
+    def compose(self) -> ComposeResult:
+        item = self._item
+        with Vertical(id="inspect-container"):
+            yield Static(f"[b]#{item.id}  {item.title}[/b]", id="inspect-title")
+            meta_lines = [
+                f"Priority: {item.priority.value}    Status: {item.status.value}",
+            ]
+            if item.deadline:
+                meta_lines.append(f"Deadline: {_deadline_str(item)}")
+            meta_lines.append(
+                f"Created: {item.created_at.strftime('%b %d, %Y %H:%M')}    "
+                f"Updated: {item.updated_at.strftime('%b %d, %Y %H:%M')}"
+            )
+            if item.done_at:
+                meta_lines.append(
+                    f"Done: {item.done_at.strftime('%b %d, %Y %H:%M')}"
+                )
+            if item.tags:
+                meta_lines.append(f"Tags: {', '.join(item.tags)}")
+            yield Static("\n".join(meta_lines), id="inspect-meta")
+            with VerticalScroll(id="inspect-body-scroll"):
+                yield Static(
+                    item.body if item.body else "[dim](no description)[/dim]",
+                    id="inspect-body",
+                )
+            yield Label("Esc / q / i to close", id="inspect-hint")
+
+    def action_close(self) -> None:
+        self.dismiss()
+
+
 class TodoListView(Widget):
     BINDINGS = [
         Binding("q", "quit_app", "Quit", show=True),
         Binding("n", "new", "New", show=True),
+        Binding("i", "inspect", "Inspect", show=True),
         Binding("d", "done", "Done", show=True),
         Binding("e", "edit", "Edit", show=True),
-        Binding("enter", "edit", "Edit", show=False),
         Binding("x,delete", "delete", "Delete", show=True),
         Binding("greater_than_sign", "status_next", "Status >", show=True),
         Binding("less_than_sign", "status_prev", "Status <", show=True),
@@ -389,7 +475,7 @@ class TodoListView(Widget):
         self._last_data_version: int = 0
 
     def compose(self) -> ComposeResult:
-        yield DataTable(id="item-list", cursor_type="row", zebra_stripes=True)
+        yield TodoTable(id="item-list", cursor_type="row", zebra_stripes=True)
         with Vertical(id="detail-panel"):
             yield Static("", id="detail-title")
             yield Static("", id="detail-meta")
@@ -416,6 +502,12 @@ class TodoListView(Widget):
         if event.row_key is not None:
             self._update_detail(event.row_key.value)
 
+    @on(DataTable.RowSelected, "#item-list")
+    def on_row_selected(self, event: DataTable.RowSelected) -> None:
+        if event.row_key is None or _is_separator(event.row_key.value):
+            return
+        self.action_inspect()
+
     def _refresh_list(self) -> None:
         table = self.query_one("#item-list", DataTable)
         previous_id = self._selected_item_id()
@@ -434,37 +526,44 @@ class TodoListView(Widget):
                 or any(q in t.lower() for t in i.tags)
             ]
 
-        active = [i for i in self._items if not i.is_done]
-        done = [i for i in self._items if i.is_done]
+        # Group items by status, preserving the per-group ordering from the
+        # storage layer (priority, then created_at).
+        status_order = [
+            Status.IN_PROGRESS,
+            Status.TODO,
+            Status.BACKLOG,
+            Status.DONE,
+        ]
+        groups: dict[Status, list[TodoItem]] = {s: [] for s in status_order}
+        for item in self._items:
+            groups[item.status].append(item)
 
         row_index_of: dict[int, int] = {}
         index = 0
-        for item in active:
+        for status in status_order:
+            items = groups[status]
+            if not items:
+                continue
             table.add_row(
-                str(item.id),
-                _priority_label(item.priority),
-                f"{_status_icon(item.status)} {item.status.value}",
-                item.title,
-                _deadline_str(item),
-                _relative_age(item.created_at),
-                key=str(item.id),
-            )
-            row_index_of[item.id] = index
-            index += 1
-
-        if done:
-            table.add_row(
-                "", "", "-- done --", "", "", "",
-                key=_SEPARATOR_KEY,
+                "",
+                "",
+                f"── {status.value} ({len(items)}) ──",
+                "",
+                "",
+                "",
+                key=f"{_SEPARATOR_PREFIX}{status.value}",
             )
             index += 1
-            for item in done:
+            for item in items:
+                deadline_text = (
+                    _deadline_str(item) if status != Status.DONE else ""
+                )
                 table.add_row(
                     str(item.id),
                     _priority_label(item.priority),
                     f"{_status_icon(item.status)} {item.status.value}",
                     item.title,
-                    "",
+                    deadline_text,
                     _relative_age(item.created_at),
                     key=str(item.id),
                 )
@@ -474,9 +573,17 @@ class TodoListView(Widget):
         if table.row_count > 0:
             if previous_id is not None and previous_id in row_index_of:
                 table.move_cursor(row=row_index_of[previous_id])
+            elif row_index_of:
+                # Land on the first item row, not the leading separator.
+                first_item_row = min(row_index_of.values())
+                clamped = min(previous_cursor, table.row_count - 1)
+                target = (
+                    clamped if clamped >= first_item_row else first_item_row
+                )
+                table.move_cursor(row=target)
+                table._skip_separators(1)
             else:
-                new_cursor = min(previous_cursor, table.row_count - 1)
-                table.move_cursor(row=max(0, new_cursor))
+                table.move_cursor(row=0)
 
         self._last_data_version = self._storage.data_version()
 
@@ -490,7 +597,7 @@ class TodoListView(Widget):
             status.update("")
 
     def _update_detail(self, item_id: object) -> None:
-        if item_id == _SEPARATOR_KEY or item_id is None:
+        if item_id is None or _is_separator(item_id):
             self.query_one("#detail-title", Static).update("")
             self.query_one("#detail-meta", Static).update("")
             self.query_one("#detail-body", Static).update("")
@@ -534,7 +641,7 @@ class TodoListView(Widget):
             row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
         except Exception:
             return None
-        if row_key.value == _SEPARATOR_KEY or row_key.value is None:
+        if row_key.value is None or _is_separator(row_key.value):
             return None
         try:
             return int(str(row_key.value))
@@ -557,6 +664,16 @@ class TodoListView(Widget):
             return
         complete_todo(self._storage, item_id)
         self._refresh_list()
+
+    def action_inspect(self) -> None:
+        item_id = self._selected_item_id()
+        if item_id is None:
+            return
+        try:
+            item = show_todo(self._storage, item_id)
+        except NotFoundError:
+            return
+        self.app.push_screen(InspectDialog(item))
 
     def action_edit(self) -> None:
         item_id = self._selected_item_id()

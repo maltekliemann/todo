@@ -9,7 +9,14 @@ from todo.adapters.sqlite_storage import SqliteStorage
 from todo.application.commands import add_todo
 from todo.domain.enums import Priority, Status
 from todo.tui.app import TodoApp
-from todo.tui.list_view import TodoListView
+from todo.tui.list_view import TodoListView, _is_separator
+
+
+def _item_rows(table: DataTable) -> int:
+    """Count rows in a TodoTable that represent actual items (skip separators)."""
+    return sum(
+        1 for row_key in table.rows if not _is_separator(row_key.value)
+    )
 
 
 @pytest.fixture()
@@ -27,8 +34,8 @@ class TestBasics:
         async with app.run_test() as pilot:
             assert app.is_running
             table = app.query_one("#item-list", DataTable)
-            # 3 seeded items, all active (none done)
-            assert table.row_count == 3
+            # 3 seeded items (separators in table not counted)
+            assert _item_rows(table) == 3
 
     async def test_quit_with_q(self, seeded_storage: SqliteStorage) -> None:
         app = TodoApp(storage=seeded_storage)
@@ -436,7 +443,7 @@ class TestSearch:
 
             table = app.query_one("#item-list", DataTable)
             # Only the urgent task remains
-            assert table.row_count == 1
+            assert _item_rows(table) == 1
 
     async def test_escape_clears_search(
         self, seeded_storage: SqliteStorage
@@ -451,12 +458,12 @@ class TestSearch:
                 await pilot.press(ch)
             await pilot.press("enter")
             await pilot.pause()
-            assert app.query_one("#item-list", DataTable).row_count == 1
+            assert _item_rows(app.query_one("#item-list", DataTable)) == 1
 
             # Clear
             await pilot.press("escape")
             await pilot.pause()
-            assert app.query_one("#item-list", DataTable).row_count == 3
+            assert _item_rows(app.query_one("#item-list", DataTable)) == 3
 
 
 class TestDetailPanel:
@@ -481,6 +488,115 @@ class TestDetailPanel:
             assert "High task" in str(title.render())
 
 
+class TestInspect:
+    async def test_i_opens_inspect_dialog(
+        self, seeded_storage: SqliteStorage
+    ) -> None:
+        from todo.tui.list_view import InspectDialog
+
+        app = TodoApp(storage=seeded_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("i")
+            await pilot.pause()
+            assert isinstance(app.screen, InspectDialog)
+
+    async def test_enter_opens_inspect_dialog(
+        self, seeded_storage: SqliteStorage
+    ) -> None:
+        from todo.tui.list_view import InspectDialog
+
+        app = TodoApp(storage=seeded_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, InspectDialog)
+
+    async def test_inspect_shows_full_body(
+        self, db_path: Path
+    ) -> None:
+        """Long bodies are visible in the inspect modal (not clipped)."""
+        from todo.tui.list_view import InspectDialog
+
+        storage = SqliteStorage(db_path)
+        long_body = "\n".join(f"line {i}" for i in range(40))
+        add_todo(storage, "Has long body", body=long_body)
+
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("i")
+            await pilot.pause()
+            assert isinstance(app.screen, InspectDialog)
+
+            body_widget = app.screen.query_one("#inspect-body", Static)
+            rendered = str(body_widget.render())
+            assert "line 0" in rendered
+            assert "line 39" in rendered
+
+    async def test_escape_closes_inspect(
+        self, seeded_storage: SqliteStorage
+    ) -> None:
+        from todo.tui.list_view import InspectDialog
+
+        app = TodoApp(storage=seeded_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("i")
+            await pilot.pause()
+            assert isinstance(app.screen, InspectDialog)
+            await pilot.press("escape")
+            await pilot.pause()
+            assert not isinstance(app.screen, InspectDialog)
+
+
+class TestStatusGroups:
+    async def test_separator_per_status(self, db_path: Path) -> None:
+        """A separator row appears for each non-empty status group."""
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "todo 1")  # default status: todo
+        add_todo(storage, "backlog 1", status=Status.BACKLOG)
+        add_todo(storage, "in-progress 1", status=Status.IN_PROGRESS)
+        add_todo(storage, "done 1", status=Status.DONE)
+
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            table = app.query_one("#item-list", DataTable)
+            separator_keys = [
+                row_key.value
+                for row_key in table.rows
+                if _is_separator(row_key.value)
+            ]
+            # One separator per status, in display order
+            assert separator_keys == [
+                "__sep_in-progress",
+                "__sep_todo",
+                "__sep_backlog",
+                "__sep_done",
+            ]
+
+    async def test_arrow_down_skips_separators(
+        self, db_path: Path
+    ) -> None:
+        """Pressing down on the last item of a group skips the next separator."""
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "alpha")  # todo
+        add_todo(storage, "bravo", status=Status.BACKLOG)
+
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            # Cursor lands on the first item ("alpha").
+            title = app.query_one("#detail-title", Static)
+            assert "alpha" in str(title.render())
+            # Pressing down should skip the backlog separator and land on "bravo".
+            await pilot.press("down")
+            await pilot.pause()
+            assert "bravo" in str(title.render())
+
+
 class TestExternalChangePolling:
     """The TUI should pick up changes made via the CLI (or any other process)."""
 
@@ -490,7 +606,7 @@ class TestExternalChangePolling:
         app = TodoApp(storage=seeded_storage)
         async with app.run_test() as pilot:
             await pilot.pause()
-            initial_rows = app.query_one("#item-list", DataTable).row_count
+            initial_rows = _item_rows(app.query_one("#item-list", DataTable))
 
             # Simulate the CLI adding an item via a separate connection
             from pathlib import Path
@@ -506,7 +622,7 @@ class TestExternalChangePolling:
             view._poll_for_external_changes()
             await pilot.pause()
 
-            new_rows = app.query_one("#item-list", DataTable).row_count
+            new_rows = _item_rows(app.query_one("#item-list", DataTable))
             assert new_rows == initial_rows + 1
 
     async def test_external_delete_disappears(
@@ -515,7 +631,7 @@ class TestExternalChangePolling:
         app = TodoApp(storage=seeded_storage)
         async with app.run_test() as pilot:
             await pilot.pause()
-            initial_rows = app.query_one("#item-list", DataTable).row_count
+            initial_rows = _item_rows(app.query_one("#item-list", DataTable))
 
             from pathlib import Path
 
@@ -529,7 +645,7 @@ class TestExternalChangePolling:
             view._poll_for_external_changes()
             await pilot.pause()
 
-            new_rows = app.query_one("#item-list", DataTable).row_count
+            new_rows = _item_rows(app.query_one("#item-list", DataTable))
             assert new_rows == initial_rows - 1
 
     async def test_no_refresh_when_unchanged(
