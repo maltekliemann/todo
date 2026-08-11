@@ -412,6 +412,20 @@ class TestUnblock:
         assert data["blocked_by"] == [2]
         assert data["is_blocked"] is True
 
+    def test_unblock_nonexistent_target_fails(self, invoke) -> None:
+        result = invoke("unblock 99 1")
+        assert result.exit_code == 1
+        assert "#99 not found" in result.stderr
+
+    def test_unblock_non_blocker_is_idempotent(self, invoke) -> None:
+        """Removing a relation that doesn't exist succeeds and changes nothing."""
+        invoke("add One")
+        invoke("add Two")
+        result = invoke("unblock 1 2")
+        assert result.exit_code == 0
+        data = json.loads(invoke("show 1 --json").output)
+        assert data["blocked_by"] == []
+
 
 class TestUnblockWarning:
     def test_done_warns_about_newly_unblocked(self, invoke) -> None:
