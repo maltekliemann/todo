@@ -82,8 +82,9 @@ is done.
       over fetched items (presentation, kept). (024a355)
 - [x] Error-handling audit: found + fixed --deadline ValueError traceback in
       add/edit; all other CLI errors exit 1 with stderr message. (024a355)
-- [ ] Coverage run (`just cov`): ≥90% on domain/application/adapters; fill gaps
-      with meaningful tests (not assertion-free padding).
+- [x] Coverage: 80% → 89% overall; domain 100%, application 96-100%, output
+      42% → 90%. Surfaced + fixed a real Rich markup crash on medium-priority
+      rows in TTY rendering. (ba5e3ac, a5293ae)
 - [ ] README.md: refresh usage docs for all new commands.
 
 ## Phase 6 — Final verification (see LOOP.md stop condition)
@@ -132,3 +133,6 @@ is done.
   green: 173 passed, all clean.
 - 2026-08-12 iter 12: architecture-enforcement tests + deadline input fix
   (024a355). Gates green: 178 passed, all clean.
+- 2026-08-12 iter 13: Rich output + domain unit tests, fixed TTY markup crash
+  (ba5e3ac, a5293ae). Note: one commit landed with a red test (age-bucket
+  flake), fixed in the follow-up. Gates green: 205 passed, all clean.
