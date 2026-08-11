@@ -24,12 +24,13 @@ bottom. Baseline commit before the loop started: `658ec6b`.
       from application layer, 🔓 stderr warnings in CLI, toast in TUI. (fb38a26)
 - [x] TUI: detail pane shows Blocked by / Blocking (verified, pre-existing);
       blocked rows dimmed; `b` dialog adds by id, removes via `-id`. (4b9e557)
-- [ ] Tests: cycle chains (a→b→c→a), self-block, unblock-nonexistent, blocked
-      styling in TUI, JSON output includes dependency fields.
+- [x] Tests: cycle chains, self-block, blocked TUI styling, JSON dependency
+      fields all pre-existed; added unblock-nonexistent + idempotent-removal.
+      (0398110)
 
 ## Phase 2 — Labels: search & filter
 
-- [ ] CLI: `todo tags` — list all tags with usage counts (plus `--json`).
+- [x] CLI: `todo tags` — usage counts, most-used first, --json. (7cfbab2)
 - [ ] CLI: `--tag` repeatable on `list` with AND semantics; keep single-tag
       behavior backward compatible.
 - [ ] CLI: `todo list --search TEXT` — case-insensitive substring match over title
@@ -118,3 +119,5 @@ is done.
   119 passed, mypy clean, ruff clean, format clean.
 - 2026-08-12 iter 4: TUI blocked-row dimming + dialog removal (4b9e557).
   Gates green: 121 passed, mypy clean, ruff clean, format clean.
+- 2026-08-12 iter 5: Phase 1 closed (unblock edge tests, 0398110) and 'todo
+  tags' command (7cfbab2). Gates green: 127 passed, all clean.
