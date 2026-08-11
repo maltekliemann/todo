@@ -716,6 +716,50 @@ class TestBlocking:
             # No relation was created.
             assert seeded_storage.get(1).blocked_by == []
 
+    async def test_b_block_dialog_negative_id_removes_relation(
+        self, seeded_storage: SqliteStorage
+    ) -> None:
+        from todo.application.commands import block_todo
+
+        block_todo(seeded_storage, 1, 2)
+        assert seeded_storage.get(1).is_blocked is True
+
+        app = TodoApp(storage=seeded_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            # Cursor on item #1; remove blocker #2 via "-2".
+            await pilot.press("b")
+            await pilot.pause()
+            await pilot.press("minus", "2")
+            await pilot.press("enter")
+            await pilot.pause()
+
+            item = seeded_storage.get(1)
+            assert item.blocked_by == []
+            assert item.is_blocked is False
+
+    async def test_blocked_row_is_dimmed(self, db_path: Path) -> None:
+        from rich.text import Text
+
+        from todo.application.commands import block_todo
+
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Blocked item")  # id 1
+        add_todo(storage, "Blocker item")  # id 2
+        block_todo(storage, 1, 2)
+
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            table = app.query_one("#item-list", DataTable)
+
+            blocked_cell = table.get_row_at(table.get_row_index("1"))[3]
+            assert isinstance(blocked_cell, Text)
+            assert blocked_cell.style == "dim"
+
+            blocker_cell = table.get_row_at(table.get_row_index("2"))[3]
+            assert not isinstance(blocker_cell, Text)
+
 
 class TestKeyBindingsDontHang:
     """Regression tests: ensure no key binding locks up the UI."""

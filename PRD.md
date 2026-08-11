@@ -178,7 +178,8 @@ Launch with: `todo ui`
 Blocked items (any not-done blocker) are prefixed with `🚧` in both the CLI
 list and the TUI table. The detail pane and `todo show` display the full
 `Blocked by:` / `Blocking:` id lists. In the TUI, `b` opens a dialog to add a
-blocker to the selected item by id.
+blocker to the selected item by id (a `-` prefix removes it, e.g. `-3`), and
+blocked rows are dimmed.
 
 ---
 

@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 from datetime import date, datetime
 
+from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -24,6 +25,7 @@ from todo.application.commands import (
     delete_todo,
     edit_todo,
     move_todo,
+    unblock_todo,
 )
 from todo.application.contracts.storage import UNSET, Unset
 from todo.application.queries import list_todos, show_todo
@@ -38,7 +40,7 @@ def _is_separator(value: object) -> bool:
     return isinstance(value, str) and value.startswith(_SEPARATOR_PREFIX)
 
 
-class TodoTable(DataTable[str]):
+class TodoTable(DataTable["str | Text"]):
     """DataTable that skips over separator rows when navigating with up/down."""
 
     def _current_row_key(self) -> object:
@@ -411,11 +413,12 @@ class SearchDialog(ModalScreen[str | None]):
 
 
 class BlockDialog(ModalScreen[str | None]):
-    """Prompt for a blocker id and add the blocking relation.
+    """Prompt for a blocker id and add or remove the blocking relation.
 
-    The command call happens here so validation/dependency errors can be
-    shown inline while keeping the dialog open. Dismisses with the entered
-    string on success, or ``None`` on cancel.
+    A plain id adds a blocker; an id prefixed with ``-`` removes one. The
+    command call happens here so validation/dependency errors can be shown
+    inline while keeping the dialog open. Dismisses with the entered string
+    on success, or ``None`` on cancel.
     """
 
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
@@ -427,8 +430,8 @@ class BlockDialog(ModalScreen[str | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="block-container"):
-            yield Label(f"Block #{self._blocked_id} by (item id):")
-            yield Input(id="block-input", placeholder="Blocker item id...")
+            yield Label(f"Block #{self._blocked_id} by (item id, -id removes):")
+            yield Input(id="block-input", placeholder="e.g. 3 to add, -3 to remove")
             yield Label("", id="block-error")
 
     def on_mount(self) -> None:
@@ -440,7 +443,10 @@ class BlockDialog(ModalScreen[str | None]):
         error_w = self.query_one("#block-error", Label)
         try:
             blocker_id = int(value)
-            block_todo(self._storage, self._blocked_id, blocker_id)
+            if blocker_id < 0:
+                unblock_todo(self._storage, self._blocked_id, -blocker_id)
+            else:
+                block_todo(self._storage, self._blocked_id, blocker_id)
         except (NotFoundError, DependencyError, ValueError) as exc:
             message = str(exc) if str(exc) else "Invalid blocker id"
             error_w.update(message)
@@ -607,18 +613,21 @@ class TodoListView(Widget):
             index += 1
             for item in items:
                 deadline_text = _deadline_str(item) if status != Status.DONE else ""
-                title_text = (
-                    f"\U0001f6a7 {item.title}" if item.is_blocked else item.title
-                )
-                table.add_row(
+                cells: list[str] = [
                     str(item.id),
                     _priority_label(item.priority),
                     f"{_status_icon(item.status)} {item.status.value}",
-                    title_text,
+                    f"\U0001f6a7 {item.title}" if item.is_blocked else item.title,
                     deadline_text,
                     _relative_age(item.created_at),
-                    key=str(item.id),
-                )
+                ]
+                if item.is_blocked:
+                    table.add_row(
+                        *(Text(c, style="dim") for c in cells),
+                        key=str(item.id),
+                    )
+                else:
+                    table.add_row(*cells, key=str(item.id))
                 row_index_of[item.id] = index
                 index += 1
 
