@@ -413,6 +413,50 @@ class TestUnblock:
         assert data["is_blocked"] is True
 
 
+class TestListBlockedReady:
+    def _setup(self, invoke) -> None:
+        invoke("add Free")
+        invoke("add Blocker")
+        invoke("add Blocked")
+        invoke("block 3 2")
+        invoke("add Finished")
+        invoke("done 4")
+
+    def test_blocked_only(self, invoke) -> None:
+        self._setup(invoke)
+        data = json.loads(invoke("list --blocked --json").output)
+        assert [i["id"] for i in data] == [3]
+
+    def test_ready_excludes_blocked_and_done(self, invoke) -> None:
+        self._setup(invoke)
+        data = json.loads(invoke("list --ready --json").output)
+        assert sorted(i["id"] for i in data) == [1, 2]
+
+    def test_ready_with_all_still_excludes_done(self, invoke) -> None:
+        self._setup(invoke)
+        data = json.loads(invoke("list --ready --all --json").output)
+        assert sorted(i["id"] for i in data) == [1, 2]
+
+    def test_blocked_and_ready_mutually_exclusive(self, invoke) -> None:
+        result = invoke("list --blocked --ready")
+        assert result.exit_code != 0
+        assert "mutually exclusive" in result.output
+
+    def test_done_blocker_makes_item_ready(self, invoke) -> None:
+        self._setup(invoke)
+        invoke("done 2")
+        data = json.loads(invoke("list --ready --json").output)
+        assert sorted(i["id"] for i in data) == [1, 3]
+        assert json.loads(invoke("list --blocked --json").output) == []
+
+    def test_blocked_composes_with_other_filters(self, invoke) -> None:
+        self._setup(invoke)
+        invoke("add Urgent-blocked -p urgent")
+        invoke("block 5 2")
+        data = json.loads(invoke("list --blocked -p urgent --json").output)
+        assert [i["id"] for i in data] == [5]
+
+
 class TestBlockStorage:
     """Application + storage layer behavior, bypassing the CLI."""
 

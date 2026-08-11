@@ -15,13 +15,22 @@ def list_todos(
     priority: Priority | None = None,
     tag: str | None = None,
     include_done: bool = False,
+    blocked: bool = False,
+    ready: bool = False,
 ) -> list[TodoItem]:
-    return storage.list(
+    if blocked and ready:
+        raise ValueError("'blocked' and 'ready' are mutually exclusive.")
+    items = storage.list(
         status=status,
         priority=priority,
         tag=tag,
         include_done=include_done,
     )
+    if blocked:
+        items = [i for i in items if i.is_blocked]
+    elif ready:
+        items = [i for i in items if not i.is_blocked and not i.is_done]
+    return items
 
 
 def show_todo(

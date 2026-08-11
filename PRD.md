@@ -56,6 +56,8 @@ todo list                                # all non-done items
 todo list --status done                  # done items
 todo list --priority urgent              # filter by priority
 todo list --tag deploy                   # filter by tag
+todo list --blocked                      # only blocked items
+todo list --ready                        # only actionable items (not done, not blocked)
 todo list --all                          # include done items
 todo show 7                              # show full detail for item #7
 todo edit 7 --priority urgent            # change priority

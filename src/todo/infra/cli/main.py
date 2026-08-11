@@ -96,15 +96,23 @@ def add(
 )
 @click.option("--tag", "-t", default=None)
 @click.option("--all", "include_all", is_flag=True, help="Include done items")
+@click.option("--blocked", is_flag=True, help="Only blocked items")
+@click.option(
+    "--ready", is_flag=True, help="Only actionable items (not done, not blocked)"
+)
 @click.option("--json", "as_json", is_flag=True, help="Output JSON")
 def list_cmd(
     status: str | None,
     priority: str | None,
     tag: str | None,
     include_all: bool,
+    blocked: bool,
+    ready: bool,
     as_json: bool,
 ) -> None:
     """List todo items."""
+    if blocked and ready:
+        raise click.UsageError("--blocked and --ready are mutually exclusive.")
     storage = _storage()
     out = create_output()
     items = list_todos(
@@ -113,6 +121,8 @@ def list_cmd(
         priority=Priority.from_string(priority) if priority else None,
         tag=tag,
         include_done=include_all,
+        blocked=blocked,
+        ready=ready,
     )
     if as_json:
         out.print_json_list(items)
