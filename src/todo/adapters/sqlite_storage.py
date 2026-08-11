@@ -6,9 +6,14 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from todo.application.contracts.storage import UNSET, Unset
-from todo.domain.enums import Priority, Status
-from todo.domain.models import TodoItem
-from todo.exceptions import NotFoundError, StorageError
+from todo.domain.enums import Priority, ProjectStatus, Status
+from todo.domain.models import Project, TodoItem
+from todo.exceptions import (
+    DuplicateProjectError,
+    NotFoundError,
+    ProjectNotFoundError,
+    StorageError,
+)
 
 _SCHEMA = """\
 CREATE TABLE IF NOT EXISTS todos (
@@ -29,6 +34,24 @@ CREATE TABLE IF NOT EXISTS todo_dependencies (
     PRIMARY KEY (blocker_id, blocked_id)
 );
 """
+
+# Versioned migrations, gated by PRAGMA user_version. Index i migrates a
+# database at user_version i to i+1. A fresh database runs all of them, so
+# fresh and upgraded databases end up with the identical schema.
+_MIGRATIONS: list[str] = [
+    """\
+CREATE TABLE projects (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT    NOT NULL UNIQUE,
+    description TEXT    NOT NULL DEFAULT '',
+    status      TEXT    NOT NULL DEFAULT 'active',
+    created_at  TEXT    NOT NULL,
+    updated_at  TEXT    NOT NULL
+);
+ALTER TABLE todos ADD COLUMN project_id INTEGER
+    REFERENCES projects(id) ON DELETE SET NULL;
+""",
+]
 
 
 def _now() -> datetime:
@@ -65,7 +88,30 @@ def _row_to_item(
         blocked_by=blocked_by if blocked_by is not None else [],
         blocking=blocking if blocking is not None else [],
         is_blocked=is_blocked,
+        project_id=row["project_id"],
+        project_name=row["project_name"],
     )
+
+
+def _row_to_project(row: sqlite3.Row) -> Project:
+    return Project(
+        id=row["id"],
+        name=row["name"],
+        description=row["description"],
+        status=ProjectStatus(row["status"]),
+        created_at=datetime.fromisoformat(row["created_at"]),
+        updated_at=datetime.fromisoformat(row["updated_at"]),
+    )
+
+
+_TODO_SELECT = (
+    "SELECT todos.*, projects.name AS project_name FROM todos "
+    "LEFT JOIN projects ON projects.id = todos.project_id"
+)
+
+# Class-scope alias: inside SqliteStorage the name `list` is the query method,
+# so `list[Project]` would not resolve to the builtin there.
+ProjectList = list[Project]
 
 
 class SqliteStorage:
@@ -76,6 +122,14 @@ class SqliteStorage:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(_SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        version = int(self._conn.execute("PRAGMA user_version").fetchone()[0])
+        for target, script in enumerate(_MIGRATIONS[version:], start=version + 1):
+            self._conn.executescript(script)
+            self._conn.execute(f"PRAGMA user_version = {target}")
+        self._conn.commit()
 
     def close(self) -> None:
         self._conn.close()
@@ -94,6 +148,7 @@ class SqliteStorage:
         status: Status = Status.TODO,
         deadline: date | None = None,
         tags: list[str] | None = None,
+        project_id: int | None = None,
     ) -> TodoItem:
         now = _now().isoformat()
         done_at = now if status == Status.DONE else None
@@ -102,8 +157,8 @@ class SqliteStorage:
         try:
             cur = self._conn.execute(
                 "INSERT INTO todos (title, body, priority, status, created_at, "
-                "updated_at, done_at, deadline, tags) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "updated_at, done_at, deadline, tags, project_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     title,
                     body,
@@ -114,6 +169,7 @@ class SqliteStorage:
                     done_at,
                     deadline_str,
                     tags_str,
+                    project_id,
                 ),
             )
             self._conn.commit()
@@ -123,7 +179,7 @@ class SqliteStorage:
 
     def get(self, item_id: int) -> TodoItem:
         row = self._conn.execute(
-            "SELECT * FROM todos WHERE id = ?", (item_id,)
+            f"{_TODO_SELECT} WHERE todos.id = ?", (item_id,)
         ).fetchone()
         if row is None:
             raise NotFoundError(item_id)
@@ -164,6 +220,7 @@ class SqliteStorage:
         status: Status | None = None,
         deadline: date | None | Unset = UNSET,
         tags: list[str] | None = None,
+        project_id: int | None | Unset = UNSET,
     ) -> TodoItem:
         # Verify it exists
         existing = self.get(item_id)
@@ -195,6 +252,9 @@ class SqliteStorage:
         if tags is not None:
             sets.append("tags = ?")
             params.append(",".join(tags))
+        if not isinstance(project_id, Unset):
+            sets.append("project_id = ?")
+            params.append(str(project_id) if project_id is not None else None)
 
         if not sets:
             return existing
@@ -220,8 +280,8 @@ class SqliteStorage:
 
     def done_since(self, since: datetime) -> list[TodoItem]:
         rows = self._conn.execute(
-            "SELECT * FROM todos WHERE status = ? AND done_at >= ? "
-            "ORDER BY done_at DESC",
+            f"{_TODO_SELECT} WHERE todos.status = ? AND todos.done_at >= ? "
+            "ORDER BY todos.done_at DESC",
             (Status.DONE.value, since.isoformat()),
         ).fetchall()
         return [_row_to_item(r) for r in rows]
@@ -256,49 +316,56 @@ class SqliteStorage:
         priority: Priority | None = None,
         tags: list[str] | None = None,
         search: str | None = None,
+        project_id: int | None = None,
         include_done: bool = False,
     ) -> list[TodoItem]:
         clauses: list[str] = []
-        params: list[str] = []
+        params: list[str | int] = []
 
         if status is not None:
-            clauses.append("status = ?")
+            clauses.append("todos.status = ?")
             params.append(status.value)
         elif not include_done:
-            clauses.append("status != ?")
+            clauses.append("todos.status != ?")
             params.append(Status.DONE.value)
 
         if priority is not None:
-            clauses.append("priority = ?")
+            clauses.append("todos.priority = ?")
             params.append(priority.value)
 
         for tag in tags or []:
-            clauses.append("(',' || tags || ',') LIKE ? ESCAPE '\\'")
+            clauses.append("(',' || todos.tags || ',') LIKE ? ESCAPE '\\'")
             params.append(f"%,{_like_escape(tag)},%")
 
         if search is not None and search != "":
-            clauses.append("(title LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\')")
+            clauses.append(
+                "(todos.title LIKE ? ESCAPE '\\' OR todos.body LIKE ? ESCAPE '\\')"
+            )
             pattern = f"%{_like_escape(search)}%"
             params.extend([pattern, pattern])
+
+        if project_id is not None:
+            clauses.append("todos.project_id = ?")
+            params.append(project_id)
 
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         # Sort: overdue first, then by priority weight, then by creation date
         query = (
-            f"SELECT * FROM todos{where} "
+            f"{_TODO_SELECT}{where} "
             "ORDER BY "
-            "CASE status "
+            "CASE todos.status "
             "  WHEN 'in-progress' THEN 0 "
             "  WHEN 'todo' THEN 1 "
             "  WHEN 'backlog' THEN 2 "
             "  WHEN 'done' THEN 3 "
             "END, "
-            "CASE priority "
+            "CASE todos.priority "
             "  WHEN 'urgent' THEN 0 "
             "  WHEN 'high' THEN 1 "
             "  WHEN 'medium' THEN 2 "
             "  WHEN 'low' THEN 3 "
             "END, "
-            "created_at ASC"
+            "todos.created_at ASC"
         )
         rows = self._conn.execute(query, params).fetchall()
 
@@ -329,3 +396,85 @@ class SqliteStorage:
                 )
             )
         return items
+
+    def add_project(self, name: str, *, description: str = "") -> Project:
+        now = _now().isoformat()
+        try:
+            cur = self._conn.execute(
+                "INSERT INTO projects (name, description, status, created_at, "
+                "updated_at) VALUES (?, ?, ?, ?, ?)",
+                (name, description, ProjectStatus.ACTIVE.value, now, now),
+            )
+            self._conn.commit()
+        except sqlite3.IntegrityError as e:
+            raise DuplicateProjectError(name) from e
+        except sqlite3.Error as e:
+            raise StorageError(f"Failed to add project: {e}") from e
+        return self.get_project(cur.lastrowid)  # type: ignore[arg-type]
+
+    def get_project(self, project_id: int) -> Project:
+        row = self._conn.execute(
+            "SELECT * FROM projects WHERE id = ?", (project_id,)
+        ).fetchone()
+        if row is None:
+            raise ProjectNotFoundError(project_id)
+        return _row_to_project(row)
+
+    def get_project_by_name(self, name: str) -> Project:
+        row = self._conn.execute(
+            "SELECT * FROM projects WHERE name = ?", (name,)
+        ).fetchone()
+        if row is None:
+            raise ProjectNotFoundError(name)
+        return _row_to_project(row)
+
+    def list_projects(self, *, include_archived: bool = False) -> "ProjectList":
+        where = "" if include_archived else " WHERE status = 'active'"
+        rows = self._conn.execute(
+            f"SELECT * FROM projects{where} ORDER BY name ASC"
+        ).fetchall()
+        return [_row_to_project(r) for r in rows]
+
+    def update_project(
+        self,
+        project_id: int,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        status: ProjectStatus | None = None,
+    ) -> Project:
+        self.get_project(project_id)  # raises ProjectNotFoundError if missing
+
+        sets: list[str] = []
+        params: list[str] = []
+        if name is not None:
+            sets.append("name = ?")
+            params.append(name)
+        if description is not None:
+            sets.append("description = ?")
+            params.append(description)
+        if status is not None:
+            sets.append("status = ?")
+            params.append(status.value)
+        if not sets:
+            return self.get_project(project_id)
+
+        sets.append("updated_at = ?")
+        params.append(_now().isoformat())
+        params.append(str(project_id))
+        try:
+            self._conn.execute(
+                f"UPDATE projects SET {', '.join(sets)} WHERE id = ?",
+                params,
+            )
+            self._conn.commit()
+        except sqlite3.IntegrityError as e:
+            raise DuplicateProjectError(name or "") from e
+        except sqlite3.Error as e:
+            raise StorageError(f"Failed to update project #{project_id}: {e}") from e
+        return self.get_project(project_id)
+
+    def delete_project(self, project_id: int) -> None:
+        self.get_project(project_id)  # raises ProjectNotFoundError if missing
+        self._conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+        self._conn.commit()

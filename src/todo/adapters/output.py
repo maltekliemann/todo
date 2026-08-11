@@ -86,6 +86,8 @@ def _item_to_dict(item: TodoItem) -> dict[str, object]:
         "blocked_by": item.blocked_by,
         "blocking": item.blocking,
         "is_blocked": item.is_blocked,
+        "project_id": item.project_id,
+        "project": item.project_name,
     }
 
 

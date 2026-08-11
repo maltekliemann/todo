@@ -3,7 +3,21 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, datetime
 
-from todo.domain.enums import Priority, Status
+from todo.domain.enums import Priority, ProjectStatus, Status
+
+
+@dataclass(frozen=True)
+class Project:
+    id: int
+    name: str
+    description: str
+    status: ProjectStatus
+    created_at: datetime
+    updated_at: datetime
+
+    @property
+    def is_archived(self) -> bool:
+        return self.status == ProjectStatus.ARCHIVED
 
 
 @dataclass(frozen=True)
@@ -21,6 +35,8 @@ class TodoItem:
     blocked_by: list[int] = field(default_factory=list)
     blocking: list[int] = field(default_factory=list)
     is_blocked: bool = False
+    project_id: int | None = None
+    project_name: str | None = None
 
     @property
     def is_done(self) -> bool:

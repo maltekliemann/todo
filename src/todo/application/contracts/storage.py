@@ -4,8 +4,8 @@ from datetime import date, datetime
 from enum import Enum, auto
 from typing import Protocol, runtime_checkable
 
-from todo.domain.enums import Priority, Status
-from todo.domain.models import TodoItem
+from todo.domain.enums import Priority, ProjectStatus, Status
+from todo.domain.models import Project, TodoItem
 
 
 class Unset(Enum):
@@ -15,6 +15,10 @@ class Unset(Enum):
 
 
 UNSET = Unset.UNSET
+
+# Module-scope alias: inside StorageProtocol the name `list` is the query
+# method, so `list[Project]` would not resolve to the builtin there.
+ProjectList = list[Project]
 
 
 @runtime_checkable
@@ -28,6 +32,7 @@ class StorageProtocol(Protocol):
         status: Status = Status.TODO,
         deadline: date | None = None,
         tags: list[str] | None = None,
+        project_id: int | None = None,
     ) -> TodoItem: ...
 
     def get(self, item_id: int) -> TodoItem: ...
@@ -42,6 +47,7 @@ class StorageProtocol(Protocol):
         status: Status | None = None,
         deadline: date | None | Unset = UNSET,
         tags: list[str] | None = None,
+        project_id: int | None | Unset = UNSET,
     ) -> TodoItem: ...
 
     def delete(self, item_id: int) -> None: ...
@@ -59,5 +65,25 @@ class StorageProtocol(Protocol):
         priority: Priority | None = None,
         tags: list[str] | None = None,
         search: str | None = None,
+        project_id: int | None = None,
         include_done: bool = False,
     ) -> list[TodoItem]: ...
+
+    def add_project(self, name: str, *, description: str = "") -> Project: ...
+
+    def get_project(self, project_id: int) -> Project: ...
+
+    def get_project_by_name(self, name: str) -> Project: ...
+
+    def list_projects(self, *, include_archived: bool = False) -> ProjectList: ...
+
+    def update_project(
+        self,
+        project_id: int,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        status: ProjectStatus | None = None,
+    ) -> Project: ...
+
+    def delete_project(self, project_id: int) -> None: ...

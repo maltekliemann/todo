@@ -18,6 +18,21 @@ class Priority(Enum):
             raise ValueError(f"Invalid priority '{value}'. Must be one of: {valid}")
 
 
+class ProjectStatus(Enum):
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+
+    @classmethod
+    def from_string(cls, value: str) -> ProjectStatus:
+        try:
+            return cls(value.lower())
+        except ValueError:
+            valid = ", ".join(s.value for s in cls)
+            raise ValueError(
+                f"Invalid project status '{value}'. Must be one of: {valid}"
+            )
+
+
 _STATUS_ORDER: list[str] = ["backlog", "todo", "in-progress", "done"]
 
 

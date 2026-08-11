@@ -19,3 +19,16 @@ class NotFoundError(TodoError):
 
 class DependencyError(TodoError):
     """Raised for invalid blocking relations (self-block, cycle)."""
+
+
+class ProjectNotFoundError(TodoError):
+    def __init__(self, ref: int | str) -> None:
+        label = f"#{ref}" if isinstance(ref, int) else f"'{ref}'"
+        super().__init__(f"Project {label} not found")
+        self.ref = ref
+
+
+class DuplicateProjectError(TodoError):
+    def __init__(self, name: str) -> None:
+        super().__init__(f"Project '{name}' already exists")
+        self.name = name

@@ -18,6 +18,7 @@ def add_todo(
     status: Status = Status.TODO,
     deadline: date | None = None,
     tags: list[str] | None = None,
+    project_id: int | None = None,
 ) -> TodoItem:
     return storage.add(
         title,
@@ -26,6 +27,7 @@ def add_todo(
         status=status,
         deadline=deadline,
         tags=tags,
+        project_id=project_id,
     )
 
 
