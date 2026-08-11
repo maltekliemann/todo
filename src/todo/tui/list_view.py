@@ -477,9 +477,7 @@ class InspectDialog(ModalScreen[None]):
                 f"Updated: {item.updated_at.strftime('%b %d, %Y %H:%M')}"
             )
             if item.done_at:
-                meta_lines.append(
-                    f"Done: {item.done_at.strftime('%b %d, %Y %H:%M')}"
-                )
+                meta_lines.append(f"Done: {item.done_at.strftime('%b %d, %Y %H:%M')}")
             if item.tags:
                 meta_lines.append(f"Tags: {', '.join(item.tags)}")
             if item.blocked_by:
@@ -607,9 +605,7 @@ class TodoListView(Widget):
             )
             index += 1
             for item in items:
-                deadline_text = (
-                    _deadline_str(item) if status != Status.DONE else ""
-                )
+                deadline_text = _deadline_str(item) if status != Status.DONE else ""
                 title_text = (
                     f"\U0001f6a7 {item.title}" if item.is_blocked else item.title
                 )
@@ -632,9 +628,7 @@ class TodoListView(Widget):
                 # Land on the first item row, not the leading separator.
                 first_item_row = min(row_index_of.values())
                 clamped = min(previous_cursor, table.row_count - 1)
-                target = (
-                    clamped if clamped >= first_item_row else first_item_row
-                )
+                target = clamped if clamped >= first_item_row else first_item_row
                 table.move_cursor(row=target)
                 table._skip_separators(1)
             else:
@@ -667,9 +661,7 @@ class TodoListView(Widget):
         meta_w = self.query_one("#detail-meta", Static)
         body_w = self.query_one("#detail-body", Static)
 
-        dl_str = (
-            f"  Deadline: {_deadline_str(item)}" if item.deadline else ""
-        )
+        dl_str = f"  Deadline: {_deadline_str(item)}" if item.deadline else ""
         done_str = (
             f"   Done: {item.done_at.strftime('%b %d, %Y %H:%M')}"
             if item.done_at

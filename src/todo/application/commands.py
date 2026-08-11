@@ -92,9 +92,7 @@ def block_todo(
         seen.add(current)
         for nxt in storage.get(current).blocking:
             if nxt == blocker_id:
-                raise DependencyError(
-                    "Adding this blocker would create a cycle."
-                )
+                raise DependencyError("Adding this blocker would create a cycle.")
             stack.append(nxt)
     storage.add_blocker(blocked_id, blocker_id)
     return storage.get(blocked_id)

@@ -141,9 +141,7 @@ class SqliteStorage:
                 f"SELECT status FROM todos WHERE id IN ({placeholders})",
                 blocked_by,
             ).fetchall()
-            is_blocked = any(
-                r["status"] != Status.DONE.value for r in status_rows
-            )
+            is_blocked = any(r["status"] != Status.DONE.value for r in status_rows)
         return _row_to_item(
             row,
             blocked_by=blocked_by,
@@ -239,8 +237,7 @@ class SqliteStorage:
     def remove_blocker(self, blocked_id: int, blocker_id: int) -> None:
         try:
             self._conn.execute(
-                "DELETE FROM todo_dependencies "
-                "WHERE blocker_id = ? AND blocked_id = ?",
+                "DELETE FROM todo_dependencies WHERE blocker_id = ? AND blocked_id = ?",
                 (blocker_id, blocked_id),
             )
             self._conn.commit()

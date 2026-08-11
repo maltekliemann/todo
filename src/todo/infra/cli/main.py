@@ -38,12 +38,14 @@ def main() -> None:
 @main.command()
 @click.argument("title")
 @click.option(
-    "--priority", "-p",
+    "--priority",
+    "-p",
     type=click.Choice(_PRIORITY_CHOICES, case_sensitive=False),
     default="medium",
 )
 @click.option(
-    "--status", "-s",
+    "--status",
+    "-s",
     type=click.Choice(_STATUS_CHOICES, case_sensitive=False),
     default="todo",
 )
@@ -81,12 +83,14 @@ def add(
 
 @main.command("list")
 @click.option(
-    "--status", "-s",
+    "--status",
+    "-s",
     type=click.Choice(_STATUS_CHOICES, case_sensitive=False),
     default=None,
 )
 @click.option(
-    "--priority", "-p",
+    "--priority",
+    "-p",
     type=click.Choice(_PRIORITY_CHOICES, case_sensitive=False),
     default=None,
 )
@@ -139,12 +143,14 @@ def show(item_id: int, as_json: bool) -> None:
 @click.option("--title", default=None)
 @click.option("--body", default=None)
 @click.option(
-    "--priority", "-p",
+    "--priority",
+    "-p",
     type=click.Choice(_PRIORITY_CHOICES, case_sensitive=False),
     default=None,
 )
 @click.option(
-    "--status", "-s",
+    "--status",
+    "-s",
     type=click.Choice(_STATUS_CHOICES, case_sensitive=False),
     default=None,
 )

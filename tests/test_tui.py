@@ -14,9 +14,7 @@ from todo.tui.list_view import TodoListView, _is_separator
 
 def _item_rows(table: DataTable) -> int:
     """Count rows in a TodoTable that represent actual items (skip separators)."""
-    return sum(
-        1 for row_key in table.rows if not _is_separator(row_key.value)
-    )
+    return sum(1 for row_key in table.rows if not _is_separator(row_key.value))
 
 
 @pytest.fixture()
@@ -99,9 +97,7 @@ class TestDoneAction:
 
 
 class TestDelete:
-    async def test_x_opens_confirm_dialog(
-        self, seeded_storage: SqliteStorage
-    ) -> None:
+    async def test_x_opens_confirm_dialog(self, seeded_storage: SqliteStorage) -> None:
         app = TodoApp(storage=seeded_storage)
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -230,7 +226,8 @@ class TestNewDialog:
             await pilot.pause()
 
             new_item = next(
-                i for i in seeded_storage.list(include_done=True)
+                i
+                for i in seeded_storage.list(include_done=True)
                 if i.title == "Default pri"
             )
             assert new_item.priority == Priority.MEDIUM
@@ -300,9 +297,7 @@ class TestNewDialog:
             # Title -> Priority
             await pilot.press("down")
             await pilot.pause()
-            assert app.screen.query_one(
-                "#new-priority", AdvancingSelect
-            ).has_focus
+            assert app.screen.query_one("#new-priority", AdvancingSelect).has_focus
 
             # Priority -> Deadline
             await pilot.press("down")
@@ -322,9 +317,7 @@ class TestNewDialog:
             # Deadline <- Priority
             await pilot.press("up")
             await pilot.pause()
-            assert app.screen.query_one(
-                "#new-priority", AdvancingSelect
-            ).has_focus
+            assert app.screen.query_one("#new-priority", AdvancingSelect).has_focus
 
             # Priority <- Title
             await pilot.press("up")
@@ -413,7 +406,6 @@ class TestNewDialog:
             assert "title" in str(error_label.render()).lower()
 
 
-
 class TestSearch:
     async def test_slash_opens_search(self, seeded_storage: SqliteStorage) -> None:
         app = TodoApp(storage=seeded_storage)
@@ -425,9 +417,7 @@ class TestSearch:
 
             assert isinstance(app.screen, SearchDialog)
 
-    async def test_search_filters_list(
-        self, seeded_storage: SqliteStorage
-    ) -> None:
+    async def test_search_filters_list(self, seeded_storage: SqliteStorage) -> None:
         app = TodoApp(storage=seeded_storage)
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -443,9 +433,7 @@ class TestSearch:
             # Only the urgent task remains
             assert _item_rows(table) == 1
 
-    async def test_escape_clears_search(
-        self, seeded_storage: SqliteStorage
-    ) -> None:
+    async def test_escape_clears_search(self, seeded_storage: SqliteStorage) -> None:
         app = TodoApp(storage=seeded_storage)
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -487,9 +475,7 @@ class TestDetailPanel:
 
 
 class TestInspect:
-    async def test_i_opens_inspect_dialog(
-        self, seeded_storage: SqliteStorage
-    ) -> None:
+    async def test_i_opens_inspect_dialog(self, seeded_storage: SqliteStorage) -> None:
         from todo.tui.list_view import InspectDialog
 
         app = TodoApp(storage=seeded_storage)
@@ -511,9 +497,7 @@ class TestInspect:
             await pilot.pause()
             assert isinstance(app.screen, InspectDialog)
 
-    async def test_inspect_shows_full_body(
-        self, db_path: Path
-    ) -> None:
+    async def test_inspect_shows_full_body(self, db_path: Path) -> None:
         """Long bodies are visible in the inspect modal (not clipped)."""
         from todo.tui.list_view import InspectDialog
 
@@ -533,9 +517,7 @@ class TestInspect:
             assert "line 0" in rendered
             assert "line 39" in rendered
 
-    async def test_escape_closes_inspect(
-        self, seeded_storage: SqliteStorage
-    ) -> None:
+    async def test_escape_closes_inspect(self, seeded_storage: SqliteStorage) -> None:
         from todo.tui.list_view import InspectDialog
 
         app = TodoApp(storage=seeded_storage)
@@ -563,9 +545,7 @@ class TestStatusGroups:
             await pilot.pause()
             table = app.query_one("#item-list", DataTable)
             separator_keys = [
-                row_key.value
-                for row_key in table.rows
-                if _is_separator(row_key.value)
+                row_key.value for row_key in table.rows if _is_separator(row_key.value)
             ]
             # One separator per status, in display order
             assert separator_keys == [
@@ -575,9 +555,7 @@ class TestStatusGroups:
                 "__sep_done",
             ]
 
-    async def test_arrow_down_skips_separators(
-        self, db_path: Path
-    ) -> None:
+    async def test_arrow_down_skips_separators(self, db_path: Path) -> None:
         """Pressing down on the last item of a group skips the next separator."""
         storage = SqliteStorage(db_path)
         add_todo(storage, "alpha")  # todo
@@ -598,9 +576,7 @@ class TestStatusGroups:
 class TestExternalChangePolling:
     """The TUI should pick up changes made via the CLI (or any other process)."""
 
-    async def test_external_add_appears(
-        self, seeded_storage: SqliteStorage
-    ) -> None:
+    async def test_external_add_appears(self, seeded_storage: SqliteStorage) -> None:
         app = TodoApp(storage=seeded_storage)
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -609,9 +585,9 @@ class TestExternalChangePolling:
             # Simulate the CLI adding an item via a separate connection
             from pathlib import Path
 
-            other = SqliteStorage(Path(seeded_storage._conn.execute(
-                "PRAGMA database_list"
-            ).fetchone()[2]))
+            other = SqliteStorage(
+                Path(seeded_storage._conn.execute("PRAGMA database_list").fetchone()[2])
+            )
             add_todo(other, "Added by CLI", priority=Priority.MEDIUM)
             other.close()
 
@@ -633,9 +609,9 @@ class TestExternalChangePolling:
 
             from pathlib import Path
 
-            other = SqliteStorage(Path(seeded_storage._conn.execute(
-                "PRAGMA database_list"
-            ).fetchone()[2]))
+            other = SqliteStorage(
+                Path(seeded_storage._conn.execute("PRAGMA database_list").fetchone()[2])
+            )
             other.delete(1)
             other.close()
 
@@ -746,8 +722,18 @@ class TestKeyBindingsDontHang:
 
     @pytest.mark.parametrize(
         "key",
-        ["l", "h", "left", "right", "j", "k", "up", "down",
-         "greater_than_sign", "less_than_sign"],
+        [
+            "l",
+            "h",
+            "left",
+            "right",
+            "j",
+            "k",
+            "up",
+            "down",
+            "greater_than_sign",
+            "less_than_sign",
+        ],
     )
     async def test_single_key_doesnt_hang(
         self, seeded_storage: SqliteStorage, key: str
