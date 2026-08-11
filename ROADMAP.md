@@ -51,11 +51,10 @@ nullable). Projects have: `id`, `name` (unique), `description`, `status`
 free-text notes on a project) are a stretch goal — do them last if everything else
 is done.
 
-- [ ] Schema migration via `PRAGMA user_version`: new `projects` table,
-      `project_id` column on todos (`ON DELETE SET NULL`). Fresh DB == migrated DB;
-      test both.
-- [ ] Domain model `Project` (frozen dataclass) + storage protocol methods +
-      sqlite implementation.
+- [x] Schema migration via `PRAGMA user_version`; fresh == migrated verified,
+      idempotent, data preserved. (72d4a06)
+- [x] Domain `Project` + ProjectStatus enum + protocol methods + sqlite CRUD
+      with DuplicateProjectError/ProjectNotFoundError. (72d4a06)
 - [ ] CLI: `todo project add NAME [--description]`, `todo project list`
       (with open/done counts per project), `todo project show NAME_OR_ID` (details,
       progress, its todos), `todo project edit`, `todo project archive`,
@@ -126,3 +125,6 @@ is done.
   Gates green: 138 passed, all clean.
 - 2026-08-12 iter 7: TUI tag/priority filters + clear-all, Phase 2 closed
   (ed248e8). Gates green: 142 passed, all clean.
+- 2026-08-12 iter 8: projects storage foundation + user_version migrations
+  (72d4a06). Fixed JOIN ambiguity in done_since and a list[]-shadowing mypy
+  issue. Gates green: 154 passed, all clean.
