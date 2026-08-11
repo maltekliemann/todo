@@ -5,15 +5,16 @@ install:
     uv tool install --from . todo --reinstall --no-cache
 
 test:
-    python -m pytest tests/
+    uv run pytest tests/
 
 lint:
-    ruff check src/ tests/
-    mypy
+    uv run ruff check src/ tests/
+    uv run ruff format --check src/ tests/
+    uv run mypy
 
 fmt:
-    ruff check --fix src/ tests/
-    ruff format src/ tests/
+    uv run ruff check --fix src/ tests/
+    uv run ruff format src/ tests/
 
 cov:
-    python -m pytest tests/ --cov=todo --cov-report=term-missing
+    uv run pytest tests/ --cov=todo --cov-report=term-missing
