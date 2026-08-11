@@ -55,15 +55,13 @@ is done.
       idempotent, data preserved. (72d4a06)
 - [x] Domain `Project` + ProjectStatus enum + protocol methods + sqlite CRUD
       with DuplicateProjectError/ProjectNotFoundError. (72d4a06)
-- [ ] CLI: `todo project add NAME [--description]`, `todo project list`
-      (with open/done counts per project), `todo project show NAME_OR_ID` (details,
-      progress, its todos), `todo project edit`, `todo project archive`,
-      `todo project rm` (todos survive, unassigned). All with `--json`.
-- [ ] CLI: `todo add --project NAME`, `todo edit N --project NAME|none`,
-      `todo list --project NAME`.
+- [x] CLI: `todo project add/list/show/edit/archive/rm` with counts, --json,
+      name-or-id resolution. (965d19e)
+- [x] CLI: `todo add --project`, `todo edit N --project NAME|none`,
+      `todo list --project NAME`. (965d19e)
 - [ ] TUI: project shown in detail pane; filter by project (key or Select widget).
-- [ ] PRD.md: new Projects section incl. the label-vs-project rationale;
-      remove/adjust the stale "Out of scope" bullets this obsoletes.
+- [x] PRD.md: Projects section with label-vs-project rationale and CLI
+      examples. (965d19e) — "Out of scope" bullets still to review.
 - [ ] Stretch: `todo project log NAME "update text"` + updates shown in
       `project show`.
 
@@ -128,3 +126,5 @@ is done.
 - 2026-08-12 iter 8: projects storage foundation + user_version migrations
   (72d4a06). Fixed JOIN ambiguity in done_since and a list[]-shadowing mypy
   issue. Gates green: 154 passed, all clean.
+- 2026-08-12 iter 9: full project CLI + --project on add/edit/list + PRD
+  section (965d19e). Gates green: 166 passed, all clean.
