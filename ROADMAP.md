@@ -18,9 +18,8 @@ bottom. Baseline commit before the loop started: `658ec6b`.
 
 ## Phase 1 — Blockers: finish the feature
 
-- [ ] CLI: `todo list --blocked` (only blocked items) and `todo list --ready`
-      (actionable: not done, not blocked). Filtering logic lives in
-      application/queries, not in the CLI layer.
+- [x] CLI: `todo list --blocked` / `todo list --ready`; post-filter in
+      application/queries; flags mutually exclusive; 6 new tests. (2a3ffb0)
 - [ ] `done`/`mv`-to-done on an item that still blocks others: allowed, but warn on
       stderr listing the newly unblocked items (nice UX, keep it simple).
 - [ ] TUI: detail pane shows Blocked by / Blocking (verify it does); blocked rows
@@ -114,3 +113,5 @@ is done.
 - 2026-08-11 iter 1: Phase 0 complete — dev deps + gates working, justfile via
   uv, blockers feature committed (f4123f8), repo-wide format (3034dca). All
   gates green: 107 passed, mypy clean, ruff clean.
+- 2026-08-11 iter 2: --blocked/--ready list filters (2a3ffb0). Gates green:
+  113 passed, mypy clean, ruff clean, format clean.
