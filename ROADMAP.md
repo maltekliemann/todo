@@ -31,11 +31,10 @@ bottom. Baseline commit before the loop started: `658ec6b`.
 ## Phase 2 — Labels: search & filter
 
 - [x] CLI: `todo tags` — usage counts, most-used first, --json. (7cfbab2)
-- [ ] CLI: `--tag` repeatable on `list` with AND semantics; keep single-tag
-      behavior backward compatible.
-- [ ] CLI: `todo list --search TEXT` — case-insensitive substring match over title
-      and body. Implement in storage (SQL LIKE with proper escaping), expose
-      through application/queries.
+- [x] CLI: `--tag` repeatable with AND semantics, single-tag compatible.
+      (1008619)
+- [x] CLI: `todo list --search TEXT` — SQL LIKE in storage with wildcard
+      escaping, exposed via application/queries. (1008619)
 - [ ] TUI: implement the PRD's filter bar — `/` focuses a search input that
       live-filters the table (title/body); Esc clears/unfocuses. A tag filter
       (Select or cycling with a key) alongside it. `0` clears all filters
@@ -121,3 +120,5 @@ is done.
   Gates green: 121 passed, mypy clean, ruff clean, format clean.
 - 2026-08-12 iter 5: Phase 1 closed (unblock edge tests, 0398110) and 'todo
   tags' command (7cfbab2). Gates green: 127 passed, all clean.
+- 2026-08-12 iter 6: multi-tag AND + --search with LIKE escaping (1008619).
+  Gates green: 138 passed, all clean.
