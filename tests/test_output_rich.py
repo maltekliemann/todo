@@ -47,7 +47,8 @@ def _project(**overrides: object) -> Project:
 
 
 @pytest.fixture()
-def rich_out() -> RichOutput:
+def rich_out(monkeypatch: pytest.MonkeyPatch) -> RichOutput:
+    monkeypatch.setenv("COLUMNS", "140")  # avoid table truncation off-TTY
     return RichOutput()
 
 
