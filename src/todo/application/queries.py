@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from todo.application.contracts.storage import StorageProtocol
 from todo.domain.enums import Priority, Status
-from todo.domain.models import TodoItem
+from todo.domain.models import Project, TodoItem
+from todo.exceptions import ProjectNotFoundError
 
 
 def list_todos(
@@ -15,6 +17,7 @@ def list_todos(
     priority: Priority | None = None,
     tags: list[str] | None = None,
     search: str | None = None,
+    project_id: int | None = None,
     include_done: bool = False,
     blocked: bool = False,
     ready: bool = False,
@@ -26,6 +29,7 @@ def list_todos(
         priority=priority,
         tags=tags,
         search=search,
+        project_id=project_id,
         include_done=include_done,
     )
     if blocked:
@@ -40,6 +44,56 @@ def show_todo(
     item_id: int,
 ) -> TodoItem:
     return storage.get(item_id)
+
+
+def resolve_project(storage: StorageProtocol, ref: str) -> Project:
+    """Resolve a project by name, falling back to id for numeric refs."""
+    try:
+        return storage.get_project_by_name(ref)
+    except ProjectNotFoundError:
+        if ref.isdigit():
+            return storage.get_project(int(ref))
+        raise
+
+
+@dataclass(frozen=True)
+class ProjectSummary:
+    project: Project
+    open_count: int
+    done_count: int
+
+
+def list_projects(
+    storage: StorageProtocol,
+    *,
+    include_archived: bool = False,
+) -> list[ProjectSummary]:
+    items = storage.list(include_done=True)
+    open_counts: dict[int, int] = {}
+    done_counts: dict[int, int] = {}
+    for item in items:
+        if item.project_id is None:
+            continue
+        bucket = done_counts if item.is_done else open_counts
+        bucket[item.project_id] = bucket.get(item.project_id, 0) + 1
+    return [
+        ProjectSummary(
+            project=p,
+            open_count=open_counts.get(p.id, 0),
+            done_count=done_counts.get(p.id, 0),
+        )
+        for p in storage.list_projects(include_archived=include_archived)
+    ]
+
+
+def show_project(
+    storage: StorageProtocol,
+    ref: str,
+) -> tuple[Project, list[TodoItem]]:
+    """A project plus all of its items (done included)."""
+    project = resolve_project(storage, ref)
+    items = storage.list(project_id=project.id, include_done=True)
+    return project, items
 
 
 def count_tags(storage: StorageProtocol) -> list[tuple[str, int]]:

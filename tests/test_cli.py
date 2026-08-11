@@ -501,6 +501,94 @@ class TestSearch:
         assert [i["title"] for i in data] == ["Auth-docs"]
 
 
+class TestProjectCli:
+    def test_add_and_show(self, invoke) -> None:
+        result = invoke("project add infra -D Infrastructure")
+        assert result.exit_code == 0
+        assert "infra" in result.output
+
+        data = json.loads(invoke("project show infra --json").output)
+        assert data["name"] == "infra"
+        assert data["description"] == "Infrastructure"
+        assert data["status"] == "active"
+        assert data["items"] == []
+
+    def test_show_by_id(self, invoke) -> None:
+        invoke("project add infra")
+        data = json.loads(invoke("project show 1 --json").output)
+        assert data["name"] == "infra"
+
+    def test_duplicate_add_fails(self, invoke) -> None:
+        invoke("project add infra")
+        result = invoke("project add infra")
+        assert result.exit_code == 1
+        assert "already exists" in result.stderr
+
+    def test_show_unknown_fails(self, invoke) -> None:
+        result = invoke("project show nope")
+        assert result.exit_code == 1
+        assert "not found" in result.stderr
+
+    def test_list_with_counts(self, invoke) -> None:
+        invoke("project add infra")
+        invoke("add TaskA --project infra")
+        invoke("add TaskB --project infra")
+        invoke("done 2")
+        data = json.loads(invoke("project list --json").output)
+        assert len(data) == 1
+        assert data[0]["open_count"] == 1
+        assert data[0]["done_count"] == 1
+
+    def test_archive_hides_from_default_list(self, invoke) -> None:
+        invoke("project add old")
+        invoke("project archive old")
+        assert json.loads(invoke("project list --json").output) == []
+        data = json.loads(invoke("project list --all --json").output)
+        assert data[0]["status"] == "archived"
+
+    def test_edit_renames(self, invoke) -> None:
+        invoke("project add old")
+        result = invoke("project edit old --name new")
+        assert result.exit_code == 0
+        assert json.loads(invoke("project show new --json").output)["name"] == "new"
+
+    def test_rm_unassigns_items(self, invoke) -> None:
+        invoke("project add doomed")
+        invoke("add Task --project doomed")
+        result = invoke("project rm doomed")
+        assert result.exit_code == 0
+        data = json.loads(invoke("show 1 --json").output)
+        assert data["project_id"] is None
+        assert data["project"] is None
+
+    def test_add_todo_with_unknown_project_fails(self, invoke) -> None:
+        result = invoke("add Task --project nope")
+        assert result.exit_code == 1
+        assert "not found" in result.stderr
+
+    def test_assign_and_clear_via_edit(self, invoke) -> None:
+        invoke("project add infra")
+        invoke("add Task")
+        data = json.loads(invoke("edit 1 --project infra --json").output)
+        assert data["project"] == "infra"
+        data = json.loads(invoke("edit 1 --project none --json").output)
+        assert data["project"] is None
+
+    def test_list_filters_by_project(self, invoke) -> None:
+        invoke("project add infra")
+        invoke("add In-project --project infra")
+        invoke("add Outside")
+        data = json.loads(invoke("list --project infra --json").output)
+        assert [i["title"] for i in data] == ["In-project"]
+
+    def test_project_show_lists_its_items(self, invoke) -> None:
+        invoke("project add infra")
+        invoke("add Task --project infra")
+        invoke("add Other")
+        data = json.loads(invoke("project show infra --json").output)
+        assert [i["title"] for i in data["items"]] == ["Task"]
+
+
 class TestTags:
     def test_empty(self, invoke) -> None:
         result = invoke("tags")

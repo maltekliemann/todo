@@ -8,20 +8,37 @@ import click
 from todo.adapters.output import create_output
 from todo.adapters.sqlite_storage import SqliteStorage
 from todo.application.commands import (
+    add_project,
     add_todo,
+    archive_project,
     block_todo,
     complete_todo,
+    delete_project,
     delete_todo,
+    edit_project,
     edit_todo,
     move_todo,
     unblock_todo,
 )
 from todo.application.contracts.storage import UNSET, Unset
-from todo.application.queries import count_tags, list_todos, show_todo, summary
+from todo.application.queries import (
+    count_tags,
+    list_projects,
+    list_todos,
+    resolve_project,
+    show_project,
+    show_todo,
+    summary,
+)
 from todo.config import get_db_path
 from todo.domain.enums import Priority, Status
 from todo.domain.models import TodoItem
-from todo.exceptions import DependencyError, NotFoundError
+from todo.exceptions import (
+    DependencyError,
+    DuplicateProjectError,
+    NotFoundError,
+    ProjectNotFoundError,
+)
 
 _PRIORITY_CHOICES = [p.value for p in Priority]
 _STATUS_CHOICES = [s.value for s in Status]
@@ -34,6 +51,14 @@ def _storage() -> SqliteStorage:
 def _warn_unblocked(unblocked: list[TodoItem]) -> None:
     for dep in unblocked:
         click.echo(f"🔓 #{dep.id} {dep.title} is now unblocked", err=True)
+
+
+def _resolve_project_or_exit(storage: SqliteStorage, ref: str) -> int:
+    try:
+        return resolve_project(storage, ref).id
+    except ProjectNotFoundError as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
 
 
 @click.group()
@@ -58,6 +83,7 @@ def main() -> None:
 @click.option("--body", "-b", default="")
 @click.option("--deadline", "-d", default=None, help="Due date (YYYY-MM-DD)")
 @click.option("--tag", "-t", multiple=True, help="Tag (repeatable)")
+@click.option("--project", "project_ref", default=None, help="Project name or id")
 @click.option("--json", "as_json", is_flag=True, help="Output JSON")
 def add(
     title: str,
@@ -66,12 +92,14 @@ def add(
     body: str,
     deadline: str | None,
     tag: tuple[str, ...],
+    project_ref: str | None,
     as_json: bool,
 ) -> None:
     """Add a new todo item."""
     storage = _storage()
     out = create_output()
     dl = date.fromisoformat(deadline) if deadline else None
+    project_id = _resolve_project_or_exit(storage, project_ref) if project_ref else None
     item = add_todo(
         storage,
         title,
@@ -80,6 +108,7 @@ def add(
         status=Status.from_string(status),
         deadline=dl,
         tags=list(tag) if tag else None,
+        project_id=project_id,
     )
     if as_json:
         out.print_json_item(item)
@@ -102,6 +131,7 @@ def add(
 )
 @click.option("--tag", "-t", multiple=True, help="Filter by tag (repeatable, AND)")
 @click.option("--search", default=None, help="Match text in title or body")
+@click.option("--project", "project_ref", default=None, help="Project name or id")
 @click.option("--all", "include_all", is_flag=True, help="Include done items")
 @click.option("--blocked", is_flag=True, help="Only blocked items")
 @click.option(
@@ -113,6 +143,7 @@ def list_cmd(
     priority: str | None,
     tag: tuple[str, ...],
     search: str | None,
+    project_ref: str | None,
     include_all: bool,
     blocked: bool,
     ready: bool,
@@ -123,12 +154,14 @@ def list_cmd(
         raise click.UsageError("--blocked and --ready are mutually exclusive.")
     storage = _storage()
     out = create_output()
+    project_id = _resolve_project_or_exit(storage, project_ref) if project_ref else None
     items = list_todos(
         storage,
         status=Status.from_string(status) if status else None,
         priority=Priority.from_string(priority) if priority else None,
         tags=list(tag) if tag else None,
         search=search,
+        project_id=project_id,
         include_done=include_all,
         blocked=blocked,
         ready=ready,
@@ -175,6 +208,9 @@ def show(item_id: int, as_json: bool) -> None:
 )
 @click.option("--deadline", "-d", default=None, help="Due date (YYYY-MM-DD or 'none')")
 @click.option("--tag", "-t", multiple=True, help="Replace tags (repeatable)")
+@click.option(
+    "--project", "project_ref", default=None, help="Project name or id, or 'none'"
+)
 @click.option("--json", "as_json", is_flag=True, help="Output JSON")
 def edit(
     item_id: int,
@@ -184,6 +220,7 @@ def edit(
     status: str | None,
     deadline: str | None,
     tag: tuple[str, ...],
+    project_ref: str | None,
     as_json: bool,
 ) -> None:
     """Edit a todo item."""
@@ -197,6 +234,13 @@ def edit(
         else:
             dl = date.fromisoformat(deadline)
 
+    project_id: int | None | Unset = UNSET
+    if project_ref is not None:
+        if project_ref.lower() == "none":
+            project_id = None
+        else:
+            project_id = _resolve_project_or_exit(storage, project_ref)
+
     try:
         item = edit_todo(
             storage,
@@ -207,6 +251,7 @@ def edit(
             status=Status.from_string(status) if status else None,
             deadline=dl,
             tags=list(tag) if tag else None,
+            project_id=project_id,
         )
     except NotFoundError as e:
         click.echo(str(e), err=True)
@@ -328,6 +373,113 @@ def unblock(item_id: int, blocker_ids: tuple[int, ...], as_json: bool) -> None:
         out.print_json_item(item)
     else:
         out.print_item(item)
+
+
+@main.group()
+def project() -> None:
+    """Manage projects."""
+
+
+@project.command("add")
+@click.argument("name")
+@click.option("--description", "-D", default="", help="Project description")
+@click.option("--json", "as_json", is_flag=True, help="Output JSON")
+def project_add(name: str, description: str, as_json: bool) -> None:
+    """Create a new project."""
+    storage = _storage()
+    out = create_output()
+    try:
+        created = add_project(storage, name, description=description)
+    except DuplicateProjectError as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
+    _, items = show_project(storage, str(created.id))
+    if as_json:
+        out.print_json_project(created, items)
+    else:
+        out.print_project(created, items)
+
+
+@project.command("list")
+@click.option("--all", "include_archived", is_flag=True, help="Include archived")
+@click.option("--json", "as_json", is_flag=True, help="Output JSON")
+def project_list(include_archived: bool, as_json: bool) -> None:
+    """List projects with open/done counts."""
+    storage = _storage()
+    out = create_output()
+    summaries = list_projects(storage, include_archived=include_archived)
+    if as_json:
+        out.print_json_projects(summaries)
+    else:
+        out.print_projects(summaries)
+
+
+@project.command("show")
+@click.argument("ref")
+@click.option("--json", "as_json", is_flag=True, help="Output JSON")
+def project_show(ref: str, as_json: bool) -> None:
+    """Show a project (by name or id) and its items."""
+    storage = _storage()
+    out = create_output()
+    try:
+        proj, items = show_project(storage, ref)
+    except ProjectNotFoundError as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
+    if as_json:
+        out.print_json_project(proj, items)
+    else:
+        out.print_project(proj, items)
+
+
+@project.command("edit")
+@click.argument("ref")
+@click.option("--name", default=None, help="New name")
+@click.option("--description", "-D", default=None, help="New description")
+@click.option("--json", "as_json", is_flag=True, help="Output JSON")
+def project_edit(
+    ref: str, name: str | None, description: str | None, as_json: bool
+) -> None:
+    """Edit a project's name or description."""
+    storage = _storage()
+    out = create_output()
+    project_id = _resolve_project_or_exit(storage, ref)
+    try:
+        edited = edit_project(storage, project_id, name=name, description=description)
+    except DuplicateProjectError as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
+    _, items = show_project(storage, str(edited.id))
+    if as_json:
+        out.print_json_project(edited, items)
+    else:
+        out.print_project(edited, items)
+
+
+@project.command("archive")
+@click.argument("ref")
+@click.option("--json", "as_json", is_flag=True, help="Output JSON")
+def project_archive(ref: str, as_json: bool) -> None:
+    """Archive a project (hidden from default project list)."""
+    storage = _storage()
+    out = create_output()
+    project_id = _resolve_project_or_exit(storage, ref)
+    archived = archive_project(storage, project_id)
+    _, items = show_project(storage, str(archived.id))
+    if as_json:
+        out.print_json_project(archived, items)
+    else:
+        out.print_project(archived, items)
+
+
+@project.command("rm")
+@click.argument("ref")
+def project_rm(ref: str) -> None:
+    """Delete a project; its items survive unassigned."""
+    storage = _storage()
+    project_id = _resolve_project_or_exit(storage, ref)
+    delete_project(storage, project_id)
+    click.echo(f"Deleted project #{project_id}. Items were unassigned.")
 
 
 @main.command()

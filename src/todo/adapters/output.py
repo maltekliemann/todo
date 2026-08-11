@@ -5,8 +5,9 @@ import sys
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
+from todo.application.queries import ProjectSummary
 from todo.domain.enums import Priority, Status
-from todo.domain.models import TodoItem
+from todo.domain.models import Project, TodoItem
 
 
 def _relative_age(dt: datetime) -> str:
@@ -68,6 +69,21 @@ class OutputProtocol(Protocol):
     def print_json_summary(self, since: datetime, items: list[TodoItem]) -> None: ...
     def print_tags(self, counts: list[tuple[str, int]]) -> None: ...
     def print_json_tags(self, counts: list[tuple[str, int]]) -> None: ...
+    def print_projects(self, summaries: list[ProjectSummary]) -> None: ...
+    def print_project(self, project: Project, items: list[TodoItem]) -> None: ...
+    def print_json_projects(self, summaries: list[ProjectSummary]) -> None: ...
+    def print_json_project(self, project: Project, items: list[TodoItem]) -> None: ...
+
+
+def _project_to_dict(project: Project) -> dict[str, object]:
+    return {
+        "id": project.id,
+        "name": project.name,
+        "description": project.description,
+        "status": project.status.value,
+        "created_at": project.created_at.isoformat(),
+        "updated_at": project.updated_at.isoformat(),
+    }
 
 
 def _item_to_dict(item: TodoItem) -> dict[str, object]:
@@ -237,6 +253,74 @@ class RichOutput:
     def print_json_tags(self, counts: list[tuple[str, int]]) -> None:
         print(json.dumps([{"tag": t, "count": c} for t, c in counts], indent=2))
 
+    def print_projects(self, summaries: list[ProjectSummary]) -> None:
+        from rich.table import Table
+
+        if not summaries:
+            self._console.print("[dim]No projects.[/dim]")
+            return
+        table = Table(show_header=True, header_style="dim", box=None, padding=(0, 1))
+        table.add_column("#", justify="right")
+        table.add_column("Project")
+        table.add_column("Open", justify="right")
+        table.add_column("Done", justify="right")
+        table.add_column("Description")
+        for s in summaries:
+            name = s.project.name
+            if s.project.is_archived:
+                name = f"[dim]{name} (archived)[/dim]"
+            table.add_row(
+                str(s.project.id),
+                name,
+                str(s.open_count),
+                str(s.done_count),
+                s.project.description,
+            )
+        self._console.print(table)
+
+    def print_project(self, project: Project, items: list[TodoItem]) -> None:
+        from rich.text import Text
+
+        done = sum(1 for i in items if i.is_done)
+        header = Text()
+        header.append(f"#{project.id}  ", style="dim")
+        header.append(project.name, style="bold")
+        if project.is_archived:
+            header.append("  (archived)", style="dim")
+        header.append(f"   {done}/{len(items)} done", style="dim")
+        self._console.print(header)
+        if project.description:
+            self._console.print(project.description)
+        if items:
+            self._console.print()
+            self.print_list(items)
+
+    def print_json_projects(self, summaries: list[ProjectSummary]) -> None:
+        print(
+            json.dumps(
+                [
+                    {
+                        **_project_to_dict(s.project),
+                        "open_count": s.open_count,
+                        "done_count": s.done_count,
+                    }
+                    for s in summaries
+                ],
+                indent=2,
+            )
+        )
+
+    def print_json_project(self, project: Project, items: list[TodoItem]) -> None:
+        print(
+            json.dumps(
+                {
+                    **_project_to_dict(project),
+                    "items": [_item_to_dict(i) for i in items],
+                },
+                indent=2,
+            )
+        )
+
 
 class PlainOutput:
     def print_list(self, items: list[TodoItem]) -> None:
@@ -317,6 +401,54 @@ class PlainOutput:
 
     def print_json_tags(self, counts: list[tuple[str, int]]) -> None:
         print(json.dumps([{"tag": t, "count": c} for t, c in counts], indent=2))
+
+    def print_projects(self, summaries: list[ProjectSummary]) -> None:
+        if not summaries:
+            print("No projects.")
+            return
+        for s in summaries:
+            suffix = " (archived)" if s.project.is_archived else ""
+            desc = f"  - {s.project.description}" if s.project.description else ""
+            print(
+                f"  {s.project.id:>4}  {s.project.name}{suffix}  "
+                f"open:{s.open_count} done:{s.done_count}{desc}"
+            )
+
+    def print_project(self, project: Project, items: list[TodoItem]) -> None:
+        done = sum(1 for i in items if i.is_done)
+        suffix = " (archived)" if project.is_archived else ""
+        print(f"#{project.id}  {project.name}{suffix}  {done}/{len(items)} done")
+        if project.description:
+            print(project.description)
+        if items:
+            print()
+            self.print_list(items)
+
+    def print_json_projects(self, summaries: list[ProjectSummary]) -> None:
+        print(
+            json.dumps(
+                [
+                    {
+                        **_project_to_dict(s.project),
+                        "open_count": s.open_count,
+                        "done_count": s.done_count,
+                    }
+                    for s in summaries
+                ],
+                indent=2,
+            )
+        )
+
+    def print_json_project(self, project: Project, items: list[TodoItem]) -> None:
+        print(
+            json.dumps(
+                {
+                    **_project_to_dict(project),
+                    "items": [_item_to_dict(i) for i in items],
+                },
+                indent=2,
+            )
+        )
 
 
 def _pri_style(p: Priority) -> str:

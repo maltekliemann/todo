@@ -44,6 +44,41 @@ Rules: an item cannot block itself, and relations that would form a cycle
 (directly or transitively) are rejected with an error. Completing or deleting a
 blocker unblocks its dependents automatically.
 
+### Projects
+
+A **label (tag)** is a lightweight cross-cutting marker: an item can carry many,
+they have no state of their own, and they exist only as long as something is
+tagged with them. A **project** is a first-class container with identity and
+lifecycle: it has a unique name, a description, an active/archived status, and
+progress derived from its items. A todo belongs to at most one project
+(`project_id`, nullable; deleting a project unassigns its items).
+
+| Field         | Type                     | Notes                        |
+|---------------|--------------------------|------------------------------|
+| `id`          | integer, auto-increment  | Primary key                  |
+| `name`        | text, unique             | Required                     |
+| `description` | text                     | Optional                     |
+| `status`      | enum: active, archived   | Default: active              |
+| `created_at`  | datetime                 | Set on creation              |
+| `updated_at`  | datetime                 | Set on every mutation        |
+
+```
+todo project add infra -D "Infrastructure work"
+todo project list                        # active projects with open/done counts
+todo project list --all                  # include archived
+todo project show infra                  # description, progress, its items
+todo project edit infra --name platform  # rename / change description
+todo project archive platform            # hide from default list
+todo project rm platform                 # delete; items survive unassigned
+todo add "Upgrade DB" --project infra    # create into a project
+todo edit 7 --project infra              # assign (or --project none to clear)
+todo list --project infra                # filter by project
+```
+
+Projects are referenced by name (falling back to id for numeric input), and
+all project commands support `--json`. Schema changes ship as in-place
+`PRAGMA user_version` migrations, so existing databases upgrade automatically.
+
 ---
 
 ## CLI Interface

@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from datetime import date
 
 from todo.application.contracts.storage import StorageProtocol, Unset
-from todo.domain.enums import Priority, Status
-from todo.domain.models import TodoItem
+from todo.domain.enums import Priority, ProjectStatus, Status
+from todo.domain.models import Project, TodoItem
 from todo.exceptions import DependencyError
 
 
@@ -41,6 +41,7 @@ def edit_todo(
     status: Status | None = None,
     deadline: date | None | Unset = Unset.UNSET,
     tags: list[str] | None = None,
+    project_id: int | None | Unset = Unset.UNSET,
 ) -> TodoItem:
     return storage.update(
         item_id,
@@ -50,6 +51,7 @@ def edit_todo(
         status=status,
         deadline=deadline,
         tags=tags,
+        project_id=project_id,
     )
 
 
@@ -136,3 +138,44 @@ def unblock_todo(
 ) -> TodoItem:
     storage.remove_blocker(blocked_id, blocker_id)
     return storage.get(blocked_id)
+
+
+def add_project(
+    storage: StorageProtocol,
+    name: str,
+    *,
+    description: str = "",
+) -> Project:
+    return storage.add_project(name, description=description)
+
+
+def edit_project(
+    storage: StorageProtocol,
+    project_id: int,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+) -> Project:
+    return storage.update_project(project_id, name=name, description=description)
+
+
+def archive_project(
+    storage: StorageProtocol,
+    project_id: int,
+) -> Project:
+    return storage.update_project(project_id, status=ProjectStatus.ARCHIVED)
+
+
+def delete_project(
+    storage: StorageProtocol,
+    project_id: int,
+) -> None:
+    storage.delete_project(project_id)
+
+
+def assign_project(
+    storage: StorageProtocol,
+    item_id: int,
+    project_id: int | None,
+) -> TodoItem:
+    return storage.update(item_id, project_id=project_id)
