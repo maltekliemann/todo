@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date
 
 from todo.application.contracts.storage import StorageProtocol, Unset
@@ -50,19 +51,47 @@ def edit_todo(
     )
 
 
+@dataclass(frozen=True)
+class CompletionResult:
+    """Outcome of a status change, including dependents it unblocked."""
+
+    item: TodoItem
+    unblocked: list[TodoItem]
+
+
+def _update_status(
+    storage: StorageProtocol,
+    item_id: int,
+    status: Status,
+) -> CompletionResult:
+    before = storage.get(item_id)
+    if status != Status.DONE or before.is_done:
+        return CompletionResult(
+            item=storage.update(item_id, status=status), unblocked=[]
+        )
+    was_blocked = {dep_id: storage.get(dep_id).is_blocked for dep_id in before.blocking}
+    item = storage.update(item_id, status=Status.DONE)
+    unblocked = [
+        storage.get(dep_id)
+        for dep_id in sorted(before.blocking)
+        if was_blocked[dep_id] and not storage.get(dep_id).is_blocked
+    ]
+    return CompletionResult(item=item, unblocked=unblocked)
+
+
 def move_todo(
     storage: StorageProtocol,
     item_id: int,
     status: Status,
-) -> TodoItem:
-    return storage.update(item_id, status=status)
+) -> CompletionResult:
+    return _update_status(storage, item_id, status)
 
 
 def complete_todo(
     storage: StorageProtocol,
     item_id: int,
-) -> TodoItem:
-    return storage.update(item_id, status=Status.DONE)
+) -> CompletionResult:
+    return _update_status(storage, item_id, Status.DONE)
 
 
 def delete_todo(

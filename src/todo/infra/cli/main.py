@@ -20,6 +20,7 @@ from todo.application.contracts.storage import UNSET, Unset
 from todo.application.queries import list_todos, show_todo, summary
 from todo.config import get_db_path
 from todo.domain.enums import Priority, Status
+from todo.domain.models import TodoItem
 from todo.exceptions import DependencyError, NotFoundError
 
 _PRIORITY_CHOICES = [p.value for p in Priority]
@@ -28,6 +29,11 @@ _STATUS_CHOICES = [s.value for s in Status]
 
 def _storage() -> SqliteStorage:
     return SqliteStorage(get_db_path())
+
+
+def _warn_unblocked(unblocked: list[TodoItem]) -> None:
+    for dep in unblocked:
+        click.echo(f"🔓 #{dep.id} {dep.title} is now unblocked", err=True)
 
 
 @click.group()
@@ -217,14 +223,15 @@ def mv(item_id: int, status: str, as_json: bool) -> None:
     storage = _storage()
     out = create_output()
     try:
-        item = move_todo(storage, item_id, Status.from_string(status))
+        result = move_todo(storage, item_id, Status.from_string(status))
     except NotFoundError as e:
         click.echo(str(e), err=True)
         sys.exit(1)
+    _warn_unblocked(result.unblocked)
     if as_json:
-        out.print_json_item(item)
+        out.print_json_item(result.item)
     else:
-        out.print_item(item)
+        out.print_item(result.item)
 
 
 @main.command()
@@ -235,14 +242,15 @@ def done(item_id: int, as_json: bool) -> None:
     storage = _storage()
     out = create_output()
     try:
-        item = complete_todo(storage, item_id)
+        result = complete_todo(storage, item_id)
     except NotFoundError as e:
         click.echo(str(e), err=True)
         sys.exit(1)
+    _warn_unblocked(result.unblocked)
     if as_json:
-        out.print_json_item(item)
+        out.print_json_item(result.item)
     else:
-        out.print_item(item)
+        out.print_item(result.item)
 
 
 @main.command()

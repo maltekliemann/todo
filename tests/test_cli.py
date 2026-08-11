@@ -413,6 +413,57 @@ class TestUnblock:
         assert data["is_blocked"] is True
 
 
+class TestUnblockWarning:
+    def test_done_warns_about_newly_unblocked(self, invoke) -> None:
+        invoke("add Blocker")
+        invoke("add Waiting")
+        invoke("block 2 1")
+        result = invoke("done 1")
+        assert result.exit_code == 0
+        assert "#2 Waiting is now unblocked" in result.stderr
+
+    def test_mv_to_done_warns(self, invoke) -> None:
+        invoke("add Blocker")
+        invoke("add Waiting")
+        invoke("block 2 1")
+        result = invoke("mv 1 done")
+        assert result.exit_code == 0
+        assert "#2 Waiting is now unblocked" in result.stderr
+
+    def test_warning_not_on_stdout(self, invoke) -> None:
+        invoke("add Blocker")
+        invoke("add Waiting")
+        invoke("block 2 1")
+        result = invoke("done 1 --json")
+        assert result.exit_code == 0
+        assert "unblocked" not in result.stdout
+        json.loads(result.stdout)  # stdout stays machine-parseable
+
+    def test_no_warning_when_dependent_still_blocked(self, invoke) -> None:
+        invoke("add Blocker-a")
+        invoke("add Blocker-b")
+        invoke("add Waiting")
+        invoke("block 3 1 2")
+        result = invoke("done 1")
+        assert result.exit_code == 0
+        assert "unblocked" not in result.stderr
+
+    def test_no_warning_without_dependents(self, invoke) -> None:
+        invoke("add Solo")
+        result = invoke("done 1")
+        assert result.exit_code == 0
+        assert "unblocked" not in result.stderr
+
+    def test_completing_already_done_item_does_not_warn(self, invoke) -> None:
+        invoke("add Blocker")
+        invoke("add Waiting")
+        invoke("block 2 1")
+        invoke("done 1")
+        result = invoke("done 1")
+        assert result.exit_code == 0
+        assert "unblocked" not in result.stderr
+
+
 class TestListBlockedReady:
     def _setup(self, invoke) -> None:
         invoke("add Free")

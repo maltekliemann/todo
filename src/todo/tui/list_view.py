@@ -17,6 +17,7 @@ from textual.widgets import DataTable, Footer, Input, Label, Select, Static
 
 from todo.adapters.sqlite_storage import SqliteStorage
 from todo.application.commands import (
+    CompletionResult,
     add_todo,
     block_todo,
     complete_todo,
@@ -721,8 +722,13 @@ class TodoListView(Widget):
         item_id = self._selected_item_id()
         if item_id is None:
             return
-        complete_todo(self._storage, item_id)
+        result = complete_todo(self._storage, item_id)
+        self._notify_unblocked(result)
         self._refresh_list()
+
+    def _notify_unblocked(self, result: CompletionResult) -> None:
+        for dep in result.unblocked:
+            self.notify(f"🔓 #{dep.id} {dep.title} is now unblocked")
 
     def action_inspect(self) -> None:
         item_id = self._selected_item_id()
@@ -847,10 +853,8 @@ class TodoListView(Widget):
             return
         next_status = item.status.next()
         if next_status is not None:
-            if next_status == Status.DONE:
-                complete_todo(self._storage, item_id)
-            else:
-                move_todo(self._storage, item_id, next_status)
+            result = move_todo(self._storage, item_id, next_status)
+            self._notify_unblocked(result)
             self._refresh_list()
 
     def action_status_prev(self) -> None:
