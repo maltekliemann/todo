@@ -68,13 +68,10 @@ is done.
 
 ## Phase 4 — TUI: sticky-cursor mode
 
-- [ ] Add a cursor-mode toggle for status moves (`←`/`→`/`d`): **follow** (default,
-      cursor follows the item to its new position) vs **stay** (cursor keeps its
-      visual row, so repeatedly hitting `d` cleans a list top-down without
-      re-navigating). Pick a free key (e.g. `.` or `g`), show current mode in the
-      footer/status area, document in PRD key-binding table.
-- [ ] Pilot tests for both modes, including edge rows (last row, done-section
-      boundary).
+- [x] Cursor-mode toggle on `.`: follow (default) vs stay; mode shown in
+      status line; PRD key table updated. (1192dc2)
+- [x] Pilot tests: both modes, toggle round-trip, last-row clamp, done-section
+      boundary. (1192dc2)
 
 ## Phase 5 — Architecture & hardening
 
@@ -131,3 +128,5 @@ is done.
   section (965d19e). Gates green: 166 passed, all clean.
 - 2026-08-12 iter 10: TUI project display + 'p' filter (ad3947b). Gates
   green: 169 passed, all clean. Phase 3 done except stretch (project log).
+- 2026-08-12 iter 11: sticky-cursor mode, Phase 4 closed (1192dc2). Gates
+  green: 173 passed, all clean.
