@@ -100,7 +100,8 @@ def add(
     type=click.Choice(_PRIORITY_CHOICES, case_sensitive=False),
     default=None,
 )
-@click.option("--tag", "-t", default=None)
+@click.option("--tag", "-t", multiple=True, help="Filter by tag (repeatable, AND)")
+@click.option("--search", default=None, help="Match text in title or body")
 @click.option("--all", "include_all", is_flag=True, help="Include done items")
 @click.option("--blocked", is_flag=True, help="Only blocked items")
 @click.option(
@@ -110,7 +111,8 @@ def add(
 def list_cmd(
     status: str | None,
     priority: str | None,
-    tag: str | None,
+    tag: tuple[str, ...],
+    search: str | None,
     include_all: bool,
     blocked: bool,
     ready: bool,
@@ -125,7 +127,8 @@ def list_cmd(
         storage,
         status=Status.from_string(status) if status else None,
         priority=Priority.from_string(priority) if priority else None,
-        tag=tag,
+        tags=list(tag) if tag else None,
+        search=search,
         include_done=include_all,
         blocked=blocked,
         ready=ready,

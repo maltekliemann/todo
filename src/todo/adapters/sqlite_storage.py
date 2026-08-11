@@ -35,6 +35,11 @@ def _now() -> datetime:
     return datetime.now(tz=ZoneInfo("UTC"))
 
 
+def _like_escape(value: str) -> str:
+    """Escape LIKE wildcards so user input matches literally."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _row_to_item(
     row: sqlite3.Row,
     *,
@@ -249,7 +254,8 @@ class SqliteStorage:
         *,
         status: Status | None = None,
         priority: Priority | None = None,
-        tag: str | None = None,
+        tags: list[str] | None = None,
+        search: str | None = None,
         include_done: bool = False,
     ) -> list[TodoItem]:
         clauses: list[str] = []
@@ -266,9 +272,14 @@ class SqliteStorage:
             clauses.append("priority = ?")
             params.append(priority.value)
 
-        if tag is not None:
-            clauses.append("(',' || tags || ',') LIKE ?")
-            params.append(f"%,{tag},%")
+        for tag in tags or []:
+            clauses.append("(',' || tags || ',') LIKE ? ESCAPE '\\'")
+            params.append(f"%,{_like_escape(tag)},%")
+
+        if search is not None and search != "":
+            clauses.append("(title LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\')")
+            pattern = f"%{_like_escape(search)}%"
+            params.extend([pattern, pattern])
 
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         # Sort: overdue first, then by priority weight, then by creation date

@@ -57,6 +57,7 @@ class StorageProtocol(Protocol):
         *,
         status: Status | None = None,
         priority: Priority | None = None,
-        tag: str | None = None,
+        tags: list[str] | None = None,
+        search: str | None = None,
         include_done: bool = False,
     ) -> list[TodoItem]: ...

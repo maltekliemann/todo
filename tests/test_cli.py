@@ -427,6 +427,80 @@ class TestUnblock:
         assert data["blocked_by"] == []
 
 
+class TestTagFilter:
+    def test_multiple_tags_are_anded(self, invoke) -> None:
+        invoke("add Both -t a -t b")
+        invoke("add OnlyA -t a")
+        invoke("add OnlyB -t b")
+        data = json.loads(invoke("list -t a -t b --json").output)
+        assert [i["title"] for i in data] == ["Both"]
+
+    def test_single_tag_still_works(self, invoke) -> None:
+        invoke("add Tagged -t a")
+        invoke("add Other -t b")
+        data = json.loads(invoke("list -t a --json").output)
+        assert [i["title"] for i in data] == ["Tagged"]
+
+    def test_tag_with_underscore_matches_literally(self, invoke) -> None:
+        invoke("add A -t my_tag")
+        invoke("add B -t mystag")
+        data = json.loads(invoke("list -t my_tag --json").output)
+        assert [i["title"] for i in data] == ["A"]
+
+
+class TestSearch:
+    def test_matches_title(self, cli: CliRunner) -> None:
+        cli.invoke(main, ["add", "Fix the auth bug"])
+        cli.invoke(main, ["add", "Unrelated"])
+        result = cli.invoke(main, ["list", "--search", "auth", "--json"])
+        data = json.loads(result.output)
+        assert [i["title"] for i in data] == ["Fix the auth bug"]
+
+    def test_matches_body(self, cli: CliRunner) -> None:
+        cli.invoke(main, ["add", "Title", "--body", "mentions auth here"])
+        cli.invoke(main, ["add", "Other"])
+        result = cli.invoke(main, ["list", "--search", "auth", "--json"])
+        data = json.loads(result.output)
+        assert [i["title"] for i in data] == ["Title"]
+
+    def test_case_insensitive(self, cli: CliRunner) -> None:
+        cli.invoke(main, ["add", "Fix AUTH bug"])
+        result = cli.invoke(main, ["list", "--search", "auth", "--json"])
+        data = json.loads(result.output)
+        assert len(data) == 1
+
+    def test_percent_is_literal(self, cli: CliRunner) -> None:
+        cli.invoke(main, ["add", "Reach 100% coverage"])
+        cli.invoke(main, ["add", "Reach 100 coverage"])
+        result = cli.invoke(main, ["list", "--search", "100%", "--json"])
+        data = json.loads(result.output)
+        assert [i["title"] for i in data] == ["Reach 100% coverage"]
+
+    def test_underscore_is_literal(self, cli: CliRunner) -> None:
+        cli.invoke(main, ["add", "call foo_bar"])
+        cli.invoke(main, ["add", "call fooXbar"])
+        result = cli.invoke(main, ["list", "--search", "foo_bar", "--json"])
+        data = json.loads(result.output)
+        assert [i["title"] for i in data] == ["call foo_bar"]
+
+    def test_unicode(self, cli: CliRunner) -> None:
+        cli.invoke(main, ["add", "Küche aufräumen"])
+        result = cli.invoke(main, ["list", "--search", "Küche", "--json"])
+        data = json.loads(result.output)
+        assert [i["title"] for i in data] == ["Küche aufräumen"]
+
+    def test_no_match(self, invoke) -> None:
+        invoke("add Something")
+        data = json.loads(invoke("list --search nomatch --json").output)
+        assert data == []
+
+    def test_composes_with_tag(self, invoke) -> None:
+        invoke("add Auth-work -t backend")
+        invoke("add Auth-docs -t docs")
+        data = json.loads(invoke("list --search Auth -t docs --json").output)
+        assert [i["title"] for i in data] == ["Auth-docs"]
+
+
 class TestTags:
     def test_empty(self, invoke) -> None:
         result = invoke("tags")

@@ -13,7 +13,8 @@ def list_todos(
     *,
     status: Status | None = None,
     priority: Priority | None = None,
-    tag: str | None = None,
+    tags: list[str] | None = None,
+    search: str | None = None,
     include_done: bool = False,
     blocked: bool = False,
     ready: bool = False,
@@ -23,7 +24,8 @@ def list_todos(
     items = storage.list(
         status=status,
         priority=priority,
-        tag=tag,
+        tags=tags,
+        search=search,
         include_done=include_done,
     )
     if blocked:
