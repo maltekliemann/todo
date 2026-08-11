@@ -477,6 +477,62 @@ class TestFilters:
             assert "backend" in status
 
 
+class TestProjectFilter:
+    @pytest.fixture()
+    def project_storage(self, db_path: Path) -> SqliteStorage:
+        storage = SqliteStorage(db_path)
+        infra = storage.add_project("infra")
+        web = storage.add_project("web")
+        add_todo(storage, "Infra task", project_id=infra.id)
+        add_todo(storage, "Web task", project_id=web.id)
+        add_todo(storage, "Loose task")
+        return storage
+
+    async def test_p_cycles_project_filter(
+        self, project_storage: SqliteStorage
+    ) -> None:
+        app = TodoApp(storage=project_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            table = app.query_one("#item-list", DataTable)
+            assert _item_rows(table) == 3
+
+            await pilot.press("p")  # infra
+            await pilot.pause()
+            assert _item_rows(table) == 1
+
+            await pilot.press("p")  # web
+            await pilot.pause()
+            assert _item_rows(table) == 1
+
+            await pilot.press("p")  # back to all
+            await pilot.pause()
+            assert _item_rows(table) == 3
+
+    async def test_zero_clears_project_filter(
+        self, project_storage: SqliteStorage
+    ) -> None:
+        app = TodoApp(storage=project_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            table = app.query_one("#item-list", DataTable)
+            await pilot.press("p")
+            await pilot.pause()
+            assert _item_rows(table) == 1
+            await pilot.press("0")
+            await pilot.pause()
+            assert _item_rows(table) == 3
+
+    async def test_detail_pane_shows_project(
+        self, project_storage: SqliteStorage
+    ) -> None:
+        app = TodoApp(storage=project_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            meta = str(app.query_one("#detail-meta", Static).render())
+            assert "Project: infra" in meta
+
+
 class TestSearch:
     async def test_slash_opens_search(self, seeded_storage: SqliteStorage) -> None:
         app = TodoApp(storage=seeded_storage)

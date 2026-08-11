@@ -28,7 +28,12 @@ from todo.application.commands import (
     unblock_todo,
 )
 from todo.application.contracts.storage import UNSET, Unset
-from todo.application.queries import count_tags, list_todos, show_todo
+from todo.application.queries import (
+    count_tags,
+    list_projects,
+    list_todos,
+    show_todo,
+)
 from todo.domain.enums import Priority, Status
 from todo.domain.models import TodoItem
 from todo.exceptions import DependencyError, NotFoundError
@@ -485,6 +490,8 @@ class InspectDialog(ModalScreen[None]):
             )
             if item.done_at:
                 meta_lines.append(f"Done: {item.done_at.strftime('%b %d, %Y %H:%M')}")
+            if item.project_name:
+                meta_lines.append(f"Project: {item.project_name}")
             if item.tags:
                 meta_lines.append(f"Tags: {', '.join(item.tags)}")
             if item.blocked_by:
@@ -520,6 +527,7 @@ class TodoListView(Widget):
         Binding("less_than_sign", "status_prev", "Status <", show=True),
         Binding("slash", "search", "Search", show=True),
         Binding("t", "cycle_tag", "Tag filter", show=True),
+        Binding("p", "cycle_project", "Project filter", show=True),
         Binding("1", "filter_priority('urgent')", "Urgent", show=False),
         Binding("2", "filter_priority('high')", "High", show=False),
         Binding("3", "filter_priority('medium')", "Medium", show=False),
@@ -536,6 +544,7 @@ class TodoListView(Widget):
         self._items: list[TodoItem] = []
         self._search_query: str = ""
         self._tag_filter: str | None = None
+        self._project_filter: str | None = None
         self._priority_filter: Priority | None = None
         self._last_data_version: int = 0
 
@@ -592,6 +601,10 @@ class TodoListView(Widget):
             ]
         if self._tag_filter is not None:
             self._items = [i for i in self._items if self._tag_filter in i.tags]
+        if self._project_filter is not None:
+            self._items = [
+                i for i in self._items if i.project_name == self._project_filter
+            ]
         if self._priority_filter is not None:
             self._items = [
                 i for i in self._items if i.priority == self._priority_filter
@@ -666,6 +679,8 @@ class TodoListView(Widget):
             parts.append(f"[dim]Search:[/dim] [b]{self._search_query}[/b]")
         if self._tag_filter is not None:
             parts.append(f"[dim]Tag:[/dim] [b]{self._tag_filter}[/b]")
+        if self._project_filter is not None:
+            parts.append(f"[dim]Project:[/dim] [b]{self._project_filter}[/b]")
         if self._priority_filter is not None:
             parts.append(f"[dim]Priority:[/dim] [b]{self._priority_filter.value}[/b]")
         if parts:
@@ -695,6 +710,7 @@ class TodoListView(Widget):
             if item.done_at
             else ""
         )
+        project_str = f"\nProject: {item.project_name}" if item.project_name else ""
         tags_str = f"\nTags: {', '.join(item.tags)}" if item.tags else ""
         blocked_by_str = (
             f"\nBlocked by: {', '.join(f'#{i}' for i in item.blocked_by)}"
@@ -714,6 +730,7 @@ class TodoListView(Widget):
             f"Created: {item.created_at.strftime('%b %d, %Y %H:%M')}   "
             f"Updated: {item.updated_at.strftime('%b %d, %Y %H:%M')}"
             f"{done_str}"
+            f"{project_str}"
             f"{tags_str}"
             f"{blocked_by_str}"
             f"{blocking_str}"
@@ -885,6 +902,23 @@ class TodoListView(Widget):
             self._tag_filter = tags[idx + 1] if idx + 1 < len(tags) else None
         self._refresh_list()
 
+    def action_cycle_project(self) -> None:
+        """Cycle the project filter: no filter -> each project -> no filter."""
+        names = [
+            s.project.name for s in list_projects(self._storage, include_archived=True)
+        ]
+        if not names:
+            return
+        if self._project_filter is None:
+            self._project_filter = names[0]
+        else:
+            try:
+                idx = names.index(self._project_filter)
+            except ValueError:
+                idx = -1
+            self._project_filter = names[idx + 1] if idx + 1 < len(names) else None
+        self._refresh_list()
+
     def action_filter_priority(self, value: str) -> None:
         """Set the priority filter; pressing the same key again clears it."""
         priority = Priority.from_string(value)
@@ -892,9 +926,15 @@ class TodoListView(Widget):
         self._refresh_list()
 
     def action_clear_filters(self) -> None:
-        if self._search_query or self._tag_filter or self._priority_filter:
+        if (
+            self._search_query
+            or self._tag_filter
+            or self._project_filter
+            or self._priority_filter
+        ):
             self._search_query = ""
             self._tag_filter = None
+            self._project_filter = None
             self._priority_filter = None
             self._refresh_list()
 
