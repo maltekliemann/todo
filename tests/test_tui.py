@@ -477,6 +477,78 @@ class TestFilters:
             assert "backend" in status
 
 
+class TestCursorMode:
+    @pytest.fixture()
+    def three_todos(self, db_path: Path) -> SqliteStorage:
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "First")
+        add_todo(storage, "Second")
+        add_todo(storage, "Third")
+        return storage
+
+    def _selected_id(self, app: TodoApp) -> object:
+        view = app.query_one(TodoListView)
+        return view._selected_item_id()
+
+    async def test_follow_mode_default_follows_item(
+        self, three_todos: SqliteStorage
+    ) -> None:
+        app = TodoApp(storage=three_todos)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert self._selected_id(app) == 1
+            await pilot.press("d")  # complete #1; cursor follows into done group
+            await pilot.pause()
+            assert self._selected_id(app) == 1
+
+    async def test_stay_mode_keeps_row_for_cleanup(
+        self, three_todos: SqliteStorage
+    ) -> None:
+        app = TodoApp(storage=three_todos)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("full_stop")  # switch to stay mode
+            await pilot.pause()
+            assert self._selected_id(app) == 1
+
+            await pilot.press("d")  # #1 done; cursor stays -> now on #2
+            await pilot.pause()
+            assert self._selected_id(app) == 2
+
+            await pilot.press("d")  # #2 done; now on #3
+            await pilot.pause()
+            assert self._selected_id(app) == 3
+
+            await pilot.press("d")  # #3 done; only done section remains
+            await pilot.pause()
+            assert self._selected_id(app) in {1, 2, 3}
+
+    async def test_toggle_back_restores_follow(
+        self, three_todos: SqliteStorage
+    ) -> None:
+        app = TodoApp(storage=three_todos)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("full_stop")
+            await pilot.press("full_stop")  # back to follow
+            await pilot.pause()
+            await pilot.press("d")
+            await pilot.pause()
+            assert self._selected_id(app) == 1
+
+    async def test_stay_mode_at_last_row(self, three_todos: SqliteStorage) -> None:
+        app = TodoApp(storage=three_todos)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("full_stop")
+            await pilot.press("down", "down")  # move to #3 (last item)
+            await pilot.pause()
+            assert self._selected_id(app) == 3
+            await pilot.press("d")  # cursor clamps to a valid item row
+            await pilot.pause()
+            assert self._selected_id(app) in {1, 2, 3}
+
+
 class TestProjectFilter:
     @pytest.fixture()
     def project_storage(self, db_path: Path) -> SqliteStorage:

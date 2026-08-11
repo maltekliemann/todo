@@ -194,7 +194,9 @@ Launch with: `todo ui`
 | `t`           | Cycle tag filter (all → tag → … → all)        |
 | `b`           | Add/remove blocker (`-id` removes)            |
 | `1-4`         | Filter by priority (1=urgent … 4=low; same key toggles off) |
+| `p`           | Cycle project filter                          |
 | `0`           | Clear all filters                             |
+| `.`           | Toggle cursor mode: follow item (default) vs stay on row |
 | `q` / `Esc`   | Quit                                          |
 
 ### Priority Color Coding

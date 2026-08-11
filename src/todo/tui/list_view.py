@@ -534,6 +534,7 @@ class TodoListView(Widget):
         Binding("4", "filter_priority('low')", "Low", show=False),
         Binding("0", "clear_filters", "Clear filters", show=True),
         Binding("escape", "clear_search", "Clear filter", show=True),
+        Binding("full_stop", "toggle_cursor_mode", "Cursor mode", show=True),
     ]
 
     POLL_INTERVAL_SECONDS = 2.0
@@ -546,6 +547,7 @@ class TodoListView(Widget):
         self._tag_filter: str | None = None
         self._project_filter: str | None = None
         self._priority_filter: Priority | None = None
+        self._cursor_follows_item: bool = True
         self._last_data_version: int = 0
 
     def compose(self) -> ComposeResult:
@@ -659,10 +661,12 @@ class TodoListView(Widget):
                 index += 1
 
         if table.row_count > 0:
-            if previous_id is not None and previous_id in row_index_of:
+            follow = self._cursor_follows_item
+            if follow and previous_id is not None and previous_id in row_index_of:
                 table.move_cursor(row=row_index_of[previous_id])
             elif row_index_of:
-                # Land on the first item row, not the leading separator.
+                # Stay at the same visual row (sticky mode / item vanished);
+                # land on an item row, not a separator.
                 first_item_row = min(row_index_of.values())
                 clamped = min(previous_cursor, table.row_count - 1)
                 target = clamped if clamped >= first_item_row else first_item_row
@@ -683,8 +687,11 @@ class TodoListView(Widget):
             parts.append(f"[dim]Project:[/dim] [b]{self._project_filter}[/b]")
         if self._priority_filter is not None:
             parts.append(f"[dim]Priority:[/dim] [b]{self._priority_filter.value}[/b]")
+        hint = "  [dim]([0] clears)[/dim]" if parts else ""
+        if not self._cursor_follows_item:
+            parts.append("[dim]Cursor:[/dim] [b]stay[/b]")
         if parts:
-            search_status.update("  ".join(parts) + "  [dim]([0] clears)[/dim]")
+            search_status.update("  ".join(parts) + hint)
         else:
             search_status.update("")
 
@@ -923,6 +930,17 @@ class TodoListView(Widget):
         """Set the priority filter; pressing the same key again clears it."""
         priority = Priority.from_string(value)
         self._priority_filter = None if self._priority_filter == priority else priority
+        self._refresh_list()
+
+    def action_toggle_cursor_mode(self) -> None:
+        """Toggle whether the cursor follows a moved item or stays put.
+
+        'Stay' keeps the cursor on the same visual row after status moves,
+        so repeatedly pressing 'd' cleans a list top-down.
+        """
+        self._cursor_follows_item = not self._cursor_follows_item
+        mode = "follow item" if self._cursor_follows_item else "stay on row"
+        self.notify(f"Cursor mode: {mode}")
         self._refresh_list()
 
     def action_clear_filters(self) -> None:
