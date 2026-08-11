@@ -20,8 +20,8 @@ bottom. Baseline commit before the loop started: `658ec6b`.
 
 - [x] CLI: `todo list --blocked` / `todo list --ready`; post-filter in
       application/queries; flags mutually exclusive; 6 new tests. (2a3ffb0)
-- [ ] `done`/`mv`-to-done on an item that still blocks others: allowed, but warn on
-      stderr listing the newly unblocked items (nice UX, keep it simple).
+- [x] `done`/`mv`-to-done reports newly unblocked dependents: CompletionResult
+      from application layer, 🔓 stderr warnings in CLI, toast in TUI. (fb38a26)
 - [ ] TUI: detail pane shows Blocked by / Blocking (verify it does); blocked rows
       get a distinct style; `b` binding opens a small input to add/remove a blocker
       by id (comma/`-` prefix to remove, or similar — decide and document).
@@ -115,3 +115,5 @@ is done.
   gates green: 107 passed, mypy clean, ruff clean.
 - 2026-08-11 iter 2: --blocked/--ready list filters (2a3ffb0). Gates green:
   113 passed, mypy clean, ruff clean, format clean.
+- 2026-08-12 iter 3: unblock warnings on done/mv (fb38a26). Gates green:
+  119 passed, mypy clean, ruff clean, format clean.
