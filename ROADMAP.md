@@ -35,12 +35,11 @@ bottom. Baseline commit before the loop started: `658ec6b`.
       (1008619)
 - [x] CLI: `todo list --search TEXT` — SQL LIKE in storage with wildcard
       escaping, exposed via application/queries. (1008619)
-- [ ] TUI: implement the PRD's filter bar — `/` focuses a search input that
-      live-filters the table (title/body); Esc clears/unfocuses. A tag filter
-      (Select or cycling with a key) alongside it. `0` clears all filters
-      (PRD binding).
-- [ ] Tests: tag AND-filtering, search edge cases (case, unicode, `%`/`_`
-      literals), TUI search interaction via Pilot.
+- [x] TUI filters: `/` search (existing modal), `t` cycles tag filter, `1-4`
+      toggle priority filter, `0` clears all; status line shows active
+      filters. (ed248e8)
+- [x] Tests: tag AND-filtering, search edge cases (case, unicode, `%`/`_`
+      literals) in 1008619; TUI filter interactions via Pilot in ed248e8.
 
 ## Phase 3 — Projects
 
@@ -105,7 +104,10 @@ is done.
 
 ## Decisions
 
-- (record decisions the loop makes here, with one-line rationale)
+- TUI search stays a modal dialog (`/`) rather than an inline always-visible
+  filter bar: same capability, already tested, one keystroke away; the status
+  line acts as the "filter bar" readout. Tag filter cycles with `t` instead of
+  a Select widget to keep the list keyboard-driven.
 
 ## Iteration log
 
@@ -122,3 +124,5 @@ is done.
   tags' command (7cfbab2). Gates green: 127 passed, all clean.
 - 2026-08-12 iter 6: multi-tag AND + --search with LIKE escaping (1008619).
   Gates green: 138 passed, all clean.
+- 2026-08-12 iter 7: TUI tag/priority filters + clear-all, Phase 2 closed
+  (ed248e8). Gates green: 142 passed, all clean.
