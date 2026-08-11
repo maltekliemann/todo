@@ -40,6 +40,15 @@ def show_todo(
     return storage.get(item_id)
 
 
+def count_tags(storage: StorageProtocol) -> list[tuple[str, int]]:
+    """All tags with usage counts (done items included), most used first."""
+    counts: dict[str, int] = {}
+    for item in storage.list(include_done=True):
+        for tag in item.tags:
+            counts[tag] = counts.get(tag, 0) + 1
+    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+
+
 def parse_since(since: str) -> datetime:
     """Parse a --since value into a datetime.
 

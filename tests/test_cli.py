@@ -427,6 +427,35 @@ class TestUnblock:
         assert data["blocked_by"] == []
 
 
+class TestTags:
+    def test_empty(self, invoke) -> None:
+        result = invoke("tags")
+        assert result.exit_code == 0
+        assert "No tags" in result.output
+
+    def test_counts_and_order(self, invoke) -> None:
+        invoke("add A -t common -t rare")
+        invoke("add B -t common")
+        invoke("add C -t common -t other")
+        data = json.loads(invoke("tags --json").output)
+        assert data[0] == {"tag": "common", "count": 3}
+        # Ties broken alphabetically.
+        assert [d["tag"] for d in data[1:]] == ["other", "rare"]
+
+    def test_includes_done_items(self, invoke) -> None:
+        invoke("add A -t keep")
+        invoke("done 1")
+        data = json.loads(invoke("tags --json").output)
+        assert data == [{"tag": "keep", "count": 1}]
+
+    def test_plain_output(self, invoke) -> None:
+        invoke("add A -t foo")
+        result = invoke("tags")
+        assert result.exit_code == 0
+        assert "foo" in result.output
+        assert "1" in result.output
+
+
 class TestUnblockWarning:
     def test_done_warns_about_newly_unblocked(self, invoke) -> None:
         invoke("add Blocker")

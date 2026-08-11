@@ -17,7 +17,7 @@ from todo.application.commands import (
     unblock_todo,
 )
 from todo.application.contracts.storage import UNSET, Unset
-from todo.application.queries import list_todos, show_todo, summary
+from todo.application.queries import count_tags, list_todos, show_todo, summary
 from todo.config import get_db_path
 from todo.domain.enums import Priority, Status
 from todo.domain.models import TodoItem
@@ -325,6 +325,19 @@ def unblock(item_id: int, blocker_ids: tuple[int, ...], as_json: bool) -> None:
         out.print_json_item(item)
     else:
         out.print_item(item)
+
+
+@main.command()
+@click.option("--json", "as_json", is_flag=True, help="Output JSON")
+def tags(as_json: bool) -> None:
+    """List all tags with usage counts."""
+    storage = _storage()
+    out = create_output()
+    counts = count_tags(storage)
+    if as_json:
+        out.print_json_tags(counts)
+    else:
+        out.print_tags(counts)
 
 
 @main.command()

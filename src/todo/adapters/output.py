@@ -66,6 +66,8 @@ class OutputProtocol(Protocol):
     def print_json_list(self, items: list[TodoItem]) -> None: ...
     def print_json_item(self, item: TodoItem) -> None: ...
     def print_json_summary(self, since: datetime, items: list[TodoItem]) -> None: ...
+    def print_tags(self, counts: list[tuple[str, int]]) -> None: ...
+    def print_json_tags(self, counts: list[tuple[str, int]]) -> None: ...
 
 
 def _item_to_dict(item: TodoItem) -> dict[str, object]:
@@ -217,6 +219,22 @@ class RichOutput:
             )
         )
 
+    def print_tags(self, counts: list[tuple[str, int]]) -> None:
+        from rich.table import Table
+
+        if not counts:
+            self._console.print("[dim]No tags.[/dim]")
+            return
+        table = Table(show_header=True, header_style="dim", box=None, padding=(0, 1))
+        table.add_column("Tag")
+        table.add_column("Items", justify="right")
+        for tag, count in counts:
+            table.add_row(tag, str(count))
+        self._console.print(table)
+
+    def print_json_tags(self, counts: list[tuple[str, int]]) -> None:
+        print(json.dumps([{"tag": t, "count": c} for t, c in counts], indent=2))
+
 
 class PlainOutput:
     def print_list(self, items: list[TodoItem]) -> None:
@@ -287,6 +305,16 @@ class PlainOutput:
                 indent=2,
             )
         )
+
+    def print_tags(self, counts: list[tuple[str, int]]) -> None:
+        if not counts:
+            print("No tags.")
+            return
+        for tag, count in counts:
+            print(f"  {tag}  {count}")
+
+    def print_json_tags(self, counts: list[tuple[str, int]]) -> None:
+        print(json.dumps([{"tag": t, "count": c} for t, c in counts], indent=2))
 
 
 def _pri_style(p: Priority) -> str:
