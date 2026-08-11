@@ -79,9 +79,7 @@ def _violations_for(path: Path) -> list[str]:
     for module in _imported_modules(path):
         root = module.split(".")[0]
         if root == "todo":
-            if not any(
-                module == p or module.startswith(f"{p}.") for p in todo_ok
-            ):
+            if not any(module == p or module.startswith(f"{p}.") for p in todo_ok):
                 violations.append(module)
         elif root not in _STDLIB and root not in third_party_ok:
             violations.append(module)
