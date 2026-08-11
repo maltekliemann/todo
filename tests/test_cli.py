@@ -501,6 +501,20 @@ class TestSearch:
         assert [i["title"] for i in data] == ["Auth-docs"]
 
 
+class TestBadInput:
+    def test_add_invalid_deadline_exits_cleanly(self, invoke) -> None:
+        result = invoke("add Task -d garbage")
+        assert result.exit_code == 1
+        assert "Invalid deadline" in result.stderr
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+
+    def test_edit_invalid_deadline_exits_cleanly(self, invoke) -> None:
+        invoke("add Task")
+        result = invoke("edit 1 -d 2026-13-45")
+        assert result.exit_code == 1
+        assert "Invalid deadline" in result.stderr
+
+
 class TestProjectCli:
     def test_add_and_show(self, invoke) -> None:
         result = invoke("project add infra -D Infrastructure")

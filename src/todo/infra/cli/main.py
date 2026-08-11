@@ -53,6 +53,14 @@ def _warn_unblocked(unblocked: list[TodoItem]) -> None:
         click.echo(f"🔓 #{dep.id} {dep.title} is now unblocked", err=True)
 
 
+def _parse_deadline_or_exit(value: str) -> date:
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        click.echo(f"Invalid deadline '{value}'. Use YYYY-MM-DD.", err=True)
+        sys.exit(1)
+
+
 def _resolve_project_or_exit(storage: SqliteStorage, ref: str) -> int:
     try:
         return resolve_project(storage, ref).id
@@ -98,7 +106,7 @@ def add(
     """Add a new todo item."""
     storage = _storage()
     out = create_output()
-    dl = date.fromisoformat(deadline) if deadline else None
+    dl = _parse_deadline_or_exit(deadline) if deadline else None
     project_id = _resolve_project_or_exit(storage, project_ref) if project_ref else None
     item = add_todo(
         storage,
@@ -232,7 +240,7 @@ def edit(
         if deadline.lower() == "none":
             dl = None
         else:
-            dl = date.fromisoformat(deadline)
+            dl = _parse_deadline_or_exit(deadline)
 
     project_id: int | None | Unset = UNSET
     if project_ref is not None:
