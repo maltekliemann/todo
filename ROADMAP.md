@@ -59,7 +59,8 @@ is done.
       name-or-id resolution. (965d19e)
 - [x] CLI: `todo add --project`, `todo edit N --project NAME|none`,
       `todo list --project NAME`. (965d19e)
-- [ ] TUI: project shown in detail pane; filter by project (key or Select widget).
+- [x] TUI: project in detail pane + inspect dialog; `p` cycles project filter,
+      `0` clears. (ad3947b)
 - [x] PRD.md: Projects section with label-vs-project rationale and CLI
       examples. (965d19e) — "Out of scope" bullets still to review.
 - [ ] Stretch: `todo project log NAME "update text"` + updates shown in
@@ -128,3 +129,5 @@ is done.
   issue. Gates green: 154 passed, all clean.
 - 2026-08-12 iter 9: full project CLI + --project on add/edit/list + PRD
   section (965d19e). Gates green: 166 passed, all clean.
+- 2026-08-12 iter 10: TUI project display + 'p' filter (ad3947b). Gates
+  green: 169 passed, all clean. Phase 3 done except stretch (project log).
