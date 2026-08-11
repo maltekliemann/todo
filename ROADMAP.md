@@ -75,13 +75,13 @@ is done.
 
 ## Phase 5 — Architecture & hardening
 
-- [ ] Add `tests/test_architecture.py`: walk `src/todo` module imports and assert
-      the layer rules from LOOP.md (domain imports nothing outer, application never
-      imports adapters/infra/tui/click/rich/textual/sqlite3, etc.). This becomes
-      part of the standard gate.
-- [ ] Audit TUI/CLI for business logic that belongs in application layer; move it.
-- [ ] Error-handling audit: consistent exit codes and stderr messages across CLI;
-      `TodoError` hierarchy used consistently.
+- [x] `tests/test_architecture.py` enforces layer rules via ast import walk;
+      passed with zero violations on first run. (024a355)
+- [x] Audit TUI/CLI for misplaced business logic: none found — cycle detection,
+      filters, counts all live in application; TUI list filtering is view-state
+      over fetched items (presentation, kept). (024a355)
+- [x] Error-handling audit: found + fixed --deadline ValueError traceback in
+      add/edit; all other CLI errors exit 1 with stderr message. (024a355)
 - [ ] Coverage run (`just cov`): ≥90% on domain/application/adapters; fill gaps
       with meaningful tests (not assertion-free padding).
 - [ ] README.md: refresh usage docs for all new commands.
@@ -130,3 +130,5 @@ is done.
   green: 169 passed, all clean. Phase 3 done except stretch (project log).
 - 2026-08-12 iter 11: sticky-cursor mode, Phase 4 closed (1192dc2). Gates
   green: 173 passed, all clean.
+- 2026-08-12 iter 12: architecture-enforcement tests + deadline input fix
+  (024a355). Gates green: 178 passed, all clean.
