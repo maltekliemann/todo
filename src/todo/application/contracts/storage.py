@@ -32,15 +32,6 @@ class StorageProtocol(Protocol):
 
     def get(self, item_id: int) -> TodoItem: ...
 
-    def list(
-        self,
-        *,
-        status: Status | None = None,
-        priority: Priority | None = None,
-        tag: str | None = None,
-        include_done: bool = False,
-    ) -> list[TodoItem]: ...
-
     def update(
         self,
         item_id: int,
@@ -56,3 +47,16 @@ class StorageProtocol(Protocol):
     def delete(self, item_id: int) -> None: ...
 
     def done_since(self, since: datetime) -> list[TodoItem]: ...
+
+    def add_blocker(self, blocked_id: int, blocker_id: int) -> None: ...
+
+    def remove_blocker(self, blocked_id: int, blocker_id: int) -> None: ...
+
+    def list(
+        self,
+        *,
+        status: Status | None = None,
+        priority: Priority | None = None,
+        tag: str | None = None,
+        include_done: bool = False,
+    ) -> list[TodoItem]: ...

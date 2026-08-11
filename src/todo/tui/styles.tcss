@@ -100,6 +100,24 @@ SearchDialog > #search-container {
     border: thick $primary;
 }
 
+BlockDialog {
+    align: center middle;
+}
+
+BlockDialog > #block-container {
+    width: 60;
+    height: auto;
+    padding: 1 2;
+    background: $surface;
+    border: thick $primary;
+}
+
+#block-error {
+    color: $error;
+    height: auto;
+    margin-top: 1;
+}
+
 InspectDialog {
     align: center middle;
 }

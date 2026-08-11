@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from click.testing import CliRunner
 
+from todo.adapters.sqlite_storage import SqliteStorage
+from todo.application.commands import block_todo, unblock_todo
+from todo.domain.enums import Status
+from todo.exceptions import DependencyError, NotFoundError
 from todo.infra.cli.main import main
 
 
@@ -254,12 +259,251 @@ class TestDeadlineWarnings:
         assert data["is_overdue"] is False
 
 
+class TestBlock:
+    def test_happy_path(self, invoke) -> None:
+        invoke("add One")
+        invoke("add Two")
+
+        result = invoke("block 2 1")
+        assert result.exit_code == 0
+
+        r = invoke("show 2 --json")
+        data = json.loads(r.output)
+        assert data["blocked_by"] == [1]
+        assert data["is_blocked"] is True
+
+        r = invoke("show 1 --json")
+        data = json.loads(r.output)
+        assert data["blocking"] == [2]
+        assert data["is_blocked"] is False
+
+    def test_multiple_blockers_one_invocation(self, invoke) -> None:
+        invoke("add One")
+        invoke("add Two")
+        invoke("add Three")
+
+        result = invoke("block 3 1 2")
+        assert result.exit_code == 0
+
+        r = invoke("show 3 --json")
+        data = json.loads(r.output)
+        assert data["blocked_by"] == [1, 2]
+        assert data["is_blocked"] is True
+
+        assert json.loads(invoke("show 1 --json").output)["blocking"] == [3]
+        assert json.loads(invoke("show 2 --json").output)["blocking"] == [3]
+
+    def test_block_shows_relation_in_output(self, invoke) -> None:
+        invoke("add Blocker")
+        invoke("add Blocked")
+        result = invoke("block 2 1")
+        assert result.exit_code == 0
+        assert "Blocked by: #1" in result.output
+
+    def test_self_block_rejected(self, invoke) -> None:
+        invoke("add Lonely")
+        result = invoke("block 1 1")
+        assert result.exit_code == 1
+        assert "An item cannot block itself." in result.output
+
+    def test_block_nonexistent_blocker(self, invoke) -> None:
+        invoke("add Real item")
+        result = invoke("block 1 999")
+        assert result.exit_code == 1
+        assert "not found" in result.output
+
+    def test_block_nonexistent_target(self, invoke) -> None:
+        invoke("add Real item")
+        result = invoke("block 999 1")
+        assert result.exit_code == 1
+        assert "not found" in result.output
+
+    def test_cycle_rejected(self, invoke) -> None:
+        invoke("add One")
+        invoke("add Two")
+        assert invoke("block 2 1").exit_code == 0
+        result = invoke("block 1 2")
+        assert result.exit_code == 1
+        assert "cycle" in result.output
+
+    def test_transitive_cycle_rejected(self, invoke) -> None:
+        invoke("add One")
+        invoke("add Two")
+        invoke("add Three")
+        # 1 blocks 2, 2 blocks 3; adding 3 blocks 1 would form a cycle.
+        assert invoke("block 2 1").exit_code == 0
+        assert invoke("block 3 2").exit_code == 0
+        result = invoke("block 1 3")
+        assert result.exit_code == 1
+        assert "cycle" in result.output
+
+    def test_blocked_by_marked_done_flips_is_blocked(self, invoke) -> None:
+        invoke("add Blocker")
+        invoke("add Blocked")
+        invoke("block 2 1")
+
+        invoke("done 1")
+
+        r = invoke("show 2 --json")
+        data = json.loads(r.output)
+        # Relation persists, but is_blocked flips to False once blocker is done.
+        assert data["blocked_by"] == [1]
+        assert data["is_blocked"] is False
+
+    def test_delete_blocker_cascades(self, invoke) -> None:
+        invoke("add Blocker")
+        invoke("add Blocked")
+        invoke("block 2 1")
+
+        invoke("rm 1")
+
+        r = invoke("show 2 --json")
+        data = json.loads(r.output)
+        assert data["blocked_by"] == []
+        assert data["is_blocked"] is False
+
+    def test_list_marks_blocked_item_json(self, invoke) -> None:
+        invoke("add Blocker")
+        invoke("add Blocked")
+        invoke("block 2 1")
+
+        r = invoke("list --json")
+        items = {i["id"]: i for i in json.loads(r.output)}
+        assert items[2]["is_blocked"] is True
+        assert items[1]["is_blocked"] is False
+
+    def test_list_renders_blocked_marker(self, invoke) -> None:
+        invoke("add Blocker")
+        invoke("add Blocked")
+        invoke("block 2 1")
+
+        r = invoke("list")
+        assert r.exit_code == 0
+        # Construction crane emoji prepended to the blocked item's title.
+        assert "\U0001f6a7" in r.output
+
+
+class TestUnblock:
+    def test_unblock_removes_relation(self, invoke) -> None:
+        invoke("add Blocker")
+        invoke("add Blocked")
+        invoke("block 2 1")
+
+        result = invoke("unblock 2 1")
+        assert result.exit_code == 0
+
+        data = json.loads(invoke("show 2 --json").output)
+        assert data["blocked_by"] == []
+        assert data["is_blocked"] is False
+
+        data = json.loads(invoke("show 1 --json").output)
+        assert data["blocking"] == []
+
+    def test_unblock_one_of_many(self, invoke) -> None:
+        invoke("add One")
+        invoke("add Two")
+        invoke("add Three")
+        invoke("block 3 1 2")
+
+        result = invoke("unblock 3 1")
+        assert result.exit_code == 0
+
+        data = json.loads(invoke("show 3 --json").output)
+        assert data["blocked_by"] == [2]
+        assert data["is_blocked"] is True
+
+
+class TestBlockStorage:
+    """Application + storage layer behavior, bypassing the CLI."""
+
+    def test_add_and_query_relation(self, storage: SqliteStorage) -> None:
+        a = storage.add("Blocker")
+        b = storage.add("Blocked")
+
+        block_todo(storage, b.id, a.id)
+
+        refreshed = storage.get(b.id)
+        assert refreshed.blocked_by == [a.id]
+        assert refreshed.is_blocked is True
+        assert storage.get(a.id).blocking == [b.id]
+
+    def test_list_no_n_plus_one_context(self, storage: SqliteStorage) -> None:
+        a = storage.add("Blocker")
+        b = storage.add("Blocked")
+        block_todo(storage, b.id, a.id)
+
+        by_id = {i.id: i for i in storage.list()}
+        assert by_id[b.id].blocked_by == [a.id]
+        assert by_id[b.id].is_blocked is True
+        assert by_id[a.id].blocking == [b.id]
+
+    def test_self_block_raises(self, storage: SqliteStorage) -> None:
+        a = storage.add("Item")
+        with pytest.raises(DependencyError):
+            block_todo(storage, a.id, a.id)
+
+    def test_cycle_raises(self, storage: SqliteStorage) -> None:
+        a = storage.add("One")
+        b = storage.add("Two")
+        block_todo(storage, b.id, a.id)
+        with pytest.raises(DependencyError):
+            block_todo(storage, a.id, b.id)
+
+    def test_block_missing_raises(self, storage: SqliteStorage) -> None:
+        a = storage.add("Item")
+        with pytest.raises(NotFoundError):
+            block_todo(storage, a.id, 999)
+
+    def test_done_blocker_flips_is_blocked(self, storage: SqliteStorage) -> None:
+        a = storage.add("Blocker")
+        b = storage.add("Blocked")
+        block_todo(storage, b.id, a.id)
+
+        storage.update(a.id, status=Status.DONE)
+
+        refreshed = storage.get(b.id)
+        assert refreshed.blocked_by == [a.id]
+        assert refreshed.is_blocked is False
+
+    def test_delete_cascades(self, storage: SqliteStorage) -> None:
+        a = storage.add("Blocker")
+        b = storage.add("Blocked")
+        block_todo(storage, b.id, a.id)
+
+        storage.delete(a.id)
+
+        refreshed = storage.get(b.id)
+        assert refreshed.blocked_by == []
+        assert refreshed.is_blocked is False
+
+    def test_unblock_removes_relation(self, storage: SqliteStorage) -> None:
+        a = storage.add("Blocker")
+        b = storage.add("Blocked")
+        block_todo(storage, b.id, a.id)
+
+        unblock_todo(storage, b.id, a.id)
+
+        assert storage.get(b.id).blocked_by == []
+        assert storage.get(b.id).is_blocked is False
+
+
 class TestFullWorkflow:
     """End-to-end workflow simulating AI + human usage."""
 
     def test_ai_workflow(self, cli: CliRunner) -> None:
         # AI adds items while working
-        r = cli.invoke(main, ["add", "Refactor auth middleware", "-p", "high", "-t", "refactor", "--json"])
+        r = cli.invoke(
+            main,
+            [
+                "add",
+                "Refactor auth middleware",
+                "-p",
+                "high",
+                "-t",
+                "refactor",
+                "--json",
+            ],
+        )
         assert r.exit_code == 0
         item = json.loads(r.output)
         item_id = str(item["id"])

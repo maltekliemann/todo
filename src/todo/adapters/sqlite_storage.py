@@ -23,6 +23,11 @@ CREATE TABLE IF NOT EXISTS todos (
     deadline   TEXT,
     tags       TEXT    NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS todo_dependencies (
+    blocker_id INTEGER NOT NULL REFERENCES todos(id) ON DELETE CASCADE,
+    blocked_id INTEGER NOT NULL REFERENCES todos(id) ON DELETE CASCADE,
+    PRIMARY KEY (blocker_id, blocked_id)
+);
 """
 
 
@@ -30,7 +35,13 @@ def _now() -> datetime:
     return datetime.now(tz=ZoneInfo("UTC"))
 
 
-def _row_to_item(row: sqlite3.Row) -> TodoItem:
+def _row_to_item(
+    row: sqlite3.Row,
+    *,
+    blocked_by: list[int] | None = None,
+    blocking: list[int] | None = None,
+    is_blocked: bool = False,
+) -> TodoItem:
     tags_raw: str = row["tags"]
     tags = [t.strip() for t in tags_raw.split(",") if t.strip()] if tags_raw else []
     done_at_raw: str | None = row["done_at"]
@@ -46,6 +57,9 @@ def _row_to_item(row: sqlite3.Row) -> TodoItem:
         done_at=datetime.fromisoformat(done_at_raw) if done_at_raw else None,
         deadline=date.fromisoformat(deadline_raw) if deadline_raw else None,
         tags=tags,
+        blocked_by=blocked_by if blocked_by is not None else [],
+        blocking=blocking if blocking is not None else [],
+        is_blocked=is_blocked,
     )
 
 
@@ -55,6 +69,7 @@ class SqliteStorage:
         self._conn = sqlite3.connect(str(db_path))
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(_SCHEMA)
 
     def close(self) -> None:
@@ -107,55 +122,34 @@ class SqliteStorage:
         ).fetchone()
         if row is None:
             raise NotFoundError(item_id)
-        return _row_to_item(row)
-
-    def list(
-        self,
-        *,
-        status: Status | None = None,
-        priority: Priority | None = None,
-        tag: str | None = None,
-        include_done: bool = False,
-    ) -> list[TodoItem]:
-        clauses: list[str] = []
-        params: list[str] = []
-
-        if status is not None:
-            clauses.append("status = ?")
-            params.append(status.value)
-        elif not include_done:
-            clauses.append("status != ?")
-            params.append(Status.DONE.value)
-
-        if priority is not None:
-            clauses.append("priority = ?")
-            params.append(priority.value)
-
-        if tag is not None:
-            clauses.append("(',' || tags || ',') LIKE ?")
-            params.append(f"%,{tag},%")
-
-        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-        # Sort: overdue first, then by priority weight, then by creation date
-        query = (
-            f"SELECT * FROM todos{where} "
-            "ORDER BY "
-            "CASE status "
-            "  WHEN 'in-progress' THEN 0 "
-            "  WHEN 'todo' THEN 1 "
-            "  WHEN 'backlog' THEN 2 "
-            "  WHEN 'done' THEN 3 "
-            "END, "
-            "CASE priority "
-            "  WHEN 'urgent' THEN 0 "
-            "  WHEN 'high' THEN 1 "
-            "  WHEN 'medium' THEN 2 "
-            "  WHEN 'low' THEN 3 "
-            "END, "
-            "created_at ASC"
+        blocker_rows = self._conn.execute(
+            "SELECT blocker_id FROM todo_dependencies WHERE blocked_id = ? "
+            "ORDER BY blocker_id ASC",
+            (item_id,),
+        ).fetchall()
+        blocked_by = [r["blocker_id"] for r in blocker_rows]
+        blocking_rows = self._conn.execute(
+            "SELECT blocked_id FROM todo_dependencies WHERE blocker_id = ? "
+            "ORDER BY blocked_id ASC",
+            (item_id,),
+        ).fetchall()
+        blocking = [r["blocked_id"] for r in blocking_rows]
+        is_blocked = False
+        if row["status"] != Status.DONE.value and blocked_by:
+            placeholders = ",".join("?" for _ in blocked_by)
+            status_rows = self._conn.execute(
+                f"SELECT status FROM todos WHERE id IN ({placeholders})",
+                blocked_by,
+            ).fetchall()
+            is_blocked = any(
+                r["status"] != Status.DONE.value for r in status_rows
+            )
+        return _row_to_item(
+            row,
+            blocked_by=blocked_by,
+            blocking=blocking,
+            is_blocked=is_blocked,
         )
-        rows = self._conn.execute(query, params).fetchall()
-        return [_row_to_item(r) for r in rows]
 
     def update(
         self,
@@ -228,3 +222,102 @@ class SqliteStorage:
             (Status.DONE.value, since.isoformat()),
         ).fetchall()
         return [_row_to_item(r) for r in rows]
+
+    def add_blocker(self, blocked_id: int, blocker_id: int) -> None:
+        self.get(blocked_id)  # raises NotFoundError if missing
+        self.get(blocker_id)  # raises NotFoundError if missing
+        try:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO todo_dependencies (blocker_id, blocked_id) "
+                "VALUES (?, ?)",
+                (blocker_id, blocked_id),
+            )
+            self._conn.commit()
+        except sqlite3.Error as e:
+            raise StorageError(f"Failed to add blocker: {e}") from e
+
+    def remove_blocker(self, blocked_id: int, blocker_id: int) -> None:
+        try:
+            self._conn.execute(
+                "DELETE FROM todo_dependencies "
+                "WHERE blocker_id = ? AND blocked_id = ?",
+                (blocker_id, blocked_id),
+            )
+            self._conn.commit()
+        except sqlite3.Error as e:
+            raise StorageError(f"Failed to remove blocker: {e}") from e
+
+    def list(
+        self,
+        *,
+        status: Status | None = None,
+        priority: Priority | None = None,
+        tag: str | None = None,
+        include_done: bool = False,
+    ) -> list[TodoItem]:
+        clauses: list[str] = []
+        params: list[str] = []
+
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status.value)
+        elif not include_done:
+            clauses.append("status != ?")
+            params.append(Status.DONE.value)
+
+        if priority is not None:
+            clauses.append("priority = ?")
+            params.append(priority.value)
+
+        if tag is not None:
+            clauses.append("(',' || tags || ',') LIKE ?")
+            params.append(f"%,{tag},%")
+
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        # Sort: overdue first, then by priority weight, then by creation date
+        query = (
+            f"SELECT * FROM todos{where} "
+            "ORDER BY "
+            "CASE status "
+            "  WHEN 'in-progress' THEN 0 "
+            "  WHEN 'todo' THEN 1 "
+            "  WHEN 'backlog' THEN 2 "
+            "  WHEN 'done' THEN 3 "
+            "END, "
+            "CASE priority "
+            "  WHEN 'urgent' THEN 0 "
+            "  WHEN 'high' THEN 1 "
+            "  WHEN 'medium' THEN 2 "
+            "  WHEN 'low' THEN 3 "
+            "END, "
+            "created_at ASC"
+        )
+        rows = self._conn.execute(query, params).fetchall()
+
+        dep_rows = self._conn.execute(
+            "SELECT blocker_id, blocked_id FROM todo_dependencies"
+        ).fetchall()
+        status_rows = self._conn.execute("SELECT id, status FROM todos").fetchall()
+        status_by_id = {r["id"]: r["status"] for r in status_rows}
+        blocked_by_map: dict[int, list[int]] = {}
+        blocking_map: dict[int, list[int]] = {}
+        for dep in dep_rows:
+            blocked_by_map.setdefault(dep["blocked_id"], []).append(dep["blocker_id"])
+            blocking_map.setdefault(dep["blocker_id"], []).append(dep["blocked_id"])
+
+        items: list[TodoItem] = []
+        for r in rows:
+            blocked_by = sorted(blocked_by_map.get(r["id"], []))
+            blocking = sorted(blocking_map.get(r["id"], []))
+            is_blocked = r["status"] != Status.DONE.value and any(
+                status_by_id.get(b) != Status.DONE.value for b in blocked_by
+            )
+            items.append(
+                _row_to_item(
+                    r,
+                    blocked_by=blocked_by,
+                    blocking=blocking,
+                    is_blocked=is_blocked,
+                )
+            )
+        return items

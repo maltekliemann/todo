@@ -15,3 +15,7 @@ class NotFoundError(TodoError):
     def __init__(self, item_id: int) -> None:
         super().__init__(f"Todo item #{item_id} not found")
         self.item_id = item_id
+
+
+class DependencyError(TodoError):
+    """Raised for invalid blocking relations (self-block, cycle)."""

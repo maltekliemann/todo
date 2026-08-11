@@ -9,6 +9,7 @@ from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Vertical, VerticalScroll
+from textual.coordinate import Coordinate
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widget import Widget
@@ -17,16 +18,17 @@ from textual.widgets import DataTable, Footer, Input, Label, Select, Static
 from todo.adapters.sqlite_storage import SqliteStorage
 from todo.application.commands import (
     add_todo,
+    block_todo,
     complete_todo,
     delete_todo,
     edit_todo,
     move_todo,
 )
-from todo.application.contracts.storage import UNSET
+from todo.application.contracts.storage import UNSET, Unset
 from todo.application.queries import list_todos, show_todo
 from todo.domain.enums import Priority, Status
 from todo.domain.models import TodoItem
-from todo.exceptions import NotFoundError
+from todo.exceptions import DependencyError, NotFoundError
 
 _SEPARATOR_PREFIX = "__sep_"
 
@@ -43,7 +45,7 @@ class TodoTable(DataTable[str]):
             return None
         try:
             return self.coordinate_to_cell_key(
-                (self.cursor_row, 0)
+                Coordinate(self.cursor_row, 0)
             ).row_key.value
         except Exception:
             return None
@@ -64,11 +66,11 @@ class TodoTable(DataTable[str]):
                 return
             self.move_cursor(row=new_row)
 
-    def action_cursor_down(self) -> None:  # type: ignore[override]
+    def action_cursor_down(self) -> None:
         super().action_cursor_down()
         self._skip_separators(1)
 
-    def action_cursor_up(self) -> None:  # type: ignore[override]
+    def action_cursor_up(self) -> None:
         super().action_cursor_up()
         self._skip_separators(-1)
 
@@ -407,6 +409,47 @@ class SearchDialog(ModalScreen[str | None]):
         self.dismiss(None)
 
 
+class BlockDialog(ModalScreen[str | None]):
+    """Prompt for a blocker id and add the blocking relation.
+
+    The command call happens here so validation/dependency errors can be
+    shown inline while keeping the dialog open. Dismisses with the entered
+    string on success, or ``None`` on cancel.
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, storage: SqliteStorage, blocked_id: int) -> None:
+        super().__init__()
+        self._storage = storage
+        self._blocked_id = blocked_id
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="block-container"):
+            yield Label(f"Block #{self._blocked_id} by (item id):")
+            yield Input(id="block-input", placeholder="Blocker item id...")
+            yield Label("", id="block-error")
+
+    def on_mount(self) -> None:
+        self.query_one("#block-input", Input).focus()
+
+    @on(Input.Submitted, "#block-input")
+    def on_submit(self) -> None:
+        value = self.query_one("#block-input", Input).value.strip()
+        error_w = self.query_one("#block-error", Label)
+        try:
+            blocker_id = int(value)
+            block_todo(self._storage, self._blocked_id, blocker_id)
+        except (NotFoundError, DependencyError, ValueError) as exc:
+            message = str(exc) if str(exc) else "Invalid blocker id"
+            error_w.update(message)
+            return
+        self.dismiss(value)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class InspectDialog(ModalScreen[None]):
     """Read-only modal showing the full content of a todo item."""
 
@@ -439,6 +482,14 @@ class InspectDialog(ModalScreen[None]):
                 )
             if item.tags:
                 meta_lines.append(f"Tags: {', '.join(item.tags)}")
+            if item.blocked_by:
+                meta_lines.append(
+                    f"Blocked by: {', '.join(f'#{i}' for i in item.blocked_by)}"
+                )
+            if item.blocking:
+                meta_lines.append(
+                    f"Blocking: {', '.join(f'#{i}' for i in item.blocking)}"
+                )
             yield Static("\n".join(meta_lines), id="inspect-meta")
             with VerticalScroll(id="inspect-body-scroll"):
                 yield Static(
@@ -459,6 +510,7 @@ class TodoListView(Widget):
         Binding("d", "done", "Done", show=True),
         Binding("e", "edit", "Edit", show=True),
         Binding("x,delete", "delete", "Delete", show=True),
+        Binding("b", "block", "Block", show=True),
         Binding("greater_than_sign", "status_next", "Status >", show=True),
         Binding("less_than_sign", "status_prev", "Status <", show=True),
         Binding("slash", "search", "Search", show=True),
@@ -509,7 +561,7 @@ class TodoListView(Widget):
         self.action_inspect()
 
     def _refresh_list(self) -> None:
-        table = self.query_one("#item-list", DataTable)
+        table = self.query_one("#item-list", TodoTable)
         previous_id = self._selected_item_id()
         previous_cursor = table.cursor_row
         table.clear()
@@ -558,11 +610,14 @@ class TodoListView(Widget):
                 deadline_text = (
                     _deadline_str(item) if status != Status.DONE else ""
                 )
+                title_text = (
+                    f"\U0001f6a7 {item.title}" if item.is_blocked else item.title
+                )
                 table.add_row(
                     str(item.id),
                     _priority_label(item.priority),
                     f"{_status_icon(item.status)} {item.status.value}",
-                    item.title,
+                    title_text,
                     deadline_text,
                     _relative_age(item.created_at),
                     key=str(item.id),
@@ -587,14 +642,14 @@ class TodoListView(Widget):
 
         self._last_data_version = self._storage.data_version()
 
-        status = self.query_one("#search-status", Static)
+        search_status = self.query_one("#search-status", Static)
         if self._search_query:
-            status.update(
+            search_status.update(
                 f"[dim]Search: [/dim][b]{self._search_query}[/b]  "
                 f"[dim]([Esc] to clear)[/dim]"
             )
         else:
-            status.update("")
+            search_status.update("")
 
     def _update_detail(self, item_id: object) -> None:
         if item_id is None or _is_separator(item_id):
@@ -621,6 +676,16 @@ class TodoListView(Widget):
             else ""
         )
         tags_str = f"\nTags: {', '.join(item.tags)}" if item.tags else ""
+        blocked_by_str = (
+            f"\nBlocked by: {', '.join(f'#{i}' for i in item.blocked_by)}"
+            if item.blocked_by
+            else ""
+        )
+        blocking_str = (
+            f"\nBlocking: {', '.join(f'#{i}' for i in item.blocking)}"
+            if item.blocking
+            else ""
+        )
 
         title_w.update(f"[b]#{item.id}  {item.title}[/b]")
         meta_w.update(
@@ -630,6 +695,8 @@ class TodoListView(Widget):
             f"Updated: {item.updated_at.strftime('%b %d, %Y %H:%M')}"
             f"{done_str}"
             f"{tags_str}"
+            f"{blocked_by_str}"
+            f"{blocking_str}"
         )
         body_w.update(item.body if item.body else "")
 
@@ -706,7 +773,7 @@ class TodoListView(Widget):
 
             fields = _parse_editor_text(edited)
 
-            deadline_val: date | None | object = UNSET
+            deadline_val: date | None | Unset = UNSET
             dl_str = fields.get("deadline", "")
             if dl_str == "":
                 deadline_val = None
@@ -735,7 +802,7 @@ class TodoListView(Widget):
                     if fields.get("status")
                     else None
                 ),
-                deadline=deadline_val,  # type: ignore[arg-type]
+                deadline=deadline_val,
                 tags=tags,
             )
             self._refresh_list()
@@ -747,12 +814,23 @@ class TodoListView(Widget):
         if item_id is None:
             return
 
-        def after(confirmed: bool) -> None:
+        def after(confirmed: bool | None) -> None:
             if confirmed:
                 delete_todo(self._storage, item_id)
                 self._refresh_list()
 
         self.app.push_screen(ConfirmDialog(f"Delete #{item_id}?"), after)
+
+    def action_block(self) -> None:
+        item_id = self._selected_item_id()
+        if item_id is None:
+            return
+
+        def after(result: str | None) -> None:
+            if result is not None:
+                self._refresh_list()
+
+        self.app.push_screen(BlockDialog(self._storage, item_id), after)
 
     def action_search(self) -> None:
         def after(query: str | None) -> None:

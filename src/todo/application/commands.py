@@ -5,6 +5,7 @@ from datetime import date
 from todo.application.contracts.storage import StorageProtocol, Unset
 from todo.domain.enums import Priority, Status
 from todo.domain.models import TodoItem
+from todo.exceptions import DependencyError
 
 
 def add_todo(
@@ -69,3 +70,40 @@ def delete_todo(
     item_id: int,
 ) -> None:
     storage.delete(item_id)
+
+
+def block_todo(
+    storage: StorageProtocol,
+    blocked_id: int,
+    blocker_id: int,
+) -> TodoItem:
+    if blocked_id == blocker_id:
+        raise DependencyError("An item cannot block itself.")
+    storage.get(blocked_id)
+    storage.get(blocker_id)
+    # Adding "blocker_id blocks blocked_id" forms a cycle iff blocked_id already
+    # transitively blocks blocker_id. Walk .blocking edges from blocked_id.
+    seen: set[int] = set()
+    stack: list[int] = [blocked_id]
+    while stack:
+        current = stack.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        for nxt in storage.get(current).blocking:
+            if nxt == blocker_id:
+                raise DependencyError(
+                    "Adding this blocker would create a cycle."
+                )
+            stack.append(nxt)
+    storage.add_blocker(blocked_id, blocker_id)
+    return storage.get(blocked_id)
+
+
+def unblock_todo(
+    storage: StorageProtocol,
+    blocked_id: int,
+    blocker_id: int,
+) -> TodoItem:
+    storage.remove_blocker(blocked_id, blocker_id)
+    return storage.get(blocked_id)

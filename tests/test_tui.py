@@ -31,7 +31,7 @@ def seeded_storage(db_path: Path) -> SqliteStorage:
 class TestBasics:
     async def test_app_launches(self, seeded_storage: SqliteStorage) -> None:
         app = TodoApp(storage=seeded_storage)
-        async with app.run_test() as pilot:
+        async with app.run_test():
             assert app.is_running
             table = app.query_one("#item-list", DataTable)
             # 3 seeded items (separators in table not counted)
@@ -364,8 +364,6 @@ class TestNewDialog:
         """Bad date keeps focus on deadline; no bouncing to tags or save."""
         from textual.widgets import Input
 
-        from todo.tui.list_view import AdvancingSelect
-
         app = TodoApp(storage=seeded_storage)
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -660,6 +658,87 @@ class TestExternalChangePolling:
             view._poll_for_external_changes()
             await pilot.pause()
             assert view._last_data_version == v1
+
+
+class TestBlocking:
+    async def test_blocked_marker_appears_in_list(self, db_path: Path) -> None:
+        """An actively blocked item shows the crane marker in its title cell."""
+        from todo.application.commands import block_todo
+
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Blocked item")  # id 1
+        add_todo(storage, "Blocker item")  # id 2
+        block_todo(storage, 1, 2)  # #1 blocked by #2
+
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            table = app.query_one("#item-list", DataTable)
+
+            def _title_cell(item_id: int) -> str:
+                row_index = table.get_row_index(str(item_id))
+                return str(table.get_row_at(row_index)[3])
+
+            blocked_title = _title_cell(1)
+            assert "\U0001f6a7" in blocked_title
+            assert "Blocked item" in blocked_title
+            # The blocker itself is not marked.
+            blocker_title = _title_cell(2)
+            assert "\U0001f6a7" not in blocker_title
+
+    async def test_b_opens_block_dialog(self, seeded_storage: SqliteStorage) -> None:
+        from todo.tui.list_view import BlockDialog
+
+        app = TodoApp(storage=seeded_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("b")
+            await pilot.pause()
+            assert isinstance(app.screen, BlockDialog)
+
+    async def test_b_block_dialog_creates_relation(
+        self, seeded_storage: SqliteStorage
+    ) -> None:
+        """Submitting a blocker id via the 'b' dialog persists the relation."""
+        app = TodoApp(storage=seeded_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            # Cursor starts on item #1; block it by #2.
+            await pilot.press("b")
+            await pilot.pause()
+            await pilot.press("2")
+            await pilot.press("enter")
+            await pilot.pause()
+
+            item = seeded_storage.get(1)
+            assert item.blocked_by == [2]
+            assert item.is_blocked is True
+            # Dialog dismissed back to the list view.
+            from todo.tui.list_view import BlockDialog
+
+            assert not isinstance(app.screen, BlockDialog)
+
+    async def test_b_block_dialog_shows_error_and_stays_open(
+        self, seeded_storage: SqliteStorage
+    ) -> None:
+        """A self-block keeps the dialog open and shows the error message."""
+        from todo.tui.list_view import BlockDialog
+
+        app = TodoApp(storage=seeded_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            # Cursor on item #1; try to block it by itself.
+            await pilot.press("b")
+            await pilot.pause()
+            await pilot.press("1")
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert isinstance(app.screen, BlockDialog)
+            error_label = app.screen.query_one("#block-error", Label)
+            assert "itself" in str(error_label.render()).lower()
+            # No relation was created.
+            assert seeded_storage.get(1).blocked_by == []
 
 
 class TestKeyBindingsDontHang:

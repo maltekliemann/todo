@@ -9,16 +9,18 @@ from todo.adapters.output import create_output
 from todo.adapters.sqlite_storage import SqliteStorage
 from todo.application.commands import (
     add_todo,
+    block_todo,
     complete_todo,
     delete_todo,
     edit_todo,
     move_todo,
+    unblock_todo,
 )
-from todo.application.contracts.storage import UNSET
+from todo.application.contracts.storage import UNSET, Unset
 from todo.application.queries import list_todos, show_todo, summary
 from todo.config import get_db_path
 from todo.domain.enums import Priority, Status
-from todo.exceptions import NotFoundError, TodoError
+from todo.exceptions import DependencyError, NotFoundError
 
 _PRIORITY_CHOICES = [p.value for p in Priority]
 _STATUS_CHOICES = [s.value for s in Status]
@@ -163,7 +165,7 @@ def edit(
     storage = _storage()
     out = create_output()
 
-    dl: date | None | type[UNSET] = type(UNSET)
+    dl: date | None | Unset = UNSET
     if deadline is not None:
         if deadline.lower() == "none":
             dl = None
@@ -178,7 +180,7 @@ def edit(
             body=body,
             priority=Priority.from_string(priority) if priority else None,
             status=Status.from_string(status) if status else None,
-            deadline=UNSET if dl is type(UNSET) else dl,
+            deadline=dl,
             tags=list(tag) if tag else None,
         )
     except NotFoundError as e:
@@ -257,6 +259,48 @@ def summary_cmd(since: str, as_json: bool) -> None:
         out.print_json_summary(since_dt, items)
     else:
         out.print_summary(since_dt, items)
+
+
+@main.command()
+@click.argument("item_id", type=int)
+@click.argument("blocker_ids", type=int, nargs=-1, required=True)
+@click.option("--json", "as_json", is_flag=True, help="Output JSON")
+def block(item_id: int, blocker_ids: tuple[int, ...], as_json: bool) -> None:
+    """Mark ITEM_ID as blocked by the given blocker item(s)."""
+    storage = _storage()
+    out = create_output()
+    try:
+        for blocker_id in blocker_ids:
+            block_todo(storage, item_id, blocker_id)
+    except (NotFoundError, DependencyError) as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
+    item = show_todo(storage, item_id)
+    if as_json:
+        out.print_json_item(item)
+    else:
+        out.print_item(item)
+
+
+@main.command()
+@click.argument("item_id", type=int)
+@click.argument("blocker_ids", type=int, nargs=-1, required=True)
+@click.option("--json", "as_json", is_flag=True, help="Output JSON")
+def unblock(item_id: int, blocker_ids: tuple[int, ...], as_json: bool) -> None:
+    """Remove the given blocker item(s) from ITEM_ID."""
+    storage = _storage()
+    out = create_output()
+    try:
+        for blocker_id in blocker_ids:
+            unblock_todo(storage, item_id, blocker_id)
+    except (NotFoundError, DependencyError) as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
+    item = show_todo(storage, item_id)
+    if as_json:
+        out.print_json_item(item)
+    else:
+        out.print_item(item)
 
 
 @main.command()

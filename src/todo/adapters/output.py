@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import date, datetime
+from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from todo.domain.enums import Priority, Status
@@ -85,6 +85,9 @@ def _item_to_dict(item: TodoItem) -> dict[str, object]:
         "deadline": item.deadline.isoformat() if item.deadline else None,
         "tags": item.tags,
         "is_overdue": item.is_overdue,
+        "blocked_by": item.blocked_by,
+        "blocking": item.blocking,
+        "is_blocked": item.is_blocked,
     }
 
 
@@ -114,17 +117,20 @@ class RichOutput:
             dl = _deadline_str(item)
             dl_style = _deadline_style(item)
             status_icon = _status_icon(item.status)
+            title = f"\U0001f6a7 {item.title}" if item.is_blocked else item.title
             table.add_row(
                 str(item.id),
                 f"[{pri_style}]{_priority_label(item.priority)}[/{pri_style}]",
                 f"{status_icon} {_status_label(item.status)}",
-                item.title,
+                title,
                 f"[{dl_style}]{dl}[/{dl_style}]" if dl else "",
                 _relative_age(item.created_at),
             )
 
         self._console.print(table)
-        self._console.print(f"\n[dim]{len(items)} item{'s' if len(items) != 1 else ''}[/dim]")
+        self._console.print(
+            f"\n[dim]{len(items)} item{'s' if len(items) != 1 else ''}[/dim]"
+        )
 
     def print_item(self, item: TodoItem) -> None:
         from rich.panel import Panel
@@ -134,7 +140,10 @@ class RichOutput:
         lines.append(f"#{item.id}  ", style="dim")
         lines.append(item.title, style="bold")
         lines.append("\n")
-        lines.append(f"Priority: {item.priority.value}  ", style=_pri_style(item.priority))
+        lines.append(
+            f"Priority: {item.priority.value}  ",
+            style=_pri_style(item.priority),
+        )
         lines.append(f"Status: {item.status.value}  ")
         if item.deadline:
             dl = _deadline_str(item)
@@ -148,6 +157,12 @@ class RichOutput:
             lines.append(f"   Done: {item.done_at.strftime('%b %d, %Y %H:%M')}")
         if item.tags:
             lines.append(f"\nTags: {', '.join(item.tags)}")
+        if item.blocked_by:
+            blocked = ", ".join(f"#{i}" for i in item.blocked_by)
+            lines.append(f"\nBlocked by: {blocked}")
+        if item.blocking:
+            blocking = ", ".join(f"#{i}" for i in item.blocking)
+            lines.append(f"\nBlocking: {blocking}")
         if item.body:
             lines.append(f"\n\n{item.body}")
 
@@ -215,9 +230,10 @@ class PlainOutput:
         for item in items:
             dl = _deadline_str(item)
             dl_part = f"  {dl}" if dl else ""
+            title = f"\U0001f6a7 {item.title}" if item.is_blocked else item.title
             print(
                 f"  {item.id:>4}  {_priority_label(item.priority)}  "
-                f"{_status_label(item.status):<13} {item.title}{dl_part}"
+                f"{_status_label(item.status):<13} {title}{dl_part}"
             )
         print(f"\n{len(items)} item{'s' if len(items) != 1 else ''}")
 
@@ -234,6 +250,10 @@ class PlainOutput:
             print(f"Done: {item.done_at.isoformat()}")
         if item.tags:
             print(f"Tags: {', '.join(item.tags)}")
+        if item.blocked_by:
+            print(f"Blocked by: {', '.join(f'#{i}' for i in item.blocked_by)}")
+        if item.blocking:
+            print(f"Blocking: {', '.join(f'#{i}' for i in item.blocking)}")
         if item.body:
             print(f"\n{item.body}")
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 
 from todo.domain.enums import Priority, Status
@@ -18,6 +18,9 @@ class TodoItem:
     done_at: datetime | None
     deadline: date | None
     tags: list[str]
+    blocked_by: list[int] = field(default_factory=list)
+    blocking: list[int] = field(default_factory=list)
+    is_blocked: bool = False
 
     @property
     def is_done(self) -> bool:
