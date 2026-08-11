@@ -28,7 +28,7 @@ from todo.application.commands import (
     unblock_todo,
 )
 from todo.application.contracts.storage import UNSET, Unset
-from todo.application.queries import list_todos, show_todo
+from todo.application.queries import count_tags, list_todos, show_todo
 from todo.domain.enums import Priority, Status
 from todo.domain.models import TodoItem
 from todo.exceptions import DependencyError, NotFoundError
@@ -519,6 +519,12 @@ class TodoListView(Widget):
         Binding("greater_than_sign", "status_next", "Status >", show=True),
         Binding("less_than_sign", "status_prev", "Status <", show=True),
         Binding("slash", "search", "Search", show=True),
+        Binding("t", "cycle_tag", "Tag filter", show=True),
+        Binding("1", "filter_priority('urgent')", "Urgent", show=False),
+        Binding("2", "filter_priority('high')", "High", show=False),
+        Binding("3", "filter_priority('medium')", "Medium", show=False),
+        Binding("4", "filter_priority('low')", "Low", show=False),
+        Binding("0", "clear_filters", "Clear filters", show=True),
         Binding("escape", "clear_search", "Clear filter", show=True),
     ]
 
@@ -529,6 +535,8 @@ class TodoListView(Widget):
         self._storage = storage
         self._items: list[TodoItem] = []
         self._search_query: str = ""
+        self._tag_filter: str | None = None
+        self._priority_filter: Priority | None = None
         self._last_data_version: int = 0
 
     def compose(self) -> ComposeResult:
@@ -581,6 +589,12 @@ class TodoListView(Widget):
                 if q in i.title.lower()
                 or q in i.body.lower()
                 or any(q in t.lower() for t in i.tags)
+            ]
+        if self._tag_filter is not None:
+            self._items = [i for i in self._items if self._tag_filter in i.tags]
+        if self._priority_filter is not None:
+            self._items = [
+                i for i in self._items if i.priority == self._priority_filter
             ]
 
         # Group items by status, preserving the per-group ordering from the
@@ -647,11 +661,15 @@ class TodoListView(Widget):
         self._last_data_version = self._storage.data_version()
 
         search_status = self.query_one("#search-status", Static)
+        parts: list[str] = []
         if self._search_query:
-            search_status.update(
-                f"[dim]Search: [/dim][b]{self._search_query}[/b]  "
-                f"[dim]([Esc] to clear)[/dim]"
-            )
+            parts.append(f"[dim]Search:[/dim] [b]{self._search_query}[/b]")
+        if self._tag_filter is not None:
+            parts.append(f"[dim]Tag:[/dim] [b]{self._tag_filter}[/b]")
+        if self._priority_filter is not None:
+            parts.append(f"[dim]Priority:[/dim] [b]{self._priority_filter.value}[/b]")
+        if parts:
+            search_status.update("  ".join(parts) + "  [dim]([0] clears)[/dim]")
         else:
             search_status.update("")
 
@@ -850,6 +868,34 @@ class TodoListView(Widget):
     def action_clear_search(self) -> None:
         if self._search_query:
             self._search_query = ""
+            self._refresh_list()
+
+    def action_cycle_tag(self) -> None:
+        """Cycle the tag filter: no filter -> each known tag -> no filter."""
+        tags = [t for t, _ in count_tags(self._storage)]
+        if not tags:
+            return
+        if self._tag_filter is None:
+            self._tag_filter = tags[0]
+        else:
+            try:
+                idx = tags.index(self._tag_filter)
+            except ValueError:
+                idx = -1
+            self._tag_filter = tags[idx + 1] if idx + 1 < len(tags) else None
+        self._refresh_list()
+
+    def action_filter_priority(self, value: str) -> None:
+        """Set the priority filter; pressing the same key again clears it."""
+        priority = Priority.from_string(value)
+        self._priority_filter = None if self._priority_filter == priority else priority
+        self._refresh_list()
+
+    def action_clear_filters(self) -> None:
+        if self._search_query or self._tag_filter or self._priority_filter:
+            self._search_query = ""
+            self._tag_filter = None
+            self._priority_filter = None
             self._refresh_list()
 
     def action_status_next(self) -> None:

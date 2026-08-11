@@ -406,6 +406,77 @@ class TestNewDialog:
             assert "title" in str(error_label.render()).lower()
 
 
+class TestFilters:
+    @pytest.fixture()
+    def tagged_storage(self, db_path: Path) -> SqliteStorage:
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Backend work", priority=Priority.URGENT, tags=["backend"])
+        add_todo(storage, "Frontend work", tags=["frontend"])
+        add_todo(storage, "Untagged", priority=Priority.URGENT)
+        return storage
+
+    async def test_priority_filter_toggles(self, tagged_storage: SqliteStorage) -> None:
+        app = TodoApp(storage=tagged_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            table = app.query_one("#item-list", DataTable)
+            assert _item_rows(table) == 3
+
+            await pilot.press("1")  # urgent only
+            await pilot.pause()
+            assert _item_rows(table) == 2
+
+            await pilot.press("1")  # same key again clears
+            await pilot.pause()
+            assert _item_rows(table) == 3
+
+    async def test_tag_filter_cycles(self, tagged_storage: SqliteStorage) -> None:
+        app = TodoApp(storage=tagged_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            table = app.query_one("#item-list", DataTable)
+
+            await pilot.press("t")  # first tag (alphabetical: backend)
+            await pilot.pause()
+            assert _item_rows(table) == 1
+
+            await pilot.press("t")  # frontend
+            await pilot.pause()
+            assert _item_rows(table) == 1
+
+            await pilot.press("t")  # cycles back to no filter
+            await pilot.pause()
+            assert _item_rows(table) == 3
+
+    async def test_zero_clears_all_filters(self, tagged_storage: SqliteStorage) -> None:
+        app = TodoApp(storage=tagged_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            table = app.query_one("#item-list", DataTable)
+
+            await pilot.press("1")
+            await pilot.press("t")
+            await pilot.pause()
+            assert _item_rows(table) == 1
+
+            await pilot.press("0")
+            await pilot.pause()
+            assert _item_rows(table) == 3
+
+    async def test_status_line_shows_filters(
+        self, tagged_storage: SqliteStorage
+    ) -> None:
+        app = TodoApp(storage=tagged_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("1")
+            await pilot.press("t")
+            await pilot.pause()
+            status = str(app.query_one("#search-status", Static).render())
+            assert "urgent" in status
+            assert "backend" in status
+
+
 class TestSearch:
     async def test_slash_opens_search(self, seeded_storage: SqliteStorage) -> None:
         app = TodoApp(storage=seeded_storage)

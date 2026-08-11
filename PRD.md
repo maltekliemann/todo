@@ -155,9 +155,11 @@ Launch with: `todo ui`
 | `x`           | Delete item (with confirmation)               |
 | `n`           | New item (opens inline form)                  |
 | `e` / `Enter` | Edit in `$EDITOR` (structured temp file)      |
-| `/`           | Focus search filter                           |
-| `1-4`         | Filter by priority (1=urgent … 4=low)         |
-| `0`           | Clear filters                                 |
+| `/`           | Search (title/body/tags, live filter)         |
+| `t`           | Cycle tag filter (all → tag → … → all)        |
+| `b`           | Add/remove blocker (`-id` removes)            |
+| `1-4`         | Filter by priority (1=urgent … 4=low; same key toggles off) |
+| `0`           | Clear all filters                             |
 | `q` / `Esc`   | Quit                                          |
 
 ### Priority Color Coding
