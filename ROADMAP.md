@@ -22,9 +22,8 @@ bottom. Baseline commit before the loop started: `658ec6b`.
       application/queries; flags mutually exclusive; 6 new tests. (2a3ffb0)
 - [x] `done`/`mv`-to-done reports newly unblocked dependents: CompletionResult
       from application layer, 🔓 stderr warnings in CLI, toast in TUI. (fb38a26)
-- [ ] TUI: detail pane shows Blocked by / Blocking (verify it does); blocked rows
-      get a distinct style; `b` binding opens a small input to add/remove a blocker
-      by id (comma/`-` prefix to remove, or similar — decide and document).
+- [x] TUI: detail pane shows Blocked by / Blocking (verified, pre-existing);
+      blocked rows dimmed; `b` dialog adds by id, removes via `-id`. (4b9e557)
 - [ ] Tests: cycle chains (a→b→c→a), self-block, unblock-nonexistent, blocked
       styling in TUI, JSON output includes dependency fields.
 
@@ -117,3 +116,5 @@ is done.
   113 passed, mypy clean, ruff clean, format clean.
 - 2026-08-12 iter 3: unblock warnings on done/mv (fb38a26). Gates green:
   119 passed, mypy clean, ruff clean, format clean.
+- 2026-08-12 iter 4: TUI blocked-row dimming + dialog removal (4b9e557).
+  Gates green: 121 passed, mypy clean, ruff clean, format clean.
