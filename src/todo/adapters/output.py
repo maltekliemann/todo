@@ -58,6 +58,11 @@ def _deadline_str(item: TodoItem) -> str:
     return item.deadline.strftime("%b %d")
 
 
+def _styled(text: str, style: str) -> str:
+    """Wrap in Rich markup; an empty style would render as invalid '[/]'."""
+    return f"[{style}]{text}[/{style}]" if style else text
+
+
 @runtime_checkable
 class OutputProtocol(Protocol):
     def print_list(self, items: list[TodoItem]) -> None: ...
@@ -136,10 +141,10 @@ class RichOutput:
             title = f"\U0001f6a7 {item.title}" if item.is_blocked else item.title
             table.add_row(
                 str(item.id),
-                f"[{pri_style}]{_priority_label(item.priority)}[/{pri_style}]",
+                _styled(_priority_label(item.priority), pri_style),
                 f"{status_icon} {_status_label(item.status)}",
                 title,
-                f"[{dl_style}]{dl}[/{dl_style}]" if dl else "",
+                _styled(dl, dl_style) if dl else "",
                 _relative_age(item.created_at),
             )
 
@@ -206,7 +211,7 @@ class RichOutput:
             done_str = item.done_at.strftime("%b %d") if item.done_at else ""
             table.add_row(
                 str(item.id),
-                f"[{pri_style}]{_priority_label(item.priority)}[/{pri_style}]",
+                _styled(_priority_label(item.priority), pri_style),
                 done_str,
                 item.title,
             )
