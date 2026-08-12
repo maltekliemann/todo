@@ -420,14 +420,34 @@ class TestUnblock:
         assert result.exit_code == 1
         assert "#99 not found" in result.stderr
 
-    def test_unblock_non_blocker_is_idempotent(self, invoke) -> None:
-        """Removing a relation that doesn't exist succeeds and changes nothing."""
+    def test_unblock_non_blocker_fails(self, invoke) -> None:
+        """Round-1 asserted silent success here; round-2 confirmed that hides
+        typos (exit 0 while the real blocker stays). Now it errors, matching
+        block's validation."""
         invoke("add One")
         invoke("add Two")
         result = invoke("unblock 1 2")
-        assert result.exit_code == 0
-        data = json.loads(invoke("show 1 --json").output)
-        assert data["blocked_by"] == []
+        assert result.exit_code == 1
+        assert "not blocked by" in result.stderr
+
+    def test_unblock_typo_keeps_real_blocker_and_errors(self, invoke) -> None:
+        invoke("add One")
+        invoke("add Two")
+        invoke("block 2 1")
+        result = invoke("unblock 2 99")
+        assert result.exit_code == 1
+        assert "not blocked by" in result.stderr
+        assert json.loads(invoke("show 2 --json").output)["blocked_by"] == [1]
+
+    def test_unblock_batch_all_or_nothing(self, invoke) -> None:
+        invoke("add One")
+        invoke("add Two")
+        invoke("add Three")
+        invoke("block 3 1 2")
+        result = invoke("unblock 3 1 99")  # 99 is not a blocker
+        assert result.exit_code == 1
+        # Neither removal applied.
+        assert json.loads(invoke("show 3 --json").output)["blocked_by"] == [1, 2]
 
 
 class TestTagFilter:
@@ -729,6 +749,19 @@ class TestBlockAtomicity:
         assert result.exit_code == 1
         data = json.loads(invoke("show 1 --json").output)
         assert data["blocked_by"] == []
+
+    def test_failed_batch_preserves_preexisting_blockers(self, invoke) -> None:
+        """Rollback of a failed batch must not delete relations that existed
+        before the batch (round-2 finding: INSERT OR IGNORE made re-adds
+        indistinguishable from new edges, so compensation deleted them)."""
+        invoke("add One")
+        invoke("add Two")
+        invoke("block 2 1")  # pre-existing relation
+        result = invoke("block 2 1 999")  # re-add 1, then fail on 999
+        assert result.exit_code == 1
+        data = json.loads(invoke("show 2 --json").output)
+        assert data["blocked_by"] == [1]  # pre-existing edge survives
+        assert data["is_blocked"] is True
 
     def test_successful_multi_block_still_works(self, invoke) -> None:
         invoke("add One")

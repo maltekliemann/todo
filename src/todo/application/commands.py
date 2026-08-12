@@ -160,9 +160,7 @@ def unblock_todo(
     blocked_id: int,
     blocker_id: int,
 ) -> TodoItem:
-    storage.get(blocked_id)  # raises NotFoundError before any change
-    storage.remove_blocker(blocked_id, blocker_id)
-    return storage.get(blocked_id)
+    return unblock_todo_batch(storage, blocked_id, [blocker_id])
 
 
 def block_todo_batch(
@@ -172,17 +170,21 @@ def block_todo_batch(
 ) -> TodoItem:
     """Add several blockers all-or-nothing.
 
-    If any blocker is invalid (missing item, self-block, cycle), the ones
-    already applied in this batch are removed again before re-raising, so a
-    failed command never leaves partial dependency state behind.
+    If any blocker is invalid (missing item, self-block, cycle), edges added
+    by THIS batch are removed again before re-raising. Edges that existed
+    before the batch are never touched: add_blocker is INSERT OR IGNORE, so
+    a re-add "succeeds" without creating anything — compensating it would
+    delete pre-existing data (round-2 finding).
     """
-    applied: list[int] = []
+    added_by_batch: list[int] = []
     try:
         for blocker_id in blocker_ids:
+            already = blocker_id in storage.get(blocked_id).blocked_by
             block_todo(storage, blocked_id, blocker_id)
-            applied.append(blocker_id)
+            if not already:
+                added_by_batch.append(blocker_id)
     except TodoError:
-        for blocker_id in reversed(applied):
+        for blocker_id in reversed(added_by_batch):
             storage.remove_blocker(blocked_id, blocker_id)
         raise
     return storage.get(blocked_id)
@@ -193,7 +195,18 @@ def unblock_todo_batch(
     blocked_id: int,
     blocker_ids: list[int],
 ) -> TodoItem:
-    storage.get(blocked_id)  # raises NotFoundError before any change
+    """Remove several blockers all-or-nothing.
+
+    Validates every id against the current blocker set before removing
+    anything, so a typo errors out (like block does) instead of silently
+    succeeding while the real blocker stays in place.
+    """
+    item = storage.get(blocked_id)  # raises NotFoundError before any change
+    for blocker_id in blocker_ids:
+        if blocker_id not in item.blocked_by:
+            raise DependencyError(
+                f"Item #{blocked_id} is not blocked by #{blocker_id}."
+            )
     # Removals cannot fail after validation, so no rollback is needed.
     for blocker_id in blocker_ids:
         storage.remove_blocker(blocked_id, blocker_id)

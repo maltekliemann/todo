@@ -71,11 +71,27 @@ class TestQueryHelpers:
         with pytest.raises(ValueError, match="mutually exclusive"):
             list_todos(storage, blocked=True, ready=True)
 
-    def test_resolve_project_prefers_name(self, storage: SqliteStorage) -> None:
-        first = storage.add_project("something")
-        storage.add_project(str(first.id + 1))  # a project literally named "2"
-        # Name match wins over id interpretation.
-        assert resolve_project(storage, str(first.id + 1)).name == str(first.id + 1)
+    def test_resolve_project_numeric_ref_prefers_id(
+        self, storage: SqliteStorage
+    ) -> None:
+        """Round-1 asserted name-first here; round-2 confirmed that lets a
+        numerically-named project shadow another project's id in every
+        command including `project rm`. Numeric refs now mean the id shown
+        in `project list`; names win only for non-numeric refs."""
+        first = storage.add_project("something")  # id 1
+        second_id = first.id + 1
+        storage.add_project(str(first.id))  # id 2, literally named "1"
+        # "1" is numeric -> resolves to project id 1, not the one named "1".
+        assert resolve_project(storage, str(first.id)).name == "something"
+        # The numerically-named project stays reachable by its id.
+        assert resolve_project(storage, str(second_id)).name == str(first.id)
+
+    def test_resolve_project_numeric_name_fallback(
+        self, storage: SqliteStorage
+    ) -> None:
+        """A numeric ref that matches no id still finds a project named so."""
+        storage.add_project("77")  # id 1, named "77"
+        assert resolve_project(storage, "77").name == "77"
 
     def test_resolve_project_falls_back_to_id(self, storage: SqliteStorage) -> None:
         project = storage.add_project("named")

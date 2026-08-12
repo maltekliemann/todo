@@ -47,13 +47,19 @@ def show_todo(
 
 
 def resolve_project(storage: StorageProtocol, ref: str) -> Project:
-    """Resolve a project by name, falling back to id for numeric refs."""
-    try:
-        return storage.get_project_by_name(ref)
-    except ProjectNotFoundError:
-        if ref.isdigit():
+    """Resolve a project reference.
+
+    Numeric refs mean the id shown in `project list` (falling back to a
+    project literally named so); anything else is a name. Id must win for
+    numeric refs — name-first resolution let a numerically-named project
+    shadow another project's id in every command, including `project rm`.
+    """
+    if ref.isdigit():
+        try:
             return storage.get_project(int(ref))
-        raise
+        except ProjectNotFoundError:
+            return storage.get_project_by_name(ref)
+    return storage.get_project_by_name(ref)
 
 
 @dataclass(frozen=True)
