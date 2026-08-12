@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
 from textual.widget import Widget
 from textual.widgets import DataTable, Footer, Static
 
@@ -24,6 +22,7 @@ from todo.application.queries import (
 from todo.domain.enums import Priority
 from todo.domain.models import TodoItem
 from todo.exceptions import NotFoundError, TodoError
+from todo.tui.detail import DetailPane
 from todo.tui.dialogs import (
     BlockDialog,
     ConfirmDialog,
@@ -33,7 +32,7 @@ from todo.tui.dialogs import (
 )
 from todo.tui.edit_session import EditorSession
 from todo.tui.filters import Filters
-from todo.tui.render import escape_markup, meta_lines
+from todo.tui.render import escape_markup
 from todo.tui.table import COLUMNS, TodoTable, is_separator
 
 
@@ -76,10 +75,7 @@ class TodoListView(Widget):
 
     def compose(self) -> ComposeResult:
         yield TodoTable(id="item-list", cursor_type="row", zebra_stripes=True)
-        with Vertical(id="detail-panel"):
-            yield Static("", id="detail-title")
-            yield Static("", id="detail-meta")
-            yield Static("", id="detail-body")
+        yield DetailPane(id="detail-panel")
         yield Static("", id="search-status")
         yield Footer()
 
@@ -241,10 +237,9 @@ class TodoListView(Widget):
             search_status.update("")
 
     def _update_detail(self, item_id: object) -> None:
+        pane = self.query_one("#detail-panel", DetailPane)
         if item_id is None or is_separator(item_id):
-            self.query_one("#detail-title", Static).update("")
-            self.query_one("#detail-meta", Static).update("")
-            self.query_one("#detail-body", Static).update("")
+            pane.clear()
             return
 
         try:
@@ -262,13 +257,7 @@ class TodoListView(Widget):
             except TodoError:
                 return
 
-        title_w = self.query_one("#detail-title", Static)
-        meta_w = self.query_one("#detail-meta", Static)
-        body_w = self.query_one("#detail-body", Static)
-
-        title_w.update(f"[b]#{item.id}  {escape_markup(item.title)}[/b]")
-        meta_w.update("\n".join(meta_lines(item)))
-        body_w.update(Text(item.body) if item.body else "")
+        pane.show(item)
 
     def _selected_item_id(self) -> int | None:
         table = self.query_one("#item-list", DataTable)
