@@ -258,10 +258,10 @@ real transaction. Treat 'my own fix' as untrusted input to this round.
 
 ## Round 10 — exit-gate review wf_4d259557-1f8 (2026-08-12), 4 distinct
 
-- [ ] `src/todo/tui/list_view.py:247` [correctness] — Deleting the '# Body' marker silently discards body edits (reported as success, buffer unlinked) and lets 'key: value' body lines override real fields; a missing marker must be an error with the buffer kept
-- [ ] `src/todo/tui/list_view.py:942` [correctness] — CalledProcessError handler unlinks the temp buffer though the editor RAN and the user may have saved; keep the buffer and report its path like every sibling failure path
-- [ ] `src/todo/tui/list_view.py:654` [cleanup] — Poll and on_mount record _last_data_version redundantly before/without a successful refresh, permanently disabling the poll's retry after a transient failure; let the refresh be the single writer
-- [ ] `src/todo/tui/list_view.py:696` [cleanup] — Project filter keyed on mutable name blanks the list when the project is renamed externally; key on the stable project id
+- [x] (round-10 commit) `src/todo/tui/list_view.py:247` [correctness] — Deleting the '# Body' marker silently discards body edits (reported as success, buffer unlinked) and lets 'key: value' body lines override real fields; a missing marker must be an error with the buffer kept
+- [x] (round-10 commit) `src/todo/tui/list_view.py:942` [correctness] — CalledProcessError handler unlinks the temp buffer though the editor RAN and the user may have saved; keep the buffer and report its path like every sibling failure path
+- [x] (round-10 commit) `src/todo/tui/list_view.py:654` [cleanup] — Poll and on_mount record _last_data_version redundantly before/without a successful refresh, permanently disabling the poll's retry after a transient failure; let the refresh be the single writer
+- [x] (round-10 commit) `src/todo/tui/list_view.py:696` [cleanup] — Project filter keyed on mutable name blanks the list when the project is renamed externally; key on the stable project id
 
 ## Triage log
 
@@ -279,6 +279,7 @@ Anything without a failed reproduction attempt gets fixed, not triaged.)
 
 ## Status log
 
+- iter 21: round-10 queue closed — required body marker (error + kept buffer), nonzero-exit buffer keep, single-writer data_version bookkeeping, id-keyed project filter. 397 tests green. QUEUE EMPTY (round 10).
 - iter 20: round-9 queue closed — connect-time wrapping, normalized project refs, case-exact tag filter (instr), Unicode casefold search, README keys, project-log read-back guard, shared domain tag/text helpers, dependent-scan skip (94a7813, +1). 391 tests green. QUEUE EMPTY (round 9).
 - iter 19: round-8 queue closed — tag-filter validation (blank/comma filters error), negative --since rejected, refresh keeps last good rows, detail pane clears on empty, guarded startup, buffer path reported, probe-based existence checks, single-altitude validation, adapter-complete wrapping incl. init-time corrupt-file (7ca9021, d08562a, 37186ed). 378 tests green. QUEUE EMPTY (round 8).
 - iter 17: round-7 queue closed — TUI storage-failure guards, OverflowError class, parse_since overflow, exact editor no-op, tag-filter normalization, blocked-ids completion diff, add_blocker probes, StorageProtocol port completeness, separator-scan refactor (10a735d, a439c59, +1). 362 tests green. QUEUE EMPTY (round 7).
