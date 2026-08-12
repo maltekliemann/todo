@@ -20,6 +20,8 @@ from textual.widgets import DataTable, Footer, Input, Label, Select, Static
 
 from todo.adapters.output import (
     _deadline_str,
+    _deadline_style,
+    _pri_style,
     _priority_label,
     _relative_age,
     _status_icon,
@@ -51,6 +53,11 @@ _SEPARATOR_PREFIX = "__sep_"
 
 def _is_separator(value: object) -> bool:
     return isinstance(value, str) and value.startswith(_SEPARATOR_PREFIX)
+
+
+def _join_styles(*styles: str) -> str:
+    """Combine Rich style strings, dropping the empty ones."""
+    return " ".join(s for s in styles if s)
 
 
 def _escape_markup(text: str) -> str:
@@ -882,11 +889,17 @@ class TodoListView(Widget):
                     deadline_text,
                     _relative_age(item.created_at),
                 ]
+                # Per-cell colour: priority and deadline proximity carry
+                # their own style, everything else inherits the row's.
+                row_style = "dim" if item.is_blocked else ""
+                styles = [row_style] * len(cells)
+                styles[1] = _join_styles(row_style, _pri_style(item.priority))
+                if deadline_text:
+                    styles[4] = _join_styles(row_style, _deadline_style(item))
                 # Always wrap in Text: DataTable parses plain strings as
                 # markup, and titles are user-controlled.
-                style = "dim" if item.is_blocked else ""
                 table.add_row(
-                    *(Text(c, style=style) for c in cells),
+                    *(Text(c, style=s) for c, s in zip(cells, styles)),
                     key=str(item.id),
                 )
                 row_index_of[item.id] = index

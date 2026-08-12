@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from rich.text import Text
 from textual.coordinate import Coordinate
 from textual.widgets import DataTable, Label, Static
 
@@ -138,6 +139,78 @@ class TestPrdKeyBindings:
                     Coordinate(table.cursor_row, 0)
                 ).row_key.value
                 assert not _is_separator(key)
+
+
+class TestPriorityAndDeadlineStyling:
+    """PRD § Priority Color Coding and § Deadline Warnings: the TUI table
+    must flag priority and deadline proximity, not render everything flat."""
+
+    @pytest.fixture()
+    def styled_storage(self, db_path: Path) -> SqliteStorage:
+        from datetime import date, timedelta
+
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Urgent one", priority=Priority.URGENT)
+        add_todo(storage, "High one", priority=Priority.HIGH)
+        add_todo(storage, "Medium one", priority=Priority.MEDIUM)
+        add_todo(storage, "Low one", priority=Priority.LOW)
+        add_todo(storage, "Overdue", deadline=date.today() - timedelta(days=3))
+        add_todo(storage, "Soon", deadline=date.today() + timedelta(days=1))
+        add_todo(storage, "Later", deadline=date.today() + timedelta(days=90))
+        return storage
+
+    @staticmethod
+    def _cells(table: DataTable, title: str) -> list[Text]:
+        for row in range(table.row_count):
+            cells = table.get_row_at(row)
+            if any(str(c) == title for c in cells):
+                return [c for c in cells if isinstance(c, Text)]
+        raise AssertionError(f"no row titled {title!r}")
+
+    @pytest.mark.parametrize(
+        ("title", "expected"),
+        [
+            ("Urgent one", "bold red"),
+            ("High one", "dark_orange"),
+            ("Medium one", ""),
+            ("Low one", "dim"),
+        ],
+    )
+    async def test_priority_cell_is_coloured(
+        self, styled_storage: SqliteStorage, title: str, expected: str
+    ) -> None:
+        app = TodoApp(storage=styled_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            table = app.query_one("#item-list", DataTable)
+            pri_cell = self._cells(table, title)[1]
+            assert str(pri_cell.style) == expected
+
+    @pytest.mark.parametrize(
+        ("title", "expected"),
+        [("Overdue", "bold red"), ("Soon", "yellow"), ("Later", "dim")],
+    )
+    async def test_deadline_cell_is_coloured(
+        self, styled_storage: SqliteStorage, title: str, expected: str
+    ) -> None:
+        app = TodoApp(storage=styled_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            table = app.query_one("#item-list", DataTable)
+            deadline_cell = self._cells(table, title)[4]
+            assert str(deadline_cell.style) == expected
+
+    async def test_blocked_row_stays_dim_over_its_priority_colour(
+        self, styled_storage: SqliteStorage
+    ) -> None:
+        styled_storage.add_blocker(1, 2)  # #1 (urgent) blocked by #2
+        app = TodoApp(storage=styled_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            table = app.query_one("#item-list", DataTable)
+            cells = self._cells(table, "\U0001f6a7 Urgent one")
+            assert all("dim" in str(c.style) for c in cells)
+            assert "red" in str(cells[1].style)
 
 
 class TestDoneAction:

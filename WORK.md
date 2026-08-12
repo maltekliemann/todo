@@ -5,15 +5,6 @@ reproduced against the running code before being listed.
 
 ## todo
 
-1. **`todo project rm` has no `--json`.** PRD:80 — "all project commands
-   support `--json`". Repro: `todo project rm platform --json` →
-   `Error: No such option '--json'.`
-2. **TUI `j` / `k` don't move the selection.** PRD § Key Bindings.
-   Repro: press `j` in the TUI, `cursor_row` unchanged; `down` moves it.
-3. **TUI `←`/`h` and `→`/`l` don't change an item's status.** PRD § Key
-   Bindings, and the footer legend in the PRD mock (`[←→]status`). Repro:
-   pressing `l`, `right`, `h`, `left` leaves `status` at `todo`. `<` and
-   `>` do work and stay.
 4. **TUI has no priority colour coding.** PRD § Priority Color Coding —
    urgent red, high orange, low dim. Repro: every cell in the table comes
    back with `style == ""`; only blocked rows get `dim`.
@@ -39,3 +30,9 @@ reproduced against the running code before being listed.
   example list shows.
 
 ## done
+
+1. **`todo project rm --json`** — PRD:80. Emits the deleted project's
+   record. `29ad72a`.
+2. **TUI `j`/`k` navigation** — PRD § Key Bindings. `18f0f29`.
+3. **TUI `h`/`l`/`←`/`→` status stepping** — PRD § Key Bindings. `<`/`>`
+   kept. `18f0f29`.
