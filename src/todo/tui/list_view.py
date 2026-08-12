@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 from datetime import date, datetime
 
+from rich.markup import escape
 from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
@@ -453,8 +454,8 @@ class BlockDialog(ModalScreen[str | None]):
             else:
                 block_todo(self._storage, self._blocked_id, blocker_id)
         except (NotFoundError, DependencyError, ValueError) as exc:
-            message = str(exc) if str(exc) else "Invalid blocker id"
-            error_w.update(message)
+            # Error text can echo raw user input; never render it as markup.
+            error_w.update(Text(str(exc) if str(exc) else "Invalid blocker id"))
             return
         self.dismiss(value)
 
@@ -478,7 +479,7 @@ class InspectDialog(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         item = self._item
         with Vertical(id="inspect-container"):
-            yield Static(f"[b]#{item.id}  {item.title}[/b]", id="inspect-title")
+            yield Static(f"[b]#{item.id}  {escape(item.title)}[/b]", id="inspect-title")
             meta_lines = [
                 f"Priority: {item.priority.value}    Status: {item.status.value}",
             ]
@@ -491,9 +492,9 @@ class InspectDialog(ModalScreen[None]):
             if item.done_at:
                 meta_lines.append(f"Done: {item.done_at.strftime('%b %d, %Y %H:%M')}")
             if item.project_name:
-                meta_lines.append(f"Project: {item.project_name}")
+                meta_lines.append(f"Project: {escape(item.project_name)}")
             if item.tags:
-                meta_lines.append(f"Tags: {', '.join(item.tags)}")
+                meta_lines.append(f"Tags: {escape(', '.join(item.tags))}")
             if item.blocked_by:
                 meta_lines.append(
                     f"Blocked by: {', '.join(f'#{i}' for i in item.blocked_by)}"
@@ -505,7 +506,7 @@ class InspectDialog(ModalScreen[None]):
             yield Static("\n".join(meta_lines), id="inspect-meta")
             with VerticalScroll(id="inspect-body-scroll"):
                 yield Static(
-                    item.body if item.body else "[dim](no description)[/dim]",
+                    Text(item.body) if item.body else "[dim](no description)[/dim]",
                     id="inspect-body",
                 )
             yield Label("Esc / q / i to close", id="inspect-hint")
@@ -642,7 +643,7 @@ class TodoListView(Widget):
             index += 1
             for item in items:
                 deadline_text = _deadline_str(item) if status != Status.DONE else ""
-                cells: list[str] = [
+                cells = [
                     str(item.id),
                     _priority_label(item.priority),
                     f"{_status_icon(item.status)} {item.status.value}",
@@ -650,13 +651,13 @@ class TodoListView(Widget):
                     deadline_text,
                     _relative_age(item.created_at),
                 ]
-                if item.is_blocked:
-                    table.add_row(
-                        *(Text(c, style="dim") for c in cells),
-                        key=str(item.id),
-                    )
-                else:
-                    table.add_row(*cells, key=str(item.id))
+                # Always wrap in Text: DataTable parses plain strings as
+                # markup, and titles are user-controlled.
+                style = "dim" if item.is_blocked else ""
+                table.add_row(
+                    *(Text(c, style=style) for c in cells),
+                    key=str(item.id),
+                )
                 row_index_of[item.id] = index
                 index += 1
 
@@ -680,11 +681,11 @@ class TodoListView(Widget):
         search_status = self.query_one("#search-status", Static)
         parts: list[str] = []
         if self._search_query:
-            parts.append(f"[dim]Search:[/dim] [b]{self._search_query}[/b]")
+            parts.append(f"[dim]Search:[/dim] [b]{escape(self._search_query)}[/b]")
         if self._tag_filter is not None:
-            parts.append(f"[dim]Tag:[/dim] [b]{self._tag_filter}[/b]")
+            parts.append(f"[dim]Tag:[/dim] [b]{escape(self._tag_filter)}[/b]")
         if self._project_filter is not None:
-            parts.append(f"[dim]Project:[/dim] [b]{self._project_filter}[/b]")
+            parts.append(f"[dim]Project:[/dim] [b]{escape(self._project_filter)}[/b]")
         if self._priority_filter is not None:
             parts.append(f"[dim]Priority:[/dim] [b]{self._priority_filter.value}[/b]")
         hint = "  [dim]([0] clears)[/dim]" if parts else ""
@@ -717,8 +718,10 @@ class TodoListView(Widget):
             if item.done_at
             else ""
         )
-        project_str = f"\nProject: {item.project_name}" if item.project_name else ""
-        tags_str = f"\nTags: {', '.join(item.tags)}" if item.tags else ""
+        project_str = (
+            f"\nProject: {escape(item.project_name)}" if item.project_name else ""
+        )
+        tags_str = f"\nTags: {escape(', '.join(item.tags))}" if item.tags else ""
         blocked_by_str = (
             f"\nBlocked by: {', '.join(f'#{i}' for i in item.blocked_by)}"
             if item.blocked_by
@@ -730,7 +733,7 @@ class TodoListView(Widget):
             else ""
         )
 
-        title_w.update(f"[b]#{item.id}  {item.title}[/b]")
+        title_w.update(f"[b]#{item.id}  {escape(item.title)}[/b]")
         meta_w.update(
             f"Priority: {item.priority.value}  Status: {item.status.value}"
             f"{dl_str}\n"
@@ -742,7 +745,7 @@ class TodoListView(Widget):
             f"{blocked_by_str}"
             f"{blocking_str}"
         )
-        body_w.update(item.body if item.body else "")
+        body_w.update(Text(item.body) if item.body else "")
 
     def _selected_item_id(self) -> int | None:
         table = self.query_one("#item-list", DataTable)
@@ -779,7 +782,7 @@ class TodoListView(Widget):
 
     def _notify_unblocked(self, result: CompletionResult) -> None:
         for dep in result.unblocked:
-            self.notify(f"🔓 #{dep.id} {dep.title} is now unblocked")
+            self.notify(f"🔓 #{dep.id} {escape(dep.title)} is now unblocked")
 
     def action_inspect(self) -> None:
         item_id = self._selected_item_id()

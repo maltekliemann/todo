@@ -148,6 +148,8 @@ class RichOutput:
         table.add_column("Deadline", width=22)
         table.add_column("Age", width=5, justify="right")
 
+        from rich.text import Text
+
         for item in items:
             pri_style = _pri_style(item.priority)
             dl = _deadline_str(item)
@@ -158,7 +160,7 @@ class RichOutput:
                 str(item.id),
                 _styled(_priority_label(item.priority), pri_style),
                 f"{status_icon} {_status_label(item.status)}",
-                title,
+                Text(title),  # user text: never parse as markup
                 _styled(dl, dl_style) if dl else "",
                 _relative_age(item.created_at),
             )
@@ -221,6 +223,8 @@ class RichOutput:
         table.add_column("Done", width=10)
         table.add_column("Title", min_width=20)
 
+        from rich.text import Text
+
         for item in items:
             pri_style = _pri_style(item.priority)
             done_str = item.done_at.strftime("%b %d") if item.done_at else ""
@@ -228,7 +232,7 @@ class RichOutput:
                 str(item.id),
                 _styled(_priority_label(item.priority), pri_style),
                 done_str,
-                item.title,
+                Text(item.title),  # user text: never parse as markup
             )
 
         self._console.print(table)
@@ -263,11 +267,13 @@ class RichOutput:
         if not counts:
             self._console.print("[dim]No tags.[/dim]")
             return
+        from rich.text import Text
+
         table = Table(show_header=True, header_style="dim", box=None, padding=(0, 1))
         table.add_column("Tag")
         table.add_column("Items", justify="right")
         for tag, count in counts:
-            table.add_row(tag, str(count))
+            table.add_row(Text(tag), str(count))  # user text
         self._console.print(table)
 
     def print_json_tags(self, counts: list[tuple[str, int]]) -> None:
@@ -275,6 +281,7 @@ class RichOutput:
 
     def print_projects(self, summaries: list[ProjectSummary]) -> None:
         from rich.table import Table
+        from rich.text import Text
 
         if not summaries:
             self._console.print("[dim]No projects.[/dim]")
@@ -286,15 +293,17 @@ class RichOutput:
         table.add_column("Done", justify="right")
         table.add_column("Description")
         for s in summaries:
-            name = s.project.name
+            # Name and description are user text: build Text, never markup.
             if s.project.is_archived:
-                name = f"[dim]{name} (archived)[/dim]"
+                name = Text(f"{s.project.name} (archived)", style="dim")
+            else:
+                name = Text(s.project.name)
             table.add_row(
                 str(s.project.id),
                 name,
                 str(s.open_count),
                 str(s.done_count),
-                s.project.description,
+                Text(s.project.description),
             )
         self._console.print(table)
 
@@ -311,12 +320,14 @@ class RichOutput:
         header.append(f"   {done}/{len(items)} done", style="dim")
         self._console.print(header)
         if project.description:
-            self._console.print(project.description)
+            self._console.print(Text(project.description))  # user text
         if detail.updates:
             self._console.print("\n[dim]Log:[/dim]")
             for update in detail.updates:
                 stamp = update.created_at.strftime("%b %d, %Y %H:%M")
-                self._console.print(f"  [dim]{stamp}[/dim]  {update.body}")
+                line = Text(f"  {stamp}  ", style="dim")
+                line.append(update.body, style="default")  # user text
+                self._console.print(line)
         if items:
             self._console.print()
             self.print_list(items)

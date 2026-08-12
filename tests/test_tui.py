@@ -956,8 +956,10 @@ class TestBlocking:
             assert isinstance(blocked_cell, Text)
             assert blocked_cell.style == "dim"
 
+            # All cells are Text (markup safety); only blocked rows are dim.
             blocker_cell = table.get_row_at(table.get_row_index("2"))[3]
-            assert not isinstance(blocker_cell, Text)
+            assert isinstance(blocker_cell, Text)
+            assert blocker_cell.style == ""
 
 
 class TestKeyBindingsDontHang:
