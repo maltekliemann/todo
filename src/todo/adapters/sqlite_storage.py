@@ -17,6 +17,8 @@ from todo.application.contracts.storage import (
 )
 from todo.domain.enums import Priority, ProjectStatus, Status
 from todo.domain.models import Project, ProjectUpdate, TodoItem
+from todo.domain.tags import dedupe_tags, split_tags
+from todo.domain.text import single_line
 from todo.exceptions import (
     DuplicateProjectError,
     NotFoundError,
@@ -45,29 +47,25 @@ CREATE TABLE IF NOT EXISTS todo_dependencies (
 """
 
 
-def _single_line(value: str) -> str:
-    return " ".join(value.split())
-
-
 def _migration_v3_normalize(conn: sqlite3.Connection) -> None:
     """Normalize rows written before single-line normalization existed.
 
-    Runs in Python so it matches _normalize_title's exact semantics (all
-    whitespace runs collapse) and so project-name collisions get a unique
-    ' #id' suffix instead of blowing up the UNIQUE constraint and locking
-    the user out of the database.
+    Uses the shared domain helper so migrated rows equal what the write
+    path produces, and project-name collisions get a unique ' #id' suffix
+    instead of blowing up the UNIQUE constraint and locking the user out
+    of the database.
     """
     for item_id, title in conn.execute("SELECT id, title FROM todos").fetchall():
-        normalized = _single_line(title) or f"Untitled #{item_id}"
+        normalized = single_line(title) or f"Untitled #{item_id}"
         if normalized != title:
             conn.execute(
                 "UPDATE todos SET title = ? WHERE id = ?", (normalized, item_id)
             )
 
     projects = conn.execute("SELECT id, name FROM projects ORDER BY id").fetchall()
-    taken = {name for _, name in projects if _single_line(name) == name}
+    taken = {name for _, name in projects if single_line(name) == name}
     for project_id, name in projects:
-        normalized = _single_line(name) or f"project #{project_id}"
+        normalized = single_line(name) or f"project #{project_id}"
         if normalized == name:
             continue
         while normalized in taken:
@@ -81,12 +79,7 @@ def _migration_v3_normalize(conn: sqlite3.Connection) -> None:
 def _normalize_tag_string(raw: str) -> str:
     """The stored form every read path derives its display from: segments
     stripped, empties dropped, duplicates removed (order-preserving)."""
-    cleaned: list[str] = []
-    for segment in raw.split(","):
-        tag = segment.strip()
-        if tag and tag not in cleaned:
-            cleaned.append(tag)
-    return ",".join(cleaned)
+    return ",".join(dedupe_tags(split_tags(raw)))
 
 
 def _migration_v4_normalize_tags(conn: sqlite3.Connection) -> None:
@@ -152,7 +145,7 @@ def _row_to_item(
     is_blocked: bool = False,
 ) -> TodoItem:
     tags_raw: str = row["tags"]
-    tags = [t.strip() for t in tags_raw.split(",") if t.strip()] if tags_raw else []
+    tags = split_tags(tags_raw) if tags_raw else []
     done_at_raw: str | None = row["done_at"]
     deadline_raw: str | None = row["deadline"]
     return TodoItem(

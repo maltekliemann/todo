@@ -222,3 +222,28 @@ class TestWritePathExistenceChecks:
         with pytest.raises(NotFoundError):
             block_todo_batch(storage, 1, [2, 999])
         assert storage.get(1).blocked_by == []  # nothing half-applied
+
+
+class TestCompletionScanSkip:
+    def test_completion_without_dependents_skips_blocked_scan(
+        self, storage: SqliteStorage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Most items block nothing; completing them must not pay two
+        blocked-ids table scans."""
+        from todo.application.commands import complete_todo, delete_todo
+
+        add_todo(storage, "solo")
+        add_todo(storage, "another solo")
+
+        calls = 0
+        original = SqliteStorage.blocked_ids
+
+        def counting(self: SqliteStorage) -> set[int]:
+            nonlocal calls
+            calls += 1
+            return original(self)
+
+        monkeypatch.setattr(SqliteStorage, "blocked_ids", counting)
+        complete_todo(storage, 1)
+        delete_todo(storage, 2)
+        assert calls == 0

@@ -311,3 +311,29 @@ class TestMatchingSemantics:
         result = cli.invoke(main, ["list", "--search", "100%"])
         assert "done 100% sure" in result.output
         assert "unrelated" not in result.output
+
+
+class TestSharedNormalizationHelpers:
+    """One implementation each for tag splitting and single-line collapse
+    — the five hand-copies had already diverged."""
+
+    def test_shared_tag_splitting(self) -> None:
+        from todo.domain.tags import split_tags
+
+        assert split_tags(" a , ,b, a ") == ["a", "b", "a"]
+        assert split_tags("") == []
+
+    def test_shared_single_line(self) -> None:
+        from todo.domain.text import single_line
+
+        assert single_line(" a\n\n b\tc ") == "a b c"
+
+    def test_adapter_uses_shared_helpers(self) -> None:
+        from pathlib import Path
+
+        import todo.adapters.sqlite_storage as mod
+
+        src = Path(str(mod.__file__)).read_text()
+        assert "def _single_line" not in src
+        assert "from todo.domain.text import" in src
+        assert "from todo.domain.tags import" in src

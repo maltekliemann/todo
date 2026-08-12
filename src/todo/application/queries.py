@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 from todo.application.contracts.storage import StorageProtocol
 from todo.domain.enums import Priority, Status
 from todo.domain.models import Project, ProjectUpdate, TodoItem
+from todo.domain.tags import split_tags
 from todo.exceptions import ProjectNotFoundError
 
 
@@ -154,9 +155,8 @@ def count_tags(storage: StorageProtocol) -> list[tuple[str, int]]:
     """All tags with usage counts (done items included), most used first."""
     counts: dict[str, int] = {}
     for raw in storage.tag_strings():
-        for tag in (t.strip() for t in raw.split(",")):
-            if tag:
-                counts[tag] = counts.get(tag, 0) + 1
+        for tag in split_tags(raw):
+            counts[tag] = counts.get(tag, 0) + 1
     return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
 
 

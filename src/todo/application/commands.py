@@ -6,13 +6,14 @@ from datetime import date
 from todo.application.contracts.storage import StorageProtocol, Unset
 from todo.domain.enums import Priority, ProjectStatus, Status
 from todo.domain.models import Project, ProjectUpdate, TodoItem
+from todo.domain.text import single_line
 from todo.exceptions import DependencyError, NotFoundError
 
 
 def _normalize_title(title: str) -> str:
     """Titles are single-line: every storage and render format (editor
     round-trip, plain output, table rows) relies on it."""
-    normalized = " ".join(title.split())
+    normalized = single_line(title)
     if not normalized:
         raise ValueError("Title cannot be empty.")
     return normalized
@@ -113,7 +114,11 @@ def _tracked_update(
     hydrated, so cost does not scale with dependent count."""
     with storage.transaction():
         before = storage.get(item_id)
-        completing = status == Status.DONE and not before.is_done
+        # The blocked-set diff is only needed when this completion could
+        # actually unblock someone — most items block nothing.
+        completing = (
+            status == Status.DONE and not before.is_done and bool(before.blocking)
+        )
         blocked_before = storage.blocked_ids() if completing else set()
         item = storage.update(
             item_id,
@@ -175,6 +180,9 @@ def delete_todo(
     """
     with storage.transaction():
         victim = storage.get(item_id)
+        if not victim.blocking:
+            storage.delete(item_id)
+            return []
         blocked_before = storage.blocked_ids()
         storage.delete(item_id)
         return _newly_unblocked(storage, victim.blocking, blocked_before)
@@ -274,7 +282,7 @@ def _normalize_project_name(name: str) -> str:
     # Same single-line contract as titles (plain output is one row per
     # project), plus: "none" is the CLI's clear-sentinel for --project; a
     # project by that name would be unreachable from edit.
-    normalized = " ".join(name.split())
+    normalized = single_line(name)
     if not normalized:
         raise ValueError("Project name cannot be empty.")
     if normalized.lower() == "none":
@@ -285,7 +293,7 @@ def _normalize_project_name(name: str) -> str:
 def _normalize_description(description: str) -> str:
     # Descriptions render inside the one-row-per-project list output, so
     # they share the single-line contract; empty stays allowed.
-    return " ".join(description.split())
+    return single_line(description)
 
 
 def add_project(
@@ -338,7 +346,7 @@ def log_project_update(
 ) -> ProjectUpdate:
     # Log entries render as one timestamped row; an empty body would leave
     # a dangling timestamp with no way to delete the entry.
-    normalized = " ".join(body.split())
+    normalized = single_line(body)
     if not normalized:
         raise ValueError("Update body cannot be empty.")
     return storage.add_project_update(project_id, normalized)

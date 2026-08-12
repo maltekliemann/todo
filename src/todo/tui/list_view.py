@@ -44,6 +44,7 @@ from todo.application.queries import (
 )
 from todo.domain.enums import Priority, Status
 from todo.domain.models import TodoItem
+from todo.domain.tags import split_tags
 from todo.exceptions import NotFoundError, TodoError
 
 _SEPARATOR_PREFIX = "__sep_"
@@ -191,7 +192,7 @@ def apply_editor_edit(
 
     tags: list[str] | None = None
     if "tags" in fields:
-        tags = [t.strip() for t in fields["tags"].split(",") if t.strip()]
+        tags = split_tags(fields["tags"])
 
     if "title" in fields and not fields["title"].strip():
         # Same contract as deadline: bad input errors, never a partial apply.
@@ -463,9 +464,7 @@ class NewItemDialog(ModalScreen[TodoItem | None]):
         deadline_str = self.query_one("#new-deadline", Input).value.strip()
         deadline = date.fromisoformat(deadline_str) if deadline_str else None
         tags_str = self.query_one("#new-tags", Input).value.strip()
-        tags = (
-            [t.strip() for t in tags_str.split(",") if t.strip()] if tags_str else None
-        )
+        tags = split_tags(tags_str) if tags_str else None
 
         try:
             item = add_todo(
