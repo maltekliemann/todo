@@ -841,7 +841,7 @@ class TestExternalChangePolling:
             monkeypatch.setattr(
                 view,
                 "_refresh_list",
-                lambda: (calls.append(None), original())[1],
+                lambda **kw: (calls.append(None), original(**kw))[1],
             )
 
             view._poll_for_external_changes()
@@ -865,7 +865,7 @@ class TestExternalChangePolling:
             monkeypatch.setattr(
                 view,
                 "_refresh_list",
-                lambda: (calls.append(None), original())[1],
+                lambda **kw: (calls.append(None), original(**kw))[1],
             )
 
             # Simulate an external writer via a second connection.
@@ -1422,3 +1422,106 @@ class TestPollRetryAndRenameStableFilter:
             assert _item_rows(table) == 1  # still filtered to the project
             status = str(app.query_one("#search-status", Static).render())
             assert "Beta" in status
+
+
+class TestPollVersionRaceAndToastStreak:
+    async def test_write_during_rebuild_is_not_marked_seen(self, db_path: Path) -> None:
+        """The version must be captured BEFORE the reads: a commit landing
+        during the table rebuild would otherwise be recorded as already
+        seen and never displayed (round-10 regression)."""
+        from todo.tui.list_view import TodoListView
+
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "first")
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            view = app.query_one(TodoListView)
+            table = app.query_one("#item-list", DataTable)
+            assert _item_rows(table) == 1
+
+            # An external write lands mid-rebuild, after this refresh read
+            # its rows but before it records the version.
+            original_rows = TodoListView._rows_for_refresh
+
+            def racing(self: TodoListView):  # type: ignore[no-untyped-def]
+                result = original_rows(self)
+                other = SqliteStorage(db_path)
+                add_todo(other, "added mid-rebuild")
+                other.close()
+                return result
+
+            TodoListView._rows_for_refresh = racing  # type: ignore[method-assign]
+            try:
+                view._refresh_list()
+                await pilot.pause()
+            finally:
+                TodoListView._rows_for_refresh = original_rows  # type: ignore[method-assign]
+
+            # The racing write must still be pending, not swallowed.
+            view._poll_for_external_changes()
+            await pilot.pause()
+            assert _item_rows(table) == 2
+
+    async def test_repeated_refresh_failure_toasts_once_per_streak(
+        self,
+        seeded_storage: SqliteStorage,
+        db_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A persistently broken database must not stack an error toast
+        every 2 seconds forever."""
+        from todo.exceptions import StorageError
+        from todo.tui.list_view import TodoListView
+
+        app = TodoApp(storage=seeded_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            view = app.query_one(TodoListView)
+            notices: list[str] = []
+            monkeypatch.setattr(
+                view, "notify", lambda msg, **kw: notices.append(str(msg))
+            )
+
+            def boom(self: SqliteStorage, **kwargs: object):  # type: ignore[no-untyped-def]
+                raise StorageError("no such table: todos")
+
+            # An external write makes every tick see a version change, so
+            # each tick genuinely attempts (and fails) a refresh.
+            other = SqliteStorage(db_path)
+            add_todo(other, "external")
+            other.close()
+
+            monkeypatch.setattr(SqliteStorage, "list", boom)
+            for _ in range(5):
+                view._poll_for_external_changes()
+                await pilot.pause()
+            assert len(notices) == 1
+
+    async def test_deleted_filtered_project_is_named_not_question_mark(
+        self, db_path: Path
+    ) -> None:
+        """A deleted filtered project must still be nameable in the status
+        bar (round-10 regression: it degraded to '?')."""
+        from todo.application.commands import add_project, delete_project
+        from todo.tui.list_view import TodoListView
+
+        storage = SqliteStorage(db_path)
+        project = add_project(storage, "Apollo")
+        add_todo(storage, "in apollo", project_id=project.id)
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("p")
+            await pilot.pause()
+
+            other = SqliteStorage(db_path)
+            delete_project(other, project.id)
+            other.close()
+
+            view = app.query_one(TodoListView)
+            view._refresh_list()
+            await pilot.pause()
+            status = str(app.query_one("#search-status", Static).render())
+            assert "?" not in status
+            assert "Apollo" in status

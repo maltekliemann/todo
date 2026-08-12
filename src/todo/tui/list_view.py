@@ -618,12 +618,17 @@ class TodoListView(Widget):
         self._search_query: str = ""
         self._tag_filter: str | None = None
         # Keyed on the stable project id, not the mutable name — an
-        # external rename must not blank the filtered list.
+        # external rename must not blank the filtered list. The name is
+        # remembered alongside it so a deleted project can still be named
+        # in the status bar instead of degrading to '?'.
         self._project_filter: int | None = None
+        self._project_filter_name: str | None = None
         self._priority_filter: Priority | None = None
         self._cursor_follows_item: bool = True
         self._last_data_version: int = 0
-        self._poll_error_reported: bool = False
+        # One error toast per failure streak: a persistently broken
+        # database must not stack a notification every poll tick.
+        self._read_error_reported: bool = False
 
     def compose(self) -> ComposeResult:
         yield TodoTable(id="item-list", cursor_type="row", zebra_stripes=True)
@@ -649,16 +654,21 @@ class TodoListView(Widget):
             version = self._storage.data_version()
         except TodoError as exc:
             # A broken database must not let the 2s timer kill the session.
-            # Report once per error streak, not once per tick.
-            if not self._poll_error_reported:
-                self._poll_error_reported = True
-                self.notify(escape(str(exc)), severity="error")
+            self._report_read_failure(exc, from_poll=True)
             return
-        self._poll_error_reported = False
         if version != self._last_data_version:
             # No version bookkeeping here: only a successful refresh
             # records it, so a failed refresh is retried next tick.
-            self._refresh_list()
+            self._refresh_list(from_poll=True)
+
+    def _report_read_failure(self, exc: TodoError, *, from_poll: bool) -> None:
+        """Notify about a failed read, once per failure streak when the
+        poll timer is the source — an unattended 2s loop must not stack a
+        toast per tick. Failures the user just triggered always report."""
+        if from_poll and self._read_error_reported:
+            return
+        self._read_error_reported = True
+        self.notify(escape(str(exc)), severity="error")
 
     @on(DataTable.RowHighlighted, "#item-list")
     def on_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
@@ -671,7 +681,7 @@ class TodoListView(Widget):
             return
         self.action_inspect()
 
-    def _refresh_list(self) -> None:
+    def _refresh_list(self, *, from_poll: bool = False) -> None:
         """Refresh, degrading storage failures to a notification.
 
         Every action path (including the except-handlers of guarded
@@ -681,22 +691,29 @@ class TodoListView(Widget):
         try:
             self._refresh_list_unguarded()
         except TodoError as exc:
-            self.notify(escape(str(exc)), severity="error")
+            self._report_read_failure(exc, from_poll=from_poll)
+        else:
+            self._read_error_reported = False
 
-    def _refresh_list_unguarded(self) -> None:
-        table = self.query_one("#item-list", TodoTable)
-        previous_id = self._selected_item_id()
-        previous_cursor = table.cursor_row
+    def _rows_for_refresh(self) -> tuple[int, list[TodoItem], str | None]:
+        """Every storage read a refresh needs, plus the data_version read
+        BEFORE them.
 
-        # All storage reads happen BEFORE the table is touched: a degraded
-        # (notified) read failure must leave the last good rows visible,
-        # not wipe the list into a dead blank state.
+        Reading the version first is what makes the poll safe: a commit
+        landing while these reads (and the ensuing table rebuild) are in
+        flight is newer than the version we return, so the next tick still
+        sees a change and displays it. A version read afterwards would
+        record that concurrent write as already seen and lose it.
+
+        Returns (version, items, project_filter_label).
+        """
+        version = self._storage.data_version()
 
         # Tag/priority/project filtering happens in SQL via list_todos; only
         # the search filter stays here because it also matches tag names,
         # which storage-level search (title/body) does not cover.
         project_filter_id = self._project_filter
-        project_filter_label: str | None = None
+        project_filter_label = self._project_filter_name
         project_filter_missing = False
         if project_filter_id is not None:
             match = next(
@@ -712,18 +729,33 @@ class TodoListView(Widget):
             else:
                 # Label from the live row, so a rename shows the new name.
                 project_filter_label = match.name
+                self._project_filter_name = match.name
 
         if project_filter_missing:
-            # Filtered project no longer exists: show nothing, like before.
-            self._items = []
-        else:
-            self._items = list_todos(
+            # Filtered project no longer exists: show nothing, like before,
+            # but keep naming it — the last known name beats a bare '?'.
+            return version, [], project_filter_label
+        return (
+            version,
+            list_todos(
                 self._storage,
                 include_done=True,
                 tags=[self._tag_filter] if self._tag_filter is not None else None,
                 priority=self._priority_filter,
                 project_id=project_filter_id,
-            )
+            ),
+            project_filter_label,
+        )
+
+    def _refresh_list_unguarded(self) -> None:
+        table = self.query_one("#item-list", TodoTable)
+        previous_id = self._selected_item_id()
+        previous_cursor = table.cursor_row
+
+        # All storage reads happen BEFORE the table is touched: a degraded
+        # (notified) read failure must leave the last good rows visible,
+        # not wipe the list into a dead blank state.
+        version, self._items, project_filter_label = self._rows_for_refresh()
 
         if self._search_query:
             # casefold, matching the storage layer's SQL search semantics.
@@ -810,7 +842,9 @@ class TodoListView(Widget):
             # would keep showing a deleted/filtered-out item forever.
             self._update_detail(None)
 
-        self._last_data_version = self._storage.data_version()
+        # Record the version captured BEFORE the reads above, so a write
+        # that landed during them is still pending for the next poll.
+        self._last_data_version = version
 
         search_status = self.query_one("#search-status", Static)
         parts: list[str] = []
@@ -1092,22 +1126,29 @@ class TodoListView(Widget):
     def action_cycle_project(self) -> None:
         """Cycle the project filter: no filter -> each project -> no filter."""
         try:
-            ids = [
-                p.id for p in list_all_projects(self._storage, include_archived=True)
-            ]
+            projects = list_all_projects(self._storage, include_archived=True)
         except TodoError as exc:
             self.notify(escape(str(exc)), severity="error")
             return
-        if not ids:
+        if not projects:
             return
+        ids = [p.id for p in projects]
         if self._project_filter is None:
-            self._project_filter = ids[0]
+            idx = 0
         else:
             try:
-                idx = ids.index(self._project_filter)
+                current = ids.index(self._project_filter)
             except ValueError:
-                idx = -1
-            self._project_filter = ids[idx + 1] if idx + 1 < len(ids) else None
+                current = -1
+            idx = current + 1
+        if idx < len(ids):
+            # Remember the name too: if the project is deleted while the
+            # filter is active, the status bar can still name it.
+            self._project_filter = ids[idx]
+            self._project_filter_name = projects[idx].name
+        else:
+            self._project_filter = None
+            self._project_filter_name = None
         self._refresh_list()
 
     def action_filter_priority(self, value: str) -> None:
@@ -1137,6 +1178,7 @@ class TodoListView(Widget):
             self._search_query = ""
             self._tag_filter = None
             self._project_filter = None
+            self._project_filter_name = None
             self._priority_filter = None
             self._refresh_list()
 
