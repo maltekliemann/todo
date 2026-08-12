@@ -663,6 +663,45 @@ class TestTags:
         assert "1" in result.output
 
 
+class TestBlockAtomicity:
+    def test_failed_multi_block_applies_nothing(self, invoke) -> None:
+        invoke("add One")
+        invoke("add Two")
+        result = invoke("block 2 1 999")
+        assert result.exit_code == 1
+        data = json.loads(invoke("show 2 --json").output)
+        assert data["blocked_by"] == []
+        assert data["is_blocked"] is False
+
+    def test_cycle_mid_batch_rolls_back_earlier_blockers(self, invoke) -> None:
+        invoke("add One")
+        invoke("add Two")
+        invoke("add Three")
+        invoke("block 2 1")  # 1 blocks 2
+        # Adding blockers (3, 2) to item 1: 3 is fine, 2 would form a cycle.
+        result = invoke("block 1 3 2")
+        assert result.exit_code == 1
+        data = json.loads(invoke("show 1 --json").output)
+        assert data["blocked_by"] == []
+
+    def test_successful_multi_block_still_works(self, invoke) -> None:
+        invoke("add One")
+        invoke("add Two")
+        invoke("add Three")
+        result = invoke("block 3 1 2")
+        assert result.exit_code == 0
+        data = json.loads(invoke("show 3 --json").output)
+        assert data["blocked_by"] == [1, 2]
+
+    def test_unblock_missing_target_changes_nothing(self, invoke) -> None:
+        invoke("add One")
+        invoke("add Two")
+        invoke("block 2 1")
+        result = invoke("unblock 99 1")
+        assert result.exit_code == 1
+        assert json.loads(invoke("show 2 --json").output)["blocked_by"] == [1]
+
+
 class TestUnblockWarning:
     def test_done_warns_about_newly_unblocked(self, invoke) -> None:
         invoke("add Blocker")

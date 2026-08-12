@@ -140,15 +140,25 @@ class SqliteStorage:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
-        self._conn.executescript(_SCHEMA)
-        self._migrate()
+        try:
+            self._conn.executescript(_SCHEMA)
+            self._migrate()
+        except BaseException:
+            # A failed init must not leak a connection holding a write lock
+            # (closing rolls back any transaction the failure left open).
+            self._conn.rollback()
+            self._conn.close()
+            raise
 
     def _migrate(self) -> None:
         version = int(self._conn.execute("PRAGMA user_version").fetchone()[0])
         for target, script in enumerate(_MIGRATIONS[version:], start=version + 1):
-            self._conn.executescript(script)
-            self._conn.execute(f"PRAGMA user_version = {target}")
-        self._conn.commit()
+            # Each migration and its version bump run in ONE transaction:
+            # a crash partway can never strand a half-applied schema that
+            # would make every subsequent open fail.
+            self._conn.executescript(
+                f"BEGIN;\n{script}\nPRAGMA user_version = {target};\nCOMMIT;"
+            )
 
     def close(self) -> None:
         self._conn.close()

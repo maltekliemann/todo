@@ -5,6 +5,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from todo.adapters.sqlite_storage import SqliteStorage
 
 _LEGACY_SCHEMA = """\
@@ -96,6 +98,45 @@ class TestMigration:
         # Re-opening must not attempt to re-apply migrations.
         SqliteStorage(db).close()
         assert _schema_snapshot(db) == before
+
+    def test_failed_migration_leaves_no_partial_state(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A migration that dies partway must roll back entirely.
+
+        Each migration and its user_version bump run in one transaction, so
+        a crash can never strand the database in a half-applied state that
+        breaks every subsequent open.
+        """
+        import todo.adapters.sqlite_storage as storage_mod
+
+        db = tmp_path / "db.db"
+        _make_legacy_db(db)
+
+        # First statement succeeds, second fails (todos already exists).
+        bad_migration = (
+            "CREATE TABLE mig_probe (id INTEGER);\nCREATE TABLE todos (id INTEGER);\n"
+        )
+        monkeypatch.setattr(storage_mod, "_MIGRATIONS", [bad_migration])
+        with pytest.raises(sqlite3.OperationalError):
+            SqliteStorage(db)
+
+        conn = sqlite3.connect(str(db))
+        tables = {
+            r[0]
+            for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+        version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        conn.close()
+        # No partial state: probe table rolled back, version untouched.
+        assert "mig_probe" not in tables
+        assert version == 0
+
+        # With the real migrations restored, the same database opens fine.
+        monkeypatch.undo()
+        storage = SqliteStorage(db)
+        assert storage.get(1).title == "Old item"
+        storage.close()
 
     def test_migrated_db_supports_projects(self, tmp_path: Path) -> None:
         legacy = tmp_path / "legacy.db"

@@ -11,7 +11,7 @@ from todo.application.commands import (
     add_project,
     add_todo,
     archive_project,
-    block_todo,
+    block_todo_batch,
     complete_todo,
     delete_project,
     delete_todo,
@@ -19,7 +19,7 @@ from todo.application.commands import (
     edit_todo,
     log_project_update,
     move_todo,
-    unblock_todo,
+    unblock_todo_batch,
 )
 from todo.application.contracts.storage import UNSET, Unset
 from todo.application.queries import (
@@ -347,16 +347,14 @@ def summary_cmd(since: str, as_json: bool) -> None:
 @click.argument("blocker_ids", type=int, nargs=-1, required=True)
 @click.option("--json", "as_json", is_flag=True, help="Output JSON")
 def block(item_id: int, blocker_ids: tuple[int, ...], as_json: bool) -> None:
-    """Mark ITEM_ID as blocked by the given blocker item(s)."""
+    """Mark ITEM_ID as blocked by the given blocker item(s), all-or-nothing."""
     storage = _storage()
     out = create_output()
     try:
-        for blocker_id in blocker_ids:
-            block_todo(storage, item_id, blocker_id)
+        item = block_todo_batch(storage, item_id, list(blocker_ids))
     except (NotFoundError, DependencyError) as e:
         click.echo(str(e), err=True)
         sys.exit(1)
-    item = show_todo(storage, item_id)
     if as_json:
         out.print_json_item(item)
     else:
@@ -372,12 +370,10 @@ def unblock(item_id: int, blocker_ids: tuple[int, ...], as_json: bool) -> None:
     storage = _storage()
     out = create_output()
     try:
-        for blocker_id in blocker_ids:
-            unblock_todo(storage, item_id, blocker_id)
+        item = unblock_todo_batch(storage, item_id, list(blocker_ids))
     except (NotFoundError, DependencyError) as e:
         click.echo(str(e), err=True)
         sys.exit(1)
-    item = show_todo(storage, item_id)
     if as_json:
         out.print_json_item(item)
     else:

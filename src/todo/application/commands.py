@@ -6,7 +6,7 @@ from datetime import date
 from todo.application.contracts.storage import StorageProtocol, Unset
 from todo.domain.enums import Priority, ProjectStatus, Status
 from todo.domain.models import Project, ProjectUpdate, TodoItem
-from todo.exceptions import DependencyError
+from todo.exceptions import DependencyError, TodoError
 
 
 def add_todo(
@@ -136,7 +136,43 @@ def unblock_todo(
     blocked_id: int,
     blocker_id: int,
 ) -> TodoItem:
+    storage.get(blocked_id)  # raises NotFoundError before any change
     storage.remove_blocker(blocked_id, blocker_id)
+    return storage.get(blocked_id)
+
+
+def block_todo_batch(
+    storage: StorageProtocol,
+    blocked_id: int,
+    blocker_ids: list[int],
+) -> TodoItem:
+    """Add several blockers all-or-nothing.
+
+    If any blocker is invalid (missing item, self-block, cycle), the ones
+    already applied in this batch are removed again before re-raising, so a
+    failed command never leaves partial dependency state behind.
+    """
+    applied: list[int] = []
+    try:
+        for blocker_id in blocker_ids:
+            block_todo(storage, blocked_id, blocker_id)
+            applied.append(blocker_id)
+    except TodoError:
+        for blocker_id in reversed(applied):
+            storage.remove_blocker(blocked_id, blocker_id)
+        raise
+    return storage.get(blocked_id)
+
+
+def unblock_todo_batch(
+    storage: StorageProtocol,
+    blocked_id: int,
+    blocker_ids: list[int],
+) -> TodoItem:
+    storage.get(blocked_id)  # raises NotFoundError before any change
+    # Removals cannot fail after validation, so no rollback is needed.
+    for blocker_id in blocker_ids:
+        storage.remove_blocker(blocked_id, blocker_id)
     return storage.get(blocked_id)
 
 
