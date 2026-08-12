@@ -218,17 +218,17 @@ real transaction. Treat 'my own fix' as untrusted input to this round.
       Scenario: `todo show 99999999999999999999` dumps a raw OverflowError traceback. Fix the class: adapter guards catch (sqlite3.Error, OverflowError).
 - [x] (10a735d) `src/todo/application/queries.py:159` [correctness] — parse_since raises OverflowError (not ValueError) for huge amounts, escaping summary's `except ValueError`
       Scenario: `todo summary --since "9999999 days"` → OverflowError traceback instead of the clean 'Cannot parse' message.
-- [ ] `src/todo/tui/list_view.py:911` [cleanup] — Whitespace-only body edits silently discarded by the coarse strip()-equality no-op guard, contradicting the 'whitespace is content' contract
+- [x] (round-7 final commit) `src/todo/tui/list_view.py:911` [cleanup] — Whitespace-only body edits silently discarded by the coarse strip()-equality no-op guard, contradicting the 'whitespace is content' contract
       Scenario: Append trailing blank lines to the body, save → strip() equality classifies unchanged, edit dropped without notification. Fix: exact equality (modulo the editor's single trailing newline).
-- [ ] `src/todo/infra/cli/main.py:201` [cleanup] — `--tag` filter not normalized while stored tags are, so incidental whitespace silently matches nothing
+- [x] (round-7 final commit) `src/todo/infra/cli/main.py:201` [cleanup] — `--tag` filter not normalized while stored tags are, so incidental whitespace silently matches nothing
       Scenario: `todo list -t 'foo '` prints 'No items.' though 'foo' exists. Fix at the query layer so CLI and TUI both normalize.
-- [ ] `src/todo/application/commands.py:116` [cleanup] — Completing/deleting a blocker runs ~8 hydrating queries per dependent; the once-per-batch edge-load strategy was not applied here
+- [x] (round-7 final commit) `src/todo/application/commands.py:116` [cleanup] — Completing/deleting a blocker runs ~8 hydrating queries per dependent; the once-per-batch edge-load strategy was not applied here
       Scenario: 'done' on an item blocking N others costs ~8N queries; a blocked-ids set query before/after plus per-unblocked hydration does it in O(1)+unblocked.
-- [ ] `src/todo/adapters/sqlite_storage.py:523` [cleanup] — add_blocker re-runs two full hydrating get() calls for existence checks its only caller just performed
+- [x] (round-7 final commit) `src/todo/adapters/sqlite_storage.py:523` [cleanup] — add_blocker re-runs two full hydrating get() calls for existence checks its only caller just performed
       Scenario: ~12 queries per blocker in a batch; a `SELECT 1` existence probe keeps the NotFoundError contract at a fraction of the cost.
-- [ ] `src/todo/tui/list_view.py:626` [cleanup] — data_version() lives only on SqliteStorage, not StorageProtocol, forcing the whole TUI onto the concrete type instead of the port
+- [x] (round-7 final commit) `src/todo/tui/list_view.py:626` [cleanup] — data_version() lives only on SqliteStorage, not StorageProtocol, forcing the whole TUI onto the concrete type instead of the port
       Scenario: TodoListView/NewItemDialog/BlockDialog annotated with SqliteStorage; storage cannot be substituted. Fix: declare data_version on the protocol and type the TUI against StorageProtocol.
-- [ ] `src/todo/tui/list_view.py:70` [cleanup] — _skip_separators nests a second negated copy of its own loop for the boundary case
+- [x] (round-7 final commit) `src/todo/tui/list_view.py:70` [cleanup] — _skip_separators nests a second negated copy of its own loop for the boundary case
       Scenario: Two loops, two boundary checks, return from the middle; refactor to one direction-scan helper called with +d then -d (behavior covered by existing cursor tests).
 
 ## Triage log
@@ -247,6 +247,7 @@ Anything without a failed reproduction attempt gets fixed, not triaged.)
 
 ## Status log
 
+- iter 17: round-7 queue closed — TUI storage-failure guards, OverflowError class, parse_since overflow, exact editor no-op, tag-filter normalization, blocked-ids completion diff, add_blocker probes, StorageProtocol port completeness, separator-scan refactor (10a735d, a439c59, +1). 362 tests green. QUEUE EMPTY (round 7).
 - iter 15: round-6 queue closed — v4 tag migration, read-path/init StorageError wrapping, tag dedupe, description/log normalization, spaced $EDITOR fallback, verbatim body round-trip, age buckets, detail-pane cache, batch graph load, meta/JSON dedup (295b0f0, 3f6395d, 7a057ab, +1). 341 tests green. QUEUE EMPTY (round 6).
 - iter 1: markup class closed, 8 findings (3508897). 225 tests green.
 - iter 12: round-5 queue closed — Python migration v3 (collision-safe, exact normalization), dialog StorageError guards, buffer read-back guard, delete wrapping, edge-walk + tag-scan perf. 303 tests green. QUEUE EMPTY (round 5); artifacts finding triaged as intentional.
