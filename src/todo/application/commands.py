@@ -6,7 +6,32 @@ from datetime import date
 from todo.application.contracts.storage import StorageProtocol, Unset
 from todo.domain.enums import Priority, ProjectStatus, Status
 from todo.domain.models import Project, ProjectUpdate, TodoItem
-from todo.exceptions import DependencyError, TodoError
+from todo.exceptions import DependencyError, NotFoundError
+
+
+def _normalize_title(title: str) -> str:
+    """Titles are single-line: every storage and render format (editor
+    round-trip, plain output, table rows) relies on it."""
+    normalized = " ".join(title.split())
+    if not normalized:
+        raise ValueError("Title cannot be empty.")
+    return normalized
+
+
+def _normalize_tags(tags: list[str] | None) -> list[str] | None:
+    """Tags are stored comma-joined, so a comma inside a tag cannot
+    round-trip — reject it instead of silently splitting into phantoms."""
+    if tags is None:
+        return None
+    cleaned: list[str] = []
+    for tag in tags:
+        stripped = tag.strip()
+        if not stripped:
+            continue
+        if "," in stripped:
+            raise ValueError(f"Tag '{stripped}' contains a comma; use separate tags.")
+        cleaned.append(stripped)
+    return cleaned
 
 
 def add_todo(
@@ -21,12 +46,12 @@ def add_todo(
     project_id: int | None = None,
 ) -> TodoItem:
     return storage.add(
-        title,
+        _normalize_title(title),
         body=body,
         priority=priority,
         status=status,
         deadline=deadline,
-        tags=tags,
+        tags=_normalize_tags(tags),
         project_id=project_id,
     )
 
@@ -78,32 +103,39 @@ def _tracked_update(
 ) -> CompletionResult:
     """Apply an update; when it completes the item, report newly unblocked
     dependents. Every path that can set status=done must go through here so
-    the unblock warning can never silently miss a completion path."""
-    before = storage.get(item_id)
-    completing = status == Status.DONE and not before.is_done
-    was_blocked = (
-        {dep_id: storage.get(dep_id).is_blocked for dep_id in before.blocking}
-        if completing
-        else {}
-    )
-    item = storage.update(
-        item_id,
-        title=title,
-        body=body,
-        priority=priority,
-        status=status,
-        deadline=deadline,
-        tags=tags,
-        project_id=project_id,
-    )
-    unblocked: list[TodoItem] = []
-    if completing:
-        for dep_id in sorted(before.blocking):
-            if not was_blocked[dep_id]:
-                continue
-            after = storage.get(dep_id)
-            if not after.is_blocked:
-                unblocked.append(after)
+    the unblock warning can never silently miss a completion path. The whole
+    read-update-read runs in one transaction, and a dependent deleted by a
+    concurrent process is simply omitted — a completion never reports
+    failure after it has already mutated."""
+    with storage.transaction():
+        before = storage.get(item_id)
+        completing = status == Status.DONE and not before.is_done
+        was_blocked = (
+            {dep_id: storage.get(dep_id).is_blocked for dep_id in before.blocking}
+            if completing
+            else {}
+        )
+        item = storage.update(
+            item_id,
+            title=_normalize_title(title) if title is not None else None,
+            body=body,
+            priority=priority,
+            status=status,
+            deadline=deadline,
+            tags=_normalize_tags(tags),
+            project_id=project_id,
+        )
+        unblocked: list[TodoItem] = []
+        if completing:
+            for dep_id in sorted(before.blocking):
+                if not was_blocked[dep_id]:
+                    continue
+                try:
+                    after = storage.get(dep_id)
+                except NotFoundError:
+                    continue  # dependent deleted concurrently
+                if not after.is_blocked:
+                    unblocked.append(after)
     return CompletionResult(item=item, unblocked=unblocked)
 
 
@@ -136,23 +168,27 @@ def block_todo(
 ) -> TodoItem:
     if blocked_id == blocker_id:
         raise DependencyError("An item cannot block itself.")
-    storage.get(blocked_id)
-    storage.get(blocker_id)
-    # Adding "blocker_id blocks blocked_id" forms a cycle iff blocked_id already
-    # transitively blocks blocker_id. Walk .blocking edges from blocked_id.
-    seen: set[int] = set()
-    stack: list[int] = [blocked_id]
-    while stack:
-        current = stack.pop()
-        if current in seen:
-            continue
-        seen.add(current)
-        for nxt in storage.get(current).blocking:
-            if nxt == blocker_id:
-                raise DependencyError("Adding this blocker would create a cycle.")
-            stack.append(nxt)
-    storage.add_blocker(blocked_id, blocker_id)
-    return storage.get(blocked_id)
+    # Cycle check and insert run in ONE transaction: without it, two
+    # concurrent processes can each pass the check and commit edges that
+    # together form a cycle.
+    with storage.transaction():
+        storage.get(blocked_id)
+        storage.get(blocker_id)
+        # Adding "blocker_id blocks blocked_id" forms a cycle iff blocked_id
+        # already transitively blocks blocker_id. Walk .blocking edges.
+        seen: set[int] = set()
+        stack: list[int] = [blocked_id]
+        while stack:
+            current = stack.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            for nxt in storage.get(current).blocking:
+                if nxt == blocker_id:
+                    raise DependencyError("Adding this blocker would create a cycle.")
+                stack.append(nxt)
+        storage.add_blocker(blocked_id, blocker_id)
+        return storage.get(blocked_id)
 
 
 def unblock_todo(
@@ -170,24 +206,15 @@ def block_todo_batch(
 ) -> TodoItem:
     """Add several blockers all-or-nothing.
 
-    If any blocker is invalid (missing item, self-block, cycle), edges added
-    by THIS batch are removed again before re-raising. Edges that existed
-    before the batch are never touched: add_blocker is INSERT OR IGNORE, so
-    a re-add "succeeds" without creating anything — compensating it would
-    delete pre-existing data (round-2 finding).
+    The whole batch runs in one transaction: any failure (missing item,
+    self-block, cycle) rolls back only this batch's writes, so pre-existing
+    edges are untouched by construction — no compensation logic that could
+    misidentify what to undo (round-2 finding).
     """
-    added_by_batch: list[int] = []
-    try:
+    with storage.transaction():
         for blocker_id in blocker_ids:
-            already = blocker_id in storage.get(blocked_id).blocked_by
             block_todo(storage, blocked_id, blocker_id)
-            if not already:
-                added_by_batch.append(blocker_id)
-    except TodoError:
-        for blocker_id in reversed(added_by_batch):
-            storage.remove_blocker(blocked_id, blocker_id)
-        raise
-    return storage.get(blocked_id)
+        return storage.get(blocked_id)
 
 
 def unblock_todo_batch(
@@ -201,16 +228,16 @@ def unblock_todo_batch(
     anything, so a typo errors out (like block does) instead of silently
     succeeding while the real blocker stays in place.
     """
-    item = storage.get(blocked_id)  # raises NotFoundError before any change
-    for blocker_id in blocker_ids:
-        if blocker_id not in item.blocked_by:
-            raise DependencyError(
-                f"Item #{blocked_id} is not blocked by #{blocker_id}."
-            )
-    # Removals cannot fail after validation, so no rollback is needed.
-    for blocker_id in blocker_ids:
-        storage.remove_blocker(blocked_id, blocker_id)
-    return storage.get(blocked_id)
+    with storage.transaction():
+        item = storage.get(blocked_id)  # raises NotFoundError before changes
+        for blocker_id in blocker_ids:
+            if blocker_id not in item.blocked_by:
+                raise DependencyError(
+                    f"Item #{blocked_id} is not blocked by #{blocker_id}."
+                )
+        for blocker_id in blocker_ids:
+            storage.remove_blocker(blocked_id, blocker_id)
+        return storage.get(blocked_id)
 
 
 def _validate_project_name(name: str) -> None:

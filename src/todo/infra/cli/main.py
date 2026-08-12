@@ -127,16 +127,20 @@ def add(
     out = create_output()
     dl = _parse_deadline_or_exit(deadline) if deadline else None
     project_id = _resolve_project_or_exit(storage, project_ref) if project_ref else None
-    item = add_todo(
-        storage,
-        title,
-        body=body,
-        priority=Priority.from_string(priority),
-        status=Status.from_string(status),
-        deadline=dl,
-        tags=list(tag) if tag else None,
-        project_id=project_id,
-    )
+    try:
+        item = add_todo(
+            storage,
+            title,
+            body=body,
+            priority=Priority.from_string(priority),
+            status=Status.from_string(status),
+            deadline=dl,
+            tags=list(tag) if tag else None,
+            project_id=project_id,
+        )
+    except ValueError as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
     if as_json:
         out.print_json_item(item)
     else:
@@ -280,7 +284,7 @@ def edit(
             tags=list(tag) if tag else None,
             project_id=project_id,
         )
-    except NotFoundError as e:
+    except (NotFoundError, ValueError) as e:
         click.echo(str(e), err=True)
         sys.exit(1)
     _warn_unblocked(result.unblocked)

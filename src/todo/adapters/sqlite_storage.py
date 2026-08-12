@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -136,6 +138,7 @@ class SqliteStorage:
     def __init__(self, db_path: Path) -> None:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(db_path))
+        self._in_txn = False
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
@@ -175,6 +178,34 @@ class SqliteStorage:
     def close(self) -> None:
         self._conn.close()
 
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Run several storage calls as one atomic unit.
+
+        BEGIN IMMEDIATE takes the write lock up front, serializing
+        concurrent writers (cycle checks + inserts race otherwise). Nested
+        use joins the outer transaction.
+        """
+        if self._in_txn:
+            yield
+            return
+        self._conn.execute("BEGIN IMMEDIATE")
+        self._in_txn = True
+        try:
+            yield
+        except BaseException:
+            self._in_txn = False
+            self._conn.rollback()
+            raise
+        else:
+            self._in_txn = False
+            self._conn.commit()
+
+    def _commit(self) -> None:
+        """Commit unless inside an explicit transaction (which owns it)."""
+        if not self._in_txn:
+            self._conn.commit()
+
     def data_version(self) -> int:
         """Return SQLite's data_version, which increments on any external write."""
         row = self._conn.execute("PRAGMA data_version").fetchone()
@@ -213,7 +244,7 @@ class SqliteStorage:
                     project_id,
                 ),
             )
-            self._conn.commit()
+            self._commit()
         except sqlite3.Error as e:
             raise StorageError(f"Failed to add todo: {e}") from e
         return self.get(cur.lastrowid)  # type: ignore[arg-type]
@@ -309,7 +340,7 @@ class SqliteStorage:
                 f"UPDATE todos SET {', '.join(sets)} WHERE id = ?",
                 params,
             )
-            self._conn.commit()
+            self._commit()
         except sqlite3.Error as e:
             raise StorageError(f"Failed to update todo #{item_id}: {e}") from e
         return self.get(item_id)
@@ -317,7 +348,7 @@ class SqliteStorage:
     def delete(self, item_id: int) -> None:
         self.get(item_id)  # raises NotFoundError if missing
         self._conn.execute("DELETE FROM todos WHERE id = ?", (item_id,))
-        self._conn.commit()
+        self._commit()
 
     def done_since(self, since: datetime) -> list[TodoItem]:
         rows = self._conn.execute(
@@ -385,7 +416,7 @@ class SqliteStorage:
                 "VALUES (?, ?)",
                 (blocker_id, blocked_id),
             )
-            self._conn.commit()
+            self._commit()
         except sqlite3.Error as e:
             raise StorageError(f"Failed to add blocker: {e}") from e
 
@@ -395,7 +426,7 @@ class SqliteStorage:
                 "DELETE FROM todo_dependencies WHERE blocker_id = ? AND blocked_id = ?",
                 (blocker_id, blocked_id),
             )
-            self._conn.commit()
+            self._commit()
         except sqlite3.Error as e:
             raise StorageError(f"Failed to remove blocker: {e}") from e
 
@@ -468,7 +499,7 @@ class SqliteStorage:
                 "updated_at) VALUES (?, ?, ?, ?, ?)",
                 (name, description, ProjectStatus.ACTIVE.value, now, now),
             )
-            self._conn.commit()
+            self._commit()
         except sqlite3.IntegrityError as e:
             raise DuplicateProjectError(name) from e
         except sqlite3.Error as e:
@@ -530,7 +561,7 @@ class SqliteStorage:
                 f"UPDATE projects SET {', '.join(sets)} WHERE id = ?",
                 params,
             )
-            self._conn.commit()
+            self._commit()
         except sqlite3.IntegrityError as e:
             raise DuplicateProjectError(name or "") from e
         except sqlite3.Error as e:
@@ -540,7 +571,7 @@ class SqliteStorage:
     def delete_project(self, project_id: int) -> None:
         self.get_project(project_id)  # raises ProjectNotFoundError if missing
         self._conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
-        self._conn.commit()
+        self._commit()
 
     def add_project_update(self, project_id: int, body: str) -> ProjectUpdate:
         self.get_project(project_id)  # raises ProjectNotFoundError if missing
@@ -551,7 +582,7 @@ class SqliteStorage:
                 "VALUES (?, ?, ?)",
                 (project_id, body, now),
             )
-            self._conn.commit()
+            self._commit()
         except sqlite3.Error as e:
             raise StorageError(f"Failed to log project update: {e}") from e
         row = self._conn.execute(

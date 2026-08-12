@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
 from datetime import date, datetime
 from enum import Enum, auto
 from typing import Protocol, runtime_checkable
@@ -24,6 +25,8 @@ UpdateList = list[ProjectUpdate]
 
 @runtime_checkable
 class StorageProtocol(Protocol):
+    def transaction(self) -> AbstractContextManager[None]: ...
+
     def add(
         self,
         title: str,
