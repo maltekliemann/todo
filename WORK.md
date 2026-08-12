@@ -7,6 +7,20 @@ reproduced against the running code before being listed.
 
 _(none)_
 
+## review pass 1 (9edf848..HEAD)
+
+Two findings, both verified by hand.
+
+- **Accepted:** binding `←`/`→` to the status step took over DataTable's
+  incremental horizontal scroll, so a title wider than the terminal became
+  unreachable from the keyboard. Reproduced at HEAD and at `29ad72a`
+  (`scroll_x` 0 → 1 before, 0 after). The PRD binding stays; `shift+left`
+  / `shift+right` restore the lost scrolling. `79d68d9`.
+- **Declined:** "non-urgent deadlines render dim where the PRD says shown
+  normally". Tagged cleanup, self-described as lower confidence, and it
+  matches what `todo list` has always done — an existing test asserts it.
+  Changing it would be encoding the reviewer's taste.
+
 ## declined
 
 - **`Enter` should edit in `$EDITOR`** (PRD § Key Bindings). Declined: the
