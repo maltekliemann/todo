@@ -86,6 +86,7 @@ class OutputProtocol(Protocol):
     def print_project(self, detail: ProjectDetail) -> None: ...
     def print_json_projects(self, summaries: list[ProjectSummary]) -> None: ...
     def print_json_project(self, detail: ProjectDetail) -> None: ...
+    def print_json_deleted_project(self, project: Project) -> None: ...
 
 
 def _project_to_dict(project: Project) -> dict[str, object]:
@@ -180,6 +181,9 @@ class _JsonOutput:
 
     def print_json_project(self, detail: ProjectDetail) -> None:
         print(json.dumps(_detail_to_dict(detail), indent=2))
+
+    def print_json_deleted_project(self, project: Project) -> None:
+        print(json.dumps(_project_to_dict(project), indent=2))
 
 
 class RichOutput(_JsonOutput):

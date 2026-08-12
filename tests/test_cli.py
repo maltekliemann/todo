@@ -610,6 +610,16 @@ class TestProjectCli:
         assert data["project_id"] is None
         assert data["project"] is None
 
+    def test_rm_json_emits_the_deleted_project(self, invoke) -> None:
+        """PRD: all project commands support --json."""
+        invoke("project add doomed -D Bye")
+        result = invoke("project rm doomed --json")
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["id"] == 1
+        assert data["name"] == "doomed"
+        assert data["description"] == "Bye"
+
     def test_add_todo_with_unknown_project_fails(self, invoke) -> None:
         result = invoke("add Task --project nope")
         assert result.exit_code == 1

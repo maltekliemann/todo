@@ -551,12 +551,17 @@ def project_log(ref: str, text: str, as_json: bool) -> None:
 
 @project.command("rm")
 @click.argument("ref")
-def project_rm(ref: str) -> None:
+@click.option("--json", "as_json", is_flag=True, help="Output JSON")
+def project_rm(ref: str, as_json: bool) -> None:
     """Delete a project; its items survive unassigned."""
     storage = _storage()
-    project_id = _resolve_project_or_exit(storage, ref)
-    delete_project(storage, project_id)
-    click.echo(f"Deleted project #{project_id}. Items were unassigned.")
+    # Read the record before deleting it: --json reports what was removed.
+    project = _resolve_project_obj_or_exit(storage, ref)
+    delete_project(storage, project.id)
+    if as_json:
+        create_output().print_json_deleted_project(project)
+    else:
+        click.echo(f"Deleted project #{project.id}. Items were unassigned.")
 
 
 @main.command()
