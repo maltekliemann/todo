@@ -5,7 +5,7 @@ from enum import Enum, auto
 from typing import Protocol, runtime_checkable
 
 from todo.domain.enums import Priority, ProjectStatus, Status
-from todo.domain.models import Project, TodoItem
+from todo.domain.models import Project, ProjectUpdate, TodoItem
 
 
 class Unset(Enum):
@@ -16,9 +16,10 @@ class Unset(Enum):
 
 UNSET = Unset.UNSET
 
-# Module-scope alias: inside StorageProtocol the name `list` is the query
-# method, so `list[Project]` would not resolve to the builtin there.
+# Module-scope aliases: inside StorageProtocol the name `list` is the query
+# method, so `list[...]` would not resolve to the builtin there.
 ProjectList = list[Project]
+UpdateList = list[ProjectUpdate]
 
 
 @runtime_checkable
@@ -87,3 +88,7 @@ class StorageProtocol(Protocol):
     ) -> Project: ...
 
     def delete_project(self, project_id: int) -> None: ...
+
+    def add_project_update(self, project_id: int, body: str) -> ProjectUpdate: ...
+
+    def list_project_updates(self, project_id: int) -> UpdateList: ...

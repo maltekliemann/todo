@@ -21,6 +21,14 @@ class Project:
 
 
 @dataclass(frozen=True)
+class ProjectUpdate:
+    id: int
+    project_id: int
+    body: str
+    created_at: datetime
+
+
+@dataclass(frozen=True)
 class TodoItem:
     id: int
     title: str

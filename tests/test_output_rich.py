@@ -9,9 +9,9 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 
 from todo.adapters.output import RichOutput
-from todo.application.queries import ProjectSummary
+from todo.application.queries import ProjectDetail, ProjectSummary
 from todo.domain.enums import Priority, ProjectStatus, Status
-from todo.domain.models import Project, TodoItem
+from todo.domain.models import Project, ProjectUpdate, TodoItem
 
 _NOW = datetime.now(tz=timezone.utc)
 
@@ -169,16 +169,24 @@ class TestRichTagsProjects:
             _item(title="In project"),
             _item(id=2, title="Done one", status=Status.DONE, done_at=_NOW),
         ]
-        rich_out.print_project(_project(), items)
+        updates = [
+            ProjectUpdate(id=1, project_id=1, body="Kickoff done", created_at=_NOW)
+        ]
+        rich_out.print_project(
+            ProjectDetail(project=_project(), items=items, updates=updates)
+        )
         out = capsys.readouterr().out
         assert "infra" in out
         assert "1/2 done" in out
         assert "Infra work" in out
+        assert "Kickoff done" in out
 
     def test_json_helpers(self, rich_out: RichOutput, capsys) -> None:
         import json as jsonlib
 
-        rich_out.print_json_project(_project(), [_item()])
+        detail = ProjectDetail(project=_project(), items=[_item()], updates=[])
+        rich_out.print_json_project(detail)
         data = jsonlib.loads(capsys.readouterr().out)
         assert data["name"] == "infra"
         assert len(data["items"]) == 1
+        assert data["updates"] == []

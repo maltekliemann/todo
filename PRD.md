@@ -70,6 +70,7 @@ todo project show infra                  # description, progress, its items
 todo project edit infra --name platform  # rename / change description
 todo project archive platform            # hide from default list
 todo project rm platform                 # delete; items survive unassigned
+todo project log infra "Kickoff done"    # append a timestamped log entry
 todo add "Upgrade DB" --project infra    # create into a project
 todo edit 7 --project infra              # assign (or --project none to clear)
 todo list --project infra                # filter by project

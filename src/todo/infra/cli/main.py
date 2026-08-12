@@ -17,6 +17,7 @@ from todo.application.commands import (
     delete_todo,
     edit_project,
     edit_todo,
+    log_project_update,
     move_todo,
     unblock_todo,
 )
@@ -401,11 +402,11 @@ def project_add(name: str, description: str, as_json: bool) -> None:
     except DuplicateProjectError as e:
         click.echo(str(e), err=True)
         sys.exit(1)
-    _, items = show_project(storage, str(created.id))
+    detail = show_project(storage, str(created.id))
     if as_json:
-        out.print_json_project(created, items)
+        out.print_json_project(detail)
     else:
-        out.print_project(created, items)
+        out.print_project(detail)
 
 
 @project.command("list")
@@ -430,14 +431,14 @@ def project_show(ref: str, as_json: bool) -> None:
     storage = _storage()
     out = create_output()
     try:
-        proj, items = show_project(storage, ref)
+        detail = show_project(storage, ref)
     except ProjectNotFoundError as e:
         click.echo(str(e), err=True)
         sys.exit(1)
     if as_json:
-        out.print_json_project(proj, items)
+        out.print_json_project(detail)
     else:
-        out.print_project(proj, items)
+        out.print_project(detail)
 
 
 @project.command("edit")
@@ -457,11 +458,11 @@ def project_edit(
     except DuplicateProjectError as e:
         click.echo(str(e), err=True)
         sys.exit(1)
-    _, items = show_project(storage, str(edited.id))
+    detail = show_project(storage, str(edited.id))
     if as_json:
-        out.print_json_project(edited, items)
+        out.print_json_project(detail)
     else:
-        out.print_project(edited, items)
+        out.print_project(detail)
 
 
 @project.command("archive")
@@ -473,11 +474,28 @@ def project_archive(ref: str, as_json: bool) -> None:
     out = create_output()
     project_id = _resolve_project_or_exit(storage, ref)
     archived = archive_project(storage, project_id)
-    _, items = show_project(storage, str(archived.id))
+    detail = show_project(storage, str(archived.id))
     if as_json:
-        out.print_json_project(archived, items)
+        out.print_json_project(detail)
     else:
-        out.print_project(archived, items)
+        out.print_project(detail)
+
+
+@project.command("log")
+@click.argument("ref")
+@click.argument("text")
+@click.option("--json", "as_json", is_flag=True, help="Output JSON")
+def project_log(ref: str, text: str, as_json: bool) -> None:
+    """Append a timestamped update to a project's log."""
+    storage = _storage()
+    out = create_output()
+    project_id = _resolve_project_or_exit(storage, ref)
+    log_project_update(storage, project_id, text)
+    detail = show_project(storage, str(project_id))
+    if as_json:
+        out.print_json_project(detail)
+    else:
+        out.print_project(detail)
 
 
 @project.command("rm")

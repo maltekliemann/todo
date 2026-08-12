@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 from todo.application.contracts.storage import UNSET, Unset
 from todo.domain.enums import Priority, ProjectStatus, Status
-from todo.domain.models import Project, TodoItem
+from todo.domain.models import Project, ProjectUpdate, TodoItem
 from todo.exceptions import (
     DuplicateProjectError,
     NotFoundError,
@@ -50,6 +50,14 @@ CREATE TABLE projects (
 );
 ALTER TABLE todos ADD COLUMN project_id INTEGER
     REFERENCES projects(id) ON DELETE SET NULL;
+""",
+    """\
+CREATE TABLE project_updates (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    body       TEXT    NOT NULL,
+    created_at TEXT    NOT NULL
+);
 """,
 ]
 
@@ -109,9 +117,20 @@ _TODO_SELECT = (
     "LEFT JOIN projects ON projects.id = todos.project_id"
 )
 
-# Class-scope alias: inside SqliteStorage the name `list` is the query method,
-# so `list[Project]` would not resolve to the builtin there.
+
+def _row_to_update(row: sqlite3.Row) -> ProjectUpdate:
+    return ProjectUpdate(
+        id=row["id"],
+        project_id=row["project_id"],
+        body=row["body"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# Class-scope aliases: inside SqliteStorage the name `list` is the query
+# method, so `list[...]` would not resolve to the builtin there.
 ProjectList = list[Project]
+UpdateList = list[ProjectUpdate]
 
 
 class SqliteStorage:
@@ -478,3 +497,28 @@ class SqliteStorage:
         self.get_project(project_id)  # raises ProjectNotFoundError if missing
         self._conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
         self._conn.commit()
+
+    def add_project_update(self, project_id: int, body: str) -> ProjectUpdate:
+        self.get_project(project_id)  # raises ProjectNotFoundError if missing
+        now = _now().isoformat()
+        try:
+            cur = self._conn.execute(
+                "INSERT INTO project_updates (project_id, body, created_at) "
+                "VALUES (?, ?, ?)",
+                (project_id, body, now),
+            )
+            self._conn.commit()
+        except sqlite3.Error as e:
+            raise StorageError(f"Failed to log project update: {e}") from e
+        row = self._conn.execute(
+            "SELECT * FROM project_updates WHERE id = ?", (cur.lastrowid,)
+        ).fetchone()
+        return _row_to_update(row)
+
+    def list_project_updates(self, project_id: int) -> "UpdateList":
+        rows = self._conn.execute(
+            "SELECT * FROM project_updates WHERE project_id = ? "
+            "ORDER BY created_at DESC, id DESC",
+            (project_id,),
+        ).fetchall()
+        return [_row_to_update(r) for r in rows]

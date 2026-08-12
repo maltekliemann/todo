@@ -73,6 +73,7 @@ todo project add NAME             Create a project (-D for description)
 todo project list [--all]         List projects with open/done counts
 todo project show REF             Show a project and its items
 todo project edit REF             Rename / change description
+todo project log REF TEXT         Append a timestamped update to the log
 todo project archive REF          Archive (hide from default list)
 todo project rm REF               Delete; items survive unassigned
 todo summary --since PERIOD       Show completed items in a time window

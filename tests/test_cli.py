@@ -595,6 +595,37 @@ class TestProjectCli:
         data = json.loads(invoke("list --project infra --json").output)
         assert [i["title"] for i in data] == ["In-project"]
 
+    def test_project_log_appends_and_shows(self, cli: CliRunner) -> None:
+        cli.invoke(main, ["project", "add", "infra"])
+        result = cli.invoke(main, ["project", "log", "infra", "Kickoff complete"])
+        assert result.exit_code == 0
+        assert "Kickoff complete" in result.output
+
+        cli.invoke(main, ["project", "log", "infra", "Second update"])
+        data = json.loads(
+            cli.invoke(main, ["project", "show", "infra", "--json"]).output
+        )
+        # Newest first.
+        assert [u["body"] for u in data["updates"]] == [
+            "Second update",
+            "Kickoff complete",
+        ]
+
+    def test_project_log_unknown_project_fails(self, cli: CliRunner) -> None:
+        result = cli.invoke(main, ["project", "log", "nope", "text"])
+        assert result.exit_code == 1
+        assert "not found" in result.stderr
+
+    def test_project_rm_removes_its_log(self, cli: CliRunner) -> None:
+        cli.invoke(main, ["project", "add", "doomed"])
+        cli.invoke(main, ["project", "log", "doomed", "note"])
+        cli.invoke(main, ["project", "rm", "doomed"])
+        cli.invoke(main, ["project", "add", "doomed"])  # fresh, same name
+        data = json.loads(
+            cli.invoke(main, ["project", "show", "doomed", "--json"]).output
+        )
+        assert data["updates"] == []
+
     def test_project_show_lists_its_items(self, invoke) -> None:
         invoke("project add infra")
         invoke("add Task --project infra")

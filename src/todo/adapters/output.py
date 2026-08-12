@@ -5,7 +5,7 @@ import sys
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
-from todo.application.queries import ProjectSummary
+from todo.application.queries import ProjectDetail, ProjectSummary
 from todo.domain.enums import Priority, Status
 from todo.domain.models import Project, TodoItem
 
@@ -75,9 +75,9 @@ class OutputProtocol(Protocol):
     def print_tags(self, counts: list[tuple[str, int]]) -> None: ...
     def print_json_tags(self, counts: list[tuple[str, int]]) -> None: ...
     def print_projects(self, summaries: list[ProjectSummary]) -> None: ...
-    def print_project(self, project: Project, items: list[TodoItem]) -> None: ...
+    def print_project(self, detail: ProjectDetail) -> None: ...
     def print_json_projects(self, summaries: list[ProjectSummary]) -> None: ...
-    def print_json_project(self, project: Project, items: list[TodoItem]) -> None: ...
+    def print_json_project(self, detail: ProjectDetail) -> None: ...
 
 
 def _project_to_dict(project: Project) -> dict[str, object]:
@@ -88,6 +88,21 @@ def _project_to_dict(project: Project) -> dict[str, object]:
         "status": project.status.value,
         "created_at": project.created_at.isoformat(),
         "updated_at": project.updated_at.isoformat(),
+    }
+
+
+def _detail_to_dict(detail: ProjectDetail) -> dict[str, object]:
+    return {
+        **_project_to_dict(detail.project),
+        "items": [_item_to_dict(i) for i in detail.items],
+        "updates": [
+            {
+                "id": u.id,
+                "body": u.body,
+                "created_at": u.created_at.isoformat(),
+            }
+            for u in detail.updates
+        ],
     }
 
 
@@ -283,9 +298,10 @@ class RichOutput:
             )
         self._console.print(table)
 
-    def print_project(self, project: Project, items: list[TodoItem]) -> None:
+    def print_project(self, detail: ProjectDetail) -> None:
         from rich.text import Text
 
+        project, items = detail.project, detail.items
         done = sum(1 for i in items if i.is_done)
         header = Text()
         header.append(f"#{project.id}  ", style="dim")
@@ -296,6 +312,11 @@ class RichOutput:
         self._console.print(header)
         if project.description:
             self._console.print(project.description)
+        if detail.updates:
+            self._console.print("\n[dim]Log:[/dim]")
+            for update in detail.updates:
+                stamp = update.created_at.strftime("%b %d, %Y %H:%M")
+                self._console.print(f"  [dim]{stamp}[/dim]  {update.body}")
         if items:
             self._console.print()
             self.print_list(items)
@@ -315,16 +336,8 @@ class RichOutput:
             )
         )
 
-    def print_json_project(self, project: Project, items: list[TodoItem]) -> None:
-        print(
-            json.dumps(
-                {
-                    **_project_to_dict(project),
-                    "items": [_item_to_dict(i) for i in items],
-                },
-                indent=2,
-            )
-        )
+    def print_json_project(self, detail: ProjectDetail) -> None:
+        print(json.dumps(_detail_to_dict(detail), indent=2))
 
 
 class PlainOutput:
@@ -419,12 +432,18 @@ class PlainOutput:
                 f"open:{s.open_count} done:{s.done_count}{desc}"
             )
 
-    def print_project(self, project: Project, items: list[TodoItem]) -> None:
+    def print_project(self, detail: ProjectDetail) -> None:
+        project, items = detail.project, detail.items
         done = sum(1 for i in items if i.is_done)
         suffix = " (archived)" if project.is_archived else ""
         print(f"#{project.id}  {project.name}{suffix}  {done}/{len(items)} done")
         if project.description:
             print(project.description)
+        if detail.updates:
+            print("\nLog:")
+            for update in detail.updates:
+                stamp = update.created_at.strftime("%b %d, %Y %H:%M")
+                print(f"  {stamp}  {update.body}")
         if items:
             print()
             self.print_list(items)
@@ -444,16 +463,8 @@ class PlainOutput:
             )
         )
 
-    def print_json_project(self, project: Project, items: list[TodoItem]) -> None:
-        print(
-            json.dumps(
-                {
-                    **_project_to_dict(project),
-                    "items": [_item_to_dict(i) for i in items],
-                },
-                indent=2,
-            )
-        )
+    def print_json_project(self, detail: ProjectDetail) -> None:
+        print(json.dumps(_detail_to_dict(detail), indent=2))
 
 
 def _pri_style(p: Priority) -> str:

@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 from todo.application.contracts.storage import StorageProtocol
 from todo.domain.enums import Priority, Status
-from todo.domain.models import Project, TodoItem
+from todo.domain.models import Project, ProjectUpdate, TodoItem
 from todo.exceptions import ProjectNotFoundError
 
 
@@ -86,14 +86,24 @@ def list_projects(
     ]
 
 
+@dataclass(frozen=True)
+class ProjectDetail:
+    project: Project
+    items: list[TodoItem]
+    updates: list[ProjectUpdate]
+
+
 def show_project(
     storage: StorageProtocol,
     ref: str,
-) -> tuple[Project, list[TodoItem]]:
-    """A project plus all of its items (done included)."""
+) -> ProjectDetail:
+    """A project plus all of its items (done included) and its update log."""
     project = resolve_project(storage, ref)
-    items = storage.list(project_id=project.id, include_done=True)
-    return project, items
+    return ProjectDetail(
+        project=project,
+        items=storage.list(project_id=project.id, include_done=True),
+        updates=storage.list_project_updates(project.id),
+    )
 
 
 def count_tags(storage: StorageProtocol) -> list[tuple[str, int]]:

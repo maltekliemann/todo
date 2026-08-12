@@ -5,7 +5,7 @@ from datetime import date
 
 from todo.application.contracts.storage import StorageProtocol, Unset
 from todo.domain.enums import Priority, ProjectStatus, Status
-from todo.domain.models import Project, TodoItem
+from todo.domain.models import Project, ProjectUpdate, TodoItem
 from todo.exceptions import DependencyError
 
 
@@ -171,6 +171,14 @@ def delete_project(
     project_id: int,
 ) -> None:
     storage.delete_project(project_id)
+
+
+def log_project_update(
+    storage: StorageProtocol,
+    project_id: int,
+    body: str,
+) -> ProjectUpdate:
+    return storage.add_project_update(project_id, body)
 
 
 def assign_project(
