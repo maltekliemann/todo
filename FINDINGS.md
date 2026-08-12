@@ -203,12 +203,12 @@ real transaction. Treat 'my own fix' as untrusted input to this round.
       Scenario: `project add myproj -D 'line1\nline2'` → piped `project list` emits a bare 'line2' second physical line; a one-row-per-project consumer mis-parses it as another record.
 - [x] (3f6395d) `src/todo/application/commands.py:314` [cleanup] — log_project_update accepts an empty/whitespace body, producing a dangling timestamp-only line in the project log
       Scenario: `todo project log myproj ""` succeeds; `project show` prints 'Log:' + '  Aug 12, 2026 11:09' with no text, and there is no update-delete command to remove it.
-- [ ] `src/todo/tui/list_view.py:752` [cleanup] — _update_detail re-queries show_todo (4 SQL queries) on every RowHighlighted although _refresh_list already holds the fully hydrated item in self._items
+- [x] (see round-6 commit 4) `src/todo/tui/list_view.py:752` [cleanup] — _update_detail re-queries show_todo (4 SQL queries) on every RowHighlighted although _refresh_list already holds the fully hydrated item in self._items
       Scenario: Holding arrow-down fires show_todo → storage.get per row (item + two dependency queries + blocker-status query); a dict built during _refresh_list serves the pane with zero queries; the 2s poll covers staleness.
-- [ ] (capped-out, verified CONFIRMED) `src/todo/application/commands.py:239` [cleanup] — block_todo_batch reruns the full cycle-check BFS (edge-table load + item hydrations) once per blocker inside one IMMEDIATE transaction
+- [x] (see round-6 commit 4) (capped-out, verified CONFIRMED) `src/todo/application/commands.py:239` [cleanup] — block_todo_batch reruns the full cycle-check BFS (edge-table load + item hydrations) once per blocker inside one IMMEDIATE transaction
       Scenario: `todo block 1 2 3 4` loads dependency_edges() and hydrates items per blocker; load the graph once per batch and update it incrementally.
-- [ ] (capped-out, verified CONFIRMED) `src/todo/tui/list_view.py:512` [cleanup] — The deadline/created/updated/done/project/tags/blocked-by/blocking metadata block is written three times (InspectDialog.compose, detail pane, and a third site); extract one shared presenter
-- [ ] (capped-out, verified PLAUSIBLE) `src/todo/adapters/output.py:248` [cleanup] — All six print_json_* methods are byte-identical between RichOutput and PlainOutput; extract a shared base/mixin so the copies cannot drift
+- [x] (see round-6 commit 4) (capped-out, verified CONFIRMED) `src/todo/tui/list_view.py:512` [cleanup] — The deadline/created/updated/done/project/tags/blocked-by/blocking metadata block is written three times (InspectDialog.compose, detail pane, and a third site); extract one shared presenter
+- [x] (see round-6 commit 4) (capped-out, verified PLAUSIBLE) `src/todo/adapters/output.py:248` [cleanup] — All six print_json_* methods are byte-identical between RichOutput and PlainOutput; extract a shared base/mixin so the copies cannot drift
 
 ## Triage log
 
@@ -226,6 +226,7 @@ Anything without a failed reproduction attempt gets fixed, not triaged.)
 
 ## Status log
 
+- iter 15: round-6 queue closed — v4 tag migration, read-path/init StorageError wrapping, tag dedupe, description/log normalization, spaced $EDITOR fallback, verbatim body round-trip, age buckets, detail-pane cache, batch graph load, meta/JSON dedup (295b0f0, 3f6395d, 7a057ab, +1). 341 tests green. QUEUE EMPTY (round 6).
 - iter 1: markup class closed, 8 findings (3508897). 225 tests green.
 - iter 12: round-5 queue closed — Python migration v3 (collision-safe, exact normalization), dialog StorageError guards, buffer read-back guard, delete wrapping, edge-walk + tag-scan perf. 303 tests green. QUEUE EMPTY (round 5); artifacts finding triaged as intentional.
 - iter 11: round-4 queue closed — migration v3 legacy normalization, project-name single-line contract, delete unblock parity, empty --project parity, helper dedupe, SQL project counts (ca68b63). 297 tests green. QUEUE EMPTY (round 4).
