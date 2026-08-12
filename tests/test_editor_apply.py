@@ -10,12 +10,12 @@ from todo.adapters.sqlite_storage import SqliteStorage
 from todo.application.commands import add_todo, block_todo
 from todo.domain.enums import Priority, Status
 from todo.tui.app import TodoApp
-from todo.tui.list_view import _item_to_editor_text, apply_editor_edit
+from todo.tui.editor import apply_editor_edit, item_to_editor_text
 
 
 def _edited(storage: SqliteStorage, item_id: int, **replacements: str) -> str:
     """The editor buffer for an item with whole lines replaced by field name."""
-    text = _item_to_editor_text(storage.get(item_id))
+    text = item_to_editor_text(storage.get(item_id))
     lines = []
     for line in text.split("\n"):
         key = line.partition(":")[0].strip().lower()
@@ -87,7 +87,7 @@ class TestEditorBodyContract:
         add_todo(storage, "Task", body="important body text")
         text = "\n".join(
             line
-            for line in _item_to_editor_text(storage.get(1)).split("\n")
+            for line in item_to_editor_text(storage.get(1)).split("\n")
             if not line.startswith("# Body")
         )
         with pytest.raises(ValueError, match="[Bb]ody"):
@@ -96,7 +96,7 @@ class TestEditorBodyContract:
 
     def test_emptying_body_below_marker_clears_it(self, storage: SqliteStorage) -> None:
         add_todo(storage, "Task", body="old body")
-        text = _item_to_editor_text(storage.get(1))
+        text = item_to_editor_text(storage.get(1))
         marker_idx = text.index("# Body")
         result = apply_editor_edit(
             storage, 1, text[: marker_idx + text[marker_idx:].index("\n") + 1]
@@ -128,23 +128,23 @@ class TestEditorInvalidFields:
 
 class TestEditorCommand:
     def test_editor_value_with_arguments_is_split(self) -> None:
-        from todo.tui.list_view import _editor_command
+        from todo.tui.editor import editor_command
 
-        assert _editor_command("code --wait", "/tmp/x") == [
+        assert editor_command("code --wait", "/tmp/x") == [
             "code",
             "--wait",
             "/tmp/x",
         ]
 
     def test_plain_editor_value(self) -> None:
-        from todo.tui.list_view import _editor_command
+        from todo.tui.editor import editor_command
 
-        assert _editor_command("vi", "/tmp/x") == ["vi", "/tmp/x"]
+        assert editor_command("vi", "/tmp/x") == ["vi", "/tmp/x"]
 
     def test_quoted_editor_path(self) -> None:
-        from todo.tui.list_view import _editor_command
+        from todo.tui.editor import editor_command
 
-        assert _editor_command("'/opt/My Editor/ed' -f", "/tmp/x") == [
+        assert editor_command("'/opt/My Editor/ed' -f", "/tmp/x") == [
             "/opt/My Editor/ed",
             "-f",
             "/tmp/x",
@@ -165,7 +165,7 @@ class TestApplyEditedBuffer:
         async with app.run_test() as pilot:
             await pilot.pause()
             view = app.query_one(TodoListView)
-            original = _item_to_editor_text(storage.get(1))
+            original = item_to_editor_text(storage.get(1))
             edited = original.replace("deadline: ", "deadline: 2026/01/01")
             buf = tmp_path / "buffer.todo.txt"
             buf.write_text(edited)
@@ -188,7 +188,7 @@ class TestApplyEditedBuffer:
         async with app.run_test() as pilot:
             await pilot.pause()
             view = app.query_one(TodoListView)
-            original = _item_to_editor_text(storage.get(1))
+            original = item_to_editor_text(storage.get(1))
             edited = original.replace("title: Task", "title: Renamed")
             buf = tmp_path / "buffer.todo.txt"
             buf.write_text(edited)
@@ -209,7 +209,7 @@ class TestApplyEditedBuffer:
         async with app.run_test() as pilot:
             await pilot.pause()
             view = app.query_one(TodoListView)
-            original = _item_to_editor_text(storage.get(1))
+            original = item_to_editor_text(storage.get(1))
             edited = original.replace("title: Task", "title: Renamed")
             buf = tmp_path / "buffer.todo.txt"
             buf.write_text(edited)
@@ -241,16 +241,16 @@ class TestEditorFailureHandling:
 
 class TestEditorCommandValidation:
     def test_empty_editor_value_raises(self) -> None:
-        from todo.tui.list_view import _editor_command
+        from todo.tui.editor import editor_command
 
         with pytest.raises(ValueError, match="EDITOR"):
-            _editor_command("", "/tmp/x")
+            editor_command("", "/tmp/x")
 
     def test_unbalanced_quote_raises_value_error(self) -> None:
-        from todo.tui.list_view import _editor_command
+        from todo.tui.editor import editor_command
 
         with pytest.raises(ValueError):
-            _editor_command('code "', "/tmp/x")
+            editor_command('code "', "/tmp/x")
 
 
 class TestEditorEmptyTitle:
@@ -289,7 +289,7 @@ class TestEditorBodyWhitespacePreserved:
 
     def test_edited_body_preserves_indentation(self, storage: SqliteStorage) -> None:
         add_todo(storage, "Task", body="old")
-        text = _item_to_editor_text(storage.get(1))
+        text = item_to_editor_text(storage.get(1))
         edited = text.replace("\nold", "\n    def f():\n        pass") + "\n"
         result = apply_editor_edit(storage, 1, edited)
         assert result.item.body == "    def f():\n        pass"
@@ -299,12 +299,12 @@ class TestEditorPathWithSpaces:
     def test_unquoted_spaced_path_falls_back_to_verbatim(self, tmp_path: Path) -> None:
         """An unquoted $EDITOR path containing spaces (common on macOS)
         worked before shlex-splitting existed and must keep working."""
-        from todo.tui.list_view import _editor_command
+        from todo.tui.editor import editor_command
 
         editor = tmp_path / "My Editor"
         editor.write_text("#!/bin/sh\nexit 0\n")
         editor.chmod(0o755)
-        assert _editor_command(str(editor), "/tmp/x") == [str(editor), "/tmp/x"]
+        assert editor_command(str(editor), "/tmp/x") == [str(editor), "/tmp/x"]
 
 
 class TestWhitespaceOnlyBodyEdit:
@@ -321,7 +321,7 @@ class TestWhitespaceOnlyBodyEdit:
         async with app.run_test() as pilot:
             await pilot.pause()
             view = app.query_one(TodoListView)
-            original = _item_to_editor_text(storage.get(1))
+            original = item_to_editor_text(storage.get(1))
             edited = original + "\n\n"  # append a trailing blank line to the body
             buf = tmp_path / "buffer.todo.txt"
             buf.write_text(edited)
@@ -342,7 +342,7 @@ class TestWhitespaceOnlyBodyEdit:
             await pilot.pause()
             view = app.query_one(TodoListView)
             item_before = storage.get(1)
-            original = _item_to_editor_text(item_before)
+            original = item_to_editor_text(item_before)
             edited = original + "\n"  # only the editor's final newline
             buf = tmp_path / "buffer.todo.txt"
             buf.write_text(edited)
@@ -364,7 +364,7 @@ class TestMissingBodyMarkerErrors:
         add_todo(storage, "Task", body="draft the outline")
         text = "\n".join(
             line
-            for line in _item_to_editor_text(storage.get(1)).split("\n")
+            for line in item_to_editor_text(storage.get(1)).split("\n")
             if not line.startswith("# Body")
         )
         text += "\nsend to Alice"  # the body edit that silently vanished
@@ -383,7 +383,7 @@ class TestMissingBodyMarkerErrors:
         async with app.run_test() as pilot:
             await pilot.pause()
             view = app.query_one(TodoListView)
-            original = _item_to_editor_text(storage.get(1))
+            original = item_to_editor_text(storage.get(1))
             edited = "\n".join(
                 line for line in original.split("\n") if not line.startswith("# Body")
             )
@@ -399,7 +399,7 @@ class TestMissingBodyMarkerErrors:
         """With the marker required, 'status: done' inside the body region
         is body text, never a field override."""
         add_todo(storage, "Task")
-        text = _item_to_editor_text(storage.get(1)) + "status: done"
+        text = item_to_editor_text(storage.get(1)) + "status: done"
         result = apply_editor_edit(storage, 1, text)
         assert result.item.status.value == "todo"
         assert "status: done" in result.item.body
@@ -481,7 +481,7 @@ class TestEditorEncodingRobustness:
         async with app.run_test() as pilot:
             await pilot.pause()
             view = app.query_one(TodoListView)
-            path = view._write_editor_buffer(_item_to_editor_text(storage.get(1)))
+            path = view._write_editor_buffer(item_to_editor_text(storage.get(1)))
             try:
                 assert "Ünïcode ✅ täsk" in Path(path).read_text(encoding="utf-8")
                 assert view._read_edited_buffer(path) is not None
@@ -521,7 +521,7 @@ class TestBlankEnumFieldsError:
         add_todo(storage, "Task", priority=Priority.HIGH)
         text = "\n".join(
             line
-            for line in _item_to_editor_text(storage.get(1)).split("\n")
+            for line in item_to_editor_text(storage.get(1)).split("\n")
             if not line.startswith("priority:")
         )
         assert apply_editor_edit(storage, 1, text).item.priority == Priority.HIGH

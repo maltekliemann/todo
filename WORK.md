@@ -5,12 +5,6 @@ reproduced against the running code before being listed.
 
 ## todo
 
-4. **TUI has no priority colour coding.** PRD § Priority Color Coding —
-   urgent red, high orange, low dim. Repro: every cell in the table comes
-   back with `style == ""`; only blocked rows get `dim`.
-5. **TUI does not highlight approaching/overdue deadlines.** PRD § Deadline
-   Warnings — "`todo ui` highlights rows with approaching/overdue deadlines
-   in the TUI". Repro: the `🔴 Aug 09 (3d overdue)` cell has `style == ""`.
 6. **`tui/list_view.py` is 1259 lines holding 8 classes plus the editor
    protocol.** LOOP3 § Maintain clean architecture — "one reason to change
    per module, no file over ~400 lines".
@@ -36,3 +30,7 @@ reproduced against the running code before being listed.
 2. **TUI `j`/`k` navigation** — PRD § Key Bindings. `18f0f29`.
 3. **TUI `h`/`l`/`←`/`→` status stepping** — PRD § Key Bindings. `<`/`>`
    kept. `18f0f29`.
+4. **TUI priority colour coding** — PRD § Priority Color Coding. `c7d61bc`.
+5. **TUI deadline highlighting** — PRD § Deadline Warnings. The deadline
+   cell carries the colour, as in the CLI, rather than painting the whole
+   row. `c7d61bc`.
