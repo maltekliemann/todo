@@ -633,7 +633,12 @@ class TodoListView(Widget):
         table.add_columns("#", "Pri", "Status", "Title", "Deadline", "Age")
         table.focus()
         self._refresh_list()
-        self._last_data_version = self._storage.data_version()
+        try:
+            self._last_data_version = self._storage.data_version()
+        except TodoError:
+            # The guarded refresh above already notified; the poll reports
+            # a persisting failure once per streak.
+            pass
         self.set_interval(self.POLL_INTERVAL_SECONDS, self._poll_for_external_changes)
 
     def _poll_for_external_changes(self) -> None:
@@ -678,7 +683,10 @@ class TodoListView(Widget):
         table = self.query_one("#item-list", TodoTable)
         previous_id = self._selected_item_id()
         previous_cursor = table.cursor_row
-        table.clear()
+
+        # All storage reads happen BEFORE the table is touched: a degraded
+        # (notified) read failure must leave the last good rows visible,
+        # not wipe the list into a dead blank state.
 
         # Tag/priority/project filtering happens in SQL via list_todos; only
         # the search filter stays here because it also matches tag names,
@@ -722,6 +730,8 @@ class TodoListView(Widget):
         # storage on every cursor move; the refresh that builds the rows is
         # the same one that builds the cache, so they cannot disagree.
         self._item_by_id = {i.id: i for i in self._items}
+
+        table.clear()
 
         # Group items by status, preserving the per-group ordering from the
         # storage layer (priority, then created_at).
@@ -785,6 +795,10 @@ class TodoListView(Widget):
                 table._skip_separators(1)
             else:
                 table.move_cursor(row=0)
+        else:
+            # An emptied table fires no RowHighlighted event, so the pane
+            # would keep showing a deleted/filtered-out item forever.
+            self._update_detail(None)
 
         self._last_data_version = self._storage.data_version()
 
@@ -928,15 +942,27 @@ class TodoListView(Widget):
             os.unlink(tmp_path)
             return
 
-        try:
-            with open(tmp_path) as f:
-                edited = f.read()
-        except OSError as exc:
-            # An editor wrapper that moved/deleted its buffer file.
-            self.notify(f"Editor failed: {escape(str(exc))}", severity="error")
+        edited = self._read_edited_buffer(tmp_path)
+        if edited is None:
             return
 
         self._apply_edited_buffer(item_id, text, edited, tmp_path)
+
+    def _read_edited_buffer(self, tmp_path: str) -> str | None:
+        """Read the buffer back after the editor ran; on failure, report
+        where the (possibly recoverable) buffer lives — the flow must never
+        strand a file with the user's work silently."""
+        try:
+            with open(tmp_path) as f:
+                return f.read()
+        except OSError as exc:
+            self.notify(
+                f"Editor failed: {escape(str(exc))} — "
+                f"your buffer is kept at {escape(tmp_path)}",
+                severity="error",
+                timeout=12,
+            )
+            return None
 
     def _apply_edited_buffer(
         self, item_id: int, original: str, edited: str, tmp_path: str

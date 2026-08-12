@@ -1271,3 +1271,85 @@ class TestStorageFailureDoesNotCrashTui:
             await pilot.press("greater_than_sign")
             await pilot.pause()
             assert app.is_running
+
+
+class TestRefreshRobustness:
+    async def test_transient_read_failure_keeps_last_good_rows(
+        self, seeded_storage: SqliteStorage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A degraded (notified) refresh must not wipe the table — query
+        first, clear only on success."""
+        app = TodoApp(storage=seeded_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            table = app.query_one("#item-list", DataTable)
+            assert _item_rows(table) == 3
+
+            from todo.exceptions import StorageError
+
+            original = SqliteStorage.list
+            fail_once = {"armed": True}
+
+            def flaky(self: SqliteStorage, **kwargs: object):  # type: ignore[no-untyped-def]
+                if fail_once["armed"]:
+                    fail_once["armed"] = False
+                    raise StorageError("database disk image is malformed")
+                return original(self, **kwargs)
+
+            monkeypatch.setattr(SqliteStorage, "list", flaky)
+            await pilot.press("d")
+            await pilot.pause()
+            assert app.is_running
+            # Stale but visible beats blank and dead.
+            assert _item_rows(table) == 3
+
+    async def test_emptied_table_clears_detail_pane(self, db_path: Path) -> None:
+        """Deleting the last item must not leave it rendered in the detail
+        pane forever."""
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "only item", body="ghost body")
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("x")
+            await pilot.pause()
+            await pilot.press("y")
+            await pilot.pause()
+            title = str(app.query_one("#detail-title", Static).render())
+            body = str(app.query_one("#detail-body", Static).render())
+            assert "only item" not in title
+            assert "ghost body" not in body
+
+    async def test_startup_survives_data_version_failure(
+        self, seeded_storage: SqliteStorage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from todo.exceptions import StorageError
+
+        def boom(self: SqliteStorage) -> int:
+            raise StorageError("database disk image is malformed")
+
+        monkeypatch.setattr(SqliteStorage, "data_version", boom)
+        app = TodoApp(storage=seeded_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert app.is_running
+
+
+class TestEditorBufferReadFailure:
+    async def test_unreadable_buffer_reports_path_and_keeps_file(
+        self, seeded_storage: SqliteStorage, tmp_path: Path
+    ) -> None:
+        """An unreadable buffer after a successful editor run must tell the
+        user where their (possibly recoverable) buffer lives — never strand
+        it silently."""
+        app = TodoApp(storage=seeded_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            view = app.query_one(TodoListView)
+            missing = tmp_path / "vanished.todo.txt"
+            notices: list[str] = []
+            view.notify = lambda msg, **kw: notices.append(str(msg))  # type: ignore[method-assign]
+            content = view._read_edited_buffer(str(missing))
+            assert content is None
+            assert notices
+            assert str(missing) in notices[0]
