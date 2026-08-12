@@ -281,6 +281,22 @@ round 10's own fixes. A partial review is not a clean review.
 - [x] (ce4af95) `src/todo/tui/list_view.py:684` [cleanup] — The error-toast streak guard covers only data_version failures, so a failing refresh toasts every 2s forever and buries the UI
 - [x] (ce4af95) `src/todo/tui/list_view.py:823` [correctness] — REGRESSION (round 10): re-keying the project filter on id dropped the name, so a deleted filtered project leaves a filter labelled '?' hiding items that still exist
 
+## Round 12 — exit-gate review wf_55e86918-717 (2026-08-12), 9 distinct
+
+Three of these were regressions from ROUND 11's own fixes, which is the
+clearest evidence yet that the fix-review loop generates a meaningful share
+of its own findings.
+
+- [x] (355c4fb) `src/todo/tui/list_view.py:496` [correctness] — Creating an item while the TUI project filter was active stored it unfiled, so it never appeared and gave no feedback; the user re-adds it and duplicates accumulate invisibly
+- [x] (18f8401) `src/todo/infra/cli/main.py:299` [correctness] — REGRESSION (round 11): making blank tags an error removed the ONLY CLI way to clear tags; `--tag none` is now the sentinel, matching --deadline/--project, and 'none' is a reserved tag name
+- [x] (18f8401) `src/todo/application/queries.py:36` [correctness] — REGRESSION (round 11): the tag filter stayed on strip() while the write path moved to single_line, so `-t 'deep  work'` could not match the tag that exact string created
+- [x] (18f8401) `src/todo/tui/list_view.py:65` [correctness] — REGRESSION (round 11): _escape_markup doubled backslashes, which Textual never collapses, so every Windows path/regex/LaTeX fragment rendered corrupted in all TUI sinks
+- [x] (18f8401) `src/todo/tui/list_view.py:291` [correctness] — The app's own '[y] Yes   [n] No' confirm hint was eaten as markup, so the user saw no key labels
+- [x] (18f8401) `src/todo/adapters/sqlite_storage.py:82` [cleanup] — The v4 migration's _normalize_tag_string omitted single_line, so legacy padded tags never converged on the write-path form
+- [x] (355c4fb) `src/todo/adapters/output.py:194` [correctness] — Fixed-width Deadline column could not hold a two-digit overdue string, wrapping every such row in two
+- [x] (355c4fb) `src/todo/adapters/output.py:374` [correctness] — Unpadded HIGH label shifted the status/title columns of the machine-parseable plain output on every high-priority row
+- [x] (TRIAGED — see Triage log) `src/todo/adapters/sqlite_storage.py:363` [cleanup] — _get_unguarded duplicates _hydrate_dependencies' blocked_by/blocking computation
+
 ## Triage log
 
 - Round-5 finding `FINDINGS.md:1` (process artifacts committed to repo root):
@@ -291,12 +307,26 @@ round 10's own fixes. A partial review is not a clean review.
   and committed deliberately; removal would be done at the user's request at
   the end, not silently mid-loop.
 
+
+- Round-12 finding `sqlite_storage.py:363` (_get_unguarded duplicates
+  _hydrate_dependencies): TRIAGED — not fixed. This is a pure
+  code-duplication/refactor finding, verified only PLAUSIBLE, with no
+  demonstrated behavioral divergence between the two paths: single-row and
+  multi-row hydration produce identical results today (covered by existing
+  tests). The review prompt explicitly excludes duplication findings without
+  a behavioral difference; this one was reported anyway. Merging the paths is
+  a non-trivial refactor of the hottest read path in the app, and doing it at
+  this point would risk exactly the kind of fix-induced regression that
+  rounds 11 and 12 kept surfacing. Left as-is deliberately.
+
 (Only for findings believed to be false positives: the finding, the
 reproduction attempt that failed, and why the code is actually correct.
 Anything without a failed reproduction attempt gets fixed, not triaged.)
 
 ## Status log
 
+- iter 23: round-12 queue closed — invisible-create under filter, tag clear sentinel, tag filter/migration symmetry, backslash escaping, confirm-dialog hints, deadline column width, plain priority alignment (18f8401, 355c4fb); one duplication finding triaged. 435 tests green. QUEUE EMPTY (round 12).
+  THREE of round 12's findings were regressions from round 11's fixes.
 - iter 22: round-11 queue closed — undecodable-row + non-UTF-8 buffer wrapping, two round-10 regressions (pre-read data_version capture, named deleted project filter), poll toast streak, blank-tag rejection, single-line tags, overdue-first sorting, Textual-aware markup escaping, blank editor enum fields (42b46c4, ce4af95, 654d24c, eab087b). 421 tests green. QUEUE EMPTY (round 11).
   NOTE: the first pass-11 run reported 'no findings' but 4/6 agents died on a spend limit; that verdict
   was voided and the rerun found 10 real defects. A partial review never counts as clean.
