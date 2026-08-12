@@ -3,18 +3,14 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
-from datetime import date
 
 from rich.text import Text
 from textual import on
 from textual.app import ComposeResult, SuspendNotSupported
 from textual.binding import Binding
-from textual.containers import Container, Vertical, VerticalScroll
-from textual.coordinate import Coordinate
-from textual.message import Message
-from textual.screen import ModalScreen
+from textual.containers import Vertical
 from textual.widget import Widget
-from textual.widgets import DataTable, Footer, Input, Label, Select, Static
+from textual.widgets import DataTable, Footer, Static
 
 from todo.adapters.output import (
     _deadline_str,
@@ -26,12 +22,9 @@ from todo.adapters.output import (
 )
 from todo.application.commands import (
     CompletionResult,
-    add_todo,
-    block_todo,
     complete_todo,
     delete_todo,
     move_todo,
-    unblock_todo,
 )
 from todo.application.contracts.storage import StorageProtocol
 from todo.application.queries import (
@@ -42,479 +35,17 @@ from todo.application.queries import (
 )
 from todo.domain.enums import Priority, Status
 from todo.domain.models import TodoItem
-from todo.domain.tags import split_tags
 from todo.exceptions import NotFoundError, TodoError
+from todo.tui.dialogs import (
+    BlockDialog,
+    ConfirmDialog,
+    InspectDialog,
+    NewItemDialog,
+    SearchDialog,
+)
 from todo.tui.editor import apply_editor_edit, editor_command, item_to_editor_text
-
-_SEPARATOR_PREFIX = "__sep_"
-
-
-def _is_separator(value: object) -> bool:
-    return isinstance(value, str) and value.startswith(_SEPARATOR_PREFIX)
-
-
-def _join_styles(*styles: str) -> str:
-    """Combine Rich style strings, dropping the empty ones."""
-    return " ".join(s for s in styles if s)
-
-
-def _escape_markup(text: str) -> str:
-    """Escape user text for a markup-parsing sink.
-
-    rich.markup.escape only escapes "[" before [a-z#/@], but Textual's
-    Content.from_markup also parses [WIP], [Red] and [$VAR] — so a title
-    like "[WIP] refactor" was silently swallowed.
-
-    Escape brackets ONLY. Textual (unlike rich) never collapses "\\\\" back
-    to a single backslash, so doubling them here rendered every Windows
-    path, regex and LaTeX fragment with doubled slashes.
-    """
-    return text.replace("[", "\\[")
-
-
-class TodoTable(DataTable["str | Text"]):
-    """DataTable that skips over separator rows when navigating with up/down.
-
-    Also carries the PRD's navigation keys: j/k alongside the arrows, and
-    the horizontal keys repurposed from column movement (meaningless under
-    a row cursor) to stepping the selected item's status.
-    """
-
-    BINDINGS = [
-        Binding("j", "cursor_down", "Down", show=False),
-        Binding("k", "cursor_up", "Up", show=False),
-        Binding("l", "cursor_right", "Status >", show=False),
-        Binding("h", "cursor_left", "Status <", show=False),
-    ]
-
-    class StatusStep(Message):
-        """Request from the table to move the selected item's status."""
-
-        def __init__(self, table: TodoTable, delta: int) -> None:
-            super().__init__()
-            self.table = table
-            self.delta = delta
-
-        @property
-        def control(self) -> TodoTable:
-            return self.table
-
-    def _current_row_key(self) -> object:
-        if self.row_count == 0:
-            return None
-        try:
-            return self.coordinate_to_cell_key(
-                Coordinate(self.cursor_row, 0)
-            ).row_key.value
-        except Exception:
-            return None
-
-    def _row_key_at(self, row: int) -> object:
-        try:
-            return self.coordinate_to_cell_key(Coordinate(row, 0)).row_key.value
-        except Exception:
-            return None
-
-    def _first_non_separator(self, start: int, direction: int) -> int | None:
-        row = start
-        while 0 <= row < self.row_count:
-            if not _is_separator(self._row_key_at(row)):
-                return row
-            row += direction
-        return None
-
-    def _skip_separators(self, direction: int) -> None:
-        # direction: +1 = down, -1 = up. Scan that way for the first item
-        # row; at a boundary scan the other way, so the cursor never rests
-        # on a separator.
-        if not _is_separator(self._current_row_key()):
-            return
-        target = self._first_non_separator(self.cursor_row, direction)
-        if target is None:
-            target = self._first_non_separator(self.cursor_row, -direction)
-        if target is not None:
-            self.move_cursor(row=target)
-
-    def action_cursor_down(self) -> None:
-        super().action_cursor_down()
-        self._skip_separators(1)
-
-    def action_cursor_up(self) -> None:
-        super().action_cursor_up()
-        self._skip_separators(-1)
-
-    def action_cursor_right(self) -> None:
-        self.post_message(self.StatusStep(self, 1))
-
-    def action_cursor_left(self) -> None:
-        self.post_message(self.StatusStep(self, -1))
-
-
-def _meta_lines(item: TodoItem) -> list[str]:
-    """The metadata block shared by the detail pane and the inspect modal.
-
-    One source of truth so the two renderings can never drift. User text
-    (project name, tags) is escaped — both widgets parse markup.
-    """
-    first = f"Priority: {item.priority.value}    Status: {item.status.value}"
-    if item.deadline:
-        first += f"    Deadline: {_deadline_str(item)}"
-    second = (
-        f"Created: {item.created_at.strftime('%b %d, %Y %H:%M')}    "
-        f"Updated: {item.updated_at.strftime('%b %d, %Y %H:%M')}"
-    )
-    if item.done_at:
-        second += f"    Done: {item.done_at.strftime('%b %d, %Y %H:%M')}"
-    lines = [first, second]
-    if item.project_name:
-        lines.append(f"Project: {_escape_markup(item.project_name)}")
-    if item.tags:
-        lines.append(f"Tags: {_escape_markup(', '.join(item.tags))}")
-    if item.blocked_by:
-        lines.append(f"Blocked by: {', '.join(f'#{i}' for i in item.blocked_by)}")
-    if item.blocking:
-        lines.append(f"Blocking: {', '.join(f'#{i}' for i in item.blocking)}")
-    return lines
-
-
-class ConfirmDialog(ModalScreen[bool]):
-    BINDINGS = [
-        Binding("y", "yes", "Yes"),
-        Binding("n,escape", "no", "No"),
-    ]
-
-    def __init__(self, message: str) -> None:
-        super().__init__()
-        self._message = message
-
-    def compose(self) -> ComposeResult:
-        with Container(id="confirm-container"):
-            yield Label(self._message)
-            # Text, not markup: Textual parses "[y]"/"[n]" as style tags
-            # and would render the hint with no key labels at all.
-            yield Label(Text("[y] Yes   [n] No"), id="confirm-hint")
-
-    def action_yes(self) -> None:
-        self.dismiss(True)
-
-    def action_no(self) -> None:
-        self.dismiss(False)
-
-
-class AdvancingSelect(Select[str]):
-    """Priority Select with keyboard-friendly behavior.
-
-    - Enter / Down (when closed): advance to the next field
-    - Up (when closed): go back to the previous field
-    - Right (when closed): step priority up (low → medium → high → urgent)
-    - Left (when closed): step priority down (urgent → high → medium → low)
-    - Space: open the dropdown
-    """
-
-    _PRIORITY_ORDER = ["low", "medium", "high", "urgent"]
-
-    BINDINGS = [
-        Binding("enter", "advancing_submit", show=False),
-        Binding("down", "advancing_submit", show=False),
-        Binding("up", "advancing_retreat", show=False),
-        Binding("left", "step_down", show=False),
-        Binding("right", "step_up", show=False),
-    ]
-
-    class Submitted(Message):
-        def __init__(self, select: "AdvancingSelect") -> None:
-            super().__init__()
-            self.select = select
-
-        @property
-        def control(self) -> "AdvancingSelect":
-            return self.select
-
-    class Retreated(Message):
-        def __init__(self, select: "AdvancingSelect") -> None:
-            super().__init__()
-            self.select = select
-
-        @property
-        def control(self) -> "AdvancingSelect":
-            return self.select
-
-    def action_advancing_submit(self) -> None:
-        if not self.expanded:
-            self.post_message(self.Submitted(self))
-
-    def action_advancing_retreat(self) -> None:
-        if not self.expanded:
-            self.post_message(self.Retreated(self))
-
-    def action_step_down(self) -> None:
-        self._step(-1)
-
-    def action_step_up(self) -> None:
-        self._step(1)
-
-    def _step(self, direction: int) -> None:
-        if self.expanded:
-            return
-        try:
-            idx = self._PRIORITY_ORDER.index(str(self.value))
-        except ValueError:
-            idx = 1
-        new_idx = max(0, min(len(self._PRIORITY_ORDER) - 1, idx + direction))
-        self.value = self._PRIORITY_ORDER[new_idx]
-
-
-class NewItemDialog(ModalScreen[TodoItem | None]):
-    BINDINGS = [
-        Binding("escape", "cancel", "Cancel"),
-        Binding("down", "field_advance", show=False),
-        Binding("up", "field_retreat", show=False),
-    ]
-
-    def __init__(self, storage: StorageProtocol, project_id: int | None = None) -> None:
-        super().__init__()
-        self._storage = storage
-        # The list's active project filter. Creating an item while a
-        # filter is on used to store it unfiled, so it never appeared and
-        # the user re-added it — inheriting the filter matches intent.
-        self._project_id = project_id
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="dialog-container"):
-            yield Label("New Todo", id="dialog-title")
-            yield Label("Title:")
-            yield Input(id="new-title", placeholder="What needs to be done?")
-            yield Label("Priority:")
-            yield AdvancingSelect(
-                [(p.value, p.value) for p in Priority],
-                value="medium",
-                id="new-priority",
-                allow_blank=False,
-            )
-            yield Label("Deadline (YYYY-MM-DD, optional):")
-            yield Input(id="new-deadline", placeholder="")
-            yield Label("Tags (comma-separated, optional):")
-            yield Input(id="new-tags", placeholder="")
-            yield Label("", id="dialog-error")
-            yield Label(
-                "↓/Enter next · ↑ prev · ←/→ priority · Esc cancel",
-                id="dialog-hint",
-            )
-
-    def on_mount(self) -> None:
-        self.query_one("#new-title", Input).focus()
-
-    def _set_error(self, msg: str) -> None:
-        self.query_one("#dialog-error", Label).update(msg)
-
-    def _clear_error(self) -> None:
-        self.query_one("#dialog-error", Label).update("")
-
-    def _check_title(self) -> bool:
-        title = self.query_one("#new-title", Input).value.strip()
-        if not title:
-            self._set_error("Title is required")
-            return False
-        return True
-
-    def _check_deadline(self) -> bool:
-        deadline_str = self.query_one("#new-deadline", Input).value.strip()
-        if not deadline_str:
-            return True
-        try:
-            date.fromisoformat(deadline_str)
-        except ValueError:
-            self._set_error("Invalid date — use YYYY-MM-DD")
-            return False
-        return True
-
-    @on(Input.Submitted, "#new-title")
-    def _on_title_submit(self) -> None:
-        if not self._check_title():
-            return
-        self._clear_error()
-        self.query_one("#new-priority", AdvancingSelect).focus()
-
-    @on(AdvancingSelect.Submitted, "#new-priority")
-    def _on_priority_submit(self) -> None:
-        self._clear_error()
-        self.query_one("#new-deadline", Input).focus()
-
-    @on(AdvancingSelect.Retreated, "#new-priority")
-    def _on_priority_retreat(self) -> None:
-        self._clear_error()
-        self.query_one("#new-title", Input).focus()
-
-    @on(Input.Submitted, "#new-deadline")
-    def _on_deadline_submit(self) -> None:
-        if not self._check_deadline():
-            return
-        self._clear_error()
-        self.query_one("#new-tags", Input).focus()
-
-    @on(Input.Submitted, "#new-tags")
-    def _on_tags_submit(self) -> None:
-        self.action_save()
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
-    def action_field_advance(self) -> None:
-        focused = self.focused
-        if focused is None:
-            return
-        if focused.id == "new-title":
-            self._on_title_submit()
-        elif focused.id == "new-deadline":
-            self._on_deadline_submit()
-        elif focused.id == "new-tags":
-            self._on_tags_submit()
-        # priority is handled by AdvancingSelect's own down binding
-
-    def action_field_retreat(self) -> None:
-        focused = self.focused
-        if focused is None:
-            return
-        if focused.id == "new-deadline":
-            self._clear_error()
-            self.query_one("#new-priority", AdvancingSelect).focus()
-        elif focused.id == "new-tags":
-            self._clear_error()
-            self.query_one("#new-deadline", Input).focus()
-        # title has no previous; priority is handled by AdvancingSelect's own up binding
-
-    def action_save(self) -> None:
-        if not self._check_title():
-            self.query_one("#new-title", Input).focus()
-            return
-        if not self._check_deadline():
-            self.query_one("#new-deadline", Input).focus()
-            return
-
-        title = self.query_one("#new-title", Input).value.strip()
-        priority = Priority.from_string(
-            str(self.query_one("#new-priority", AdvancingSelect).value)
-        )
-        deadline_str = self.query_one("#new-deadline", Input).value.strip()
-        deadline = date.fromisoformat(deadline_str) if deadline_str else None
-        tags_str = self.query_one("#new-tags", Input).value.strip()
-        tags = split_tags(tags_str) if tags_str else None
-
-        try:
-            item = add_todo(
-                self._storage,
-                title,
-                priority=priority,
-                deadline=deadline,
-                tags=tags,
-                project_id=self._project_id,
-            )
-        except (TodoError, ValueError) as exc:
-            # E.g. a locked database or a rejected tag: report inline and
-            # keep the dialog (and the user's typed input) alive.
-            self.query_one("#dialog-error", Label).update(
-                Text(str(exc) if str(exc) else "Could not save item")
-            )
-            return
-        self.dismiss(item)
-
-
-class SearchDialog(ModalScreen[str | None]):
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="search-container"):
-            yield Label("Search (Enter to apply, Esc to cancel):")
-            yield Input(id="search-input", placeholder="Title, body, or tag...")
-
-    def on_mount(self) -> None:
-        self.query_one("#search-input", Input).focus()
-
-    @on(Input.Submitted, "#search-input")
-    def on_submit(self) -> None:
-        value = self.query_one("#search-input", Input).value.strip()
-        self.dismiss(value)
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
-
-class BlockDialog(ModalScreen[str | None]):
-    """Prompt for a blocker id and add or remove the blocking relation.
-
-    A plain id adds a blocker; an id prefixed with ``-`` removes one. The
-    command call happens here so validation/dependency errors can be shown
-    inline while keeping the dialog open. Dismisses with the entered string
-    on success, or ``None`` on cancel.
-    """
-
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
-
-    def __init__(self, storage: StorageProtocol, blocked_id: int) -> None:
-        super().__init__()
-        self._storage = storage
-        self._blocked_id = blocked_id
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="block-container"):
-            yield Label(f"Block #{self._blocked_id} by (item id, -id removes):")
-            yield Input(id="block-input", placeholder="e.g. 3 to add, -3 to remove")
-            yield Label("", id="block-error")
-
-    def on_mount(self) -> None:
-        self.query_one("#block-input", Input).focus()
-
-    @on(Input.Submitted, "#block-input")
-    def on_submit(self) -> None:
-        value = self.query_one("#block-input", Input).value.strip()
-        error_w = self.query_one("#block-error", Label)
-        try:
-            blocker_id = int(value)
-            if blocker_id < 0:
-                unblock_todo(self._storage, self._blocked_id, -blocker_id)
-            else:
-                block_todo(self._storage, self._blocked_id, blocker_id)
-        except (TodoError, ValueError) as exc:
-            # Covers bad ids, cycles, AND storage-level failures (e.g. a
-            # locked database) — the dialog reports inline, never crashes.
-            # Error text can echo raw user input; never render it as markup.
-            error_w.update(Text(str(exc) if str(exc) else "Invalid blocker id"))
-            return
-        self.dismiss(value)
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
-
-class InspectDialog(ModalScreen[None]):
-    """Read-only modal showing the full content of a todo item."""
-
-    BINDINGS = [
-        Binding("escape", "close", "Close"),
-        Binding("q", "close", "Close"),
-        Binding("i", "close", "Close"),
-    ]
-
-    def __init__(self, item: TodoItem) -> None:
-        super().__init__()
-        self._item = item
-
-    def compose(self) -> ComposeResult:
-        item = self._item
-        with Vertical(id="inspect-container"):
-            yield Static(
-                f"[b]#{item.id}  {_escape_markup(item.title)}[/b]", id="inspect-title"
-            )
-            yield Static("\n".join(_meta_lines(item)), id="inspect-meta")
-            with VerticalScroll(id="inspect-body-scroll"):
-                yield Static(
-                    Text(item.body) if item.body else "[dim](no description)[/dim]",
-                    id="inspect-body",
-                )
-            yield Label("Esc / q / i to close", id="inspect-hint")
-
-    def action_close(self) -> None:
-        self.dismiss()
+from todo.tui.render import escape_markup, join_styles, meta_lines
+from todo.tui.table import SEPARATOR_PREFIX, TodoTable, is_separator
 
 
 class TodoListView(Widget):
@@ -600,7 +131,7 @@ class TodoListView(Widget):
         if from_poll and self._read_error_reported:
             return
         self._read_error_reported = True
-        self.notify(_escape_markup(str(exc)), severity="error")
+        self.notify(escape_markup(str(exc)), severity="error")
 
     @on(DataTable.RowHighlighted, "#item-list")
     def on_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
@@ -616,7 +147,7 @@ class TodoListView(Widget):
 
     @on(DataTable.RowSelected, "#item-list")
     def on_row_selected(self, event: DataTable.RowSelected) -> None:
-        if event.row_key is None or _is_separator(event.row_key.value):
+        if event.row_key is None or is_separator(event.row_key.value):
             return
         self.action_inspect()
 
@@ -739,7 +270,7 @@ class TodoListView(Widget):
                 "",
                 "",
                 "",
-                key=f"{_SEPARATOR_PREFIX}{status.value}",
+                key=f"{SEPARATOR_PREFIX}{status.value}",
             )
             index += 1
             for item in items:
@@ -756,9 +287,9 @@ class TodoListView(Widget):
                 # their own style, everything else inherits the row's.
                 row_style = "dim" if item.is_blocked else ""
                 styles = [row_style] * len(cells)
-                styles[1] = _join_styles(row_style, _pri_style(item.priority))
+                styles[1] = join_styles(row_style, _pri_style(item.priority))
                 if deadline_text:
-                    styles[4] = _join_styles(row_style, _deadline_style(item))
+                    styles[4] = join_styles(row_style, _deadline_style(item))
                 # Always wrap in Text: DataTable parses plain strings as
                 # markup, and titles are user-controlled.
                 table.add_row(
@@ -795,12 +326,12 @@ class TodoListView(Widget):
         parts: list[str] = []
         if self._search_query:
             parts.append(
-                f"[dim]Search:[/dim] [b]{_escape_markup(self._search_query)}[/b]"
+                f"[dim]Search:[/dim] [b]{escape_markup(self._search_query)}[/b]"
             )
         if self._tag_filter is not None:
-            parts.append(f"[dim]Tag:[/dim] [b]{_escape_markup(self._tag_filter)}[/b]")
+            parts.append(f"[dim]Tag:[/dim] [b]{escape_markup(self._tag_filter)}[/b]")
         if self._project_filter is not None:
-            label = _escape_markup(project_filter_label or "?")
+            label = escape_markup(project_filter_label or "?")
             parts.append(f"[dim]Project:[/dim] [b]{label}[/b]")
         if self._priority_filter is not None:
             parts.append(f"[dim]Priority:[/dim] [b]{self._priority_filter.value}[/b]")
@@ -813,7 +344,7 @@ class TodoListView(Widget):
             search_status.update("")
 
     def _update_detail(self, item_id: object) -> None:
-        if item_id is None or _is_separator(item_id):
+        if item_id is None or is_separator(item_id):
             self.query_one("#detail-title", Static).update("")
             self.query_one("#detail-meta", Static).update("")
             self.query_one("#detail-body", Static).update("")
@@ -838,8 +369,8 @@ class TodoListView(Widget):
         meta_w = self.query_one("#detail-meta", Static)
         body_w = self.query_one("#detail-body", Static)
 
-        title_w.update(f"[b]#{item.id}  {_escape_markup(item.title)}[/b]")
-        meta_w.update("\n".join(_meta_lines(item)))
+        title_w.update(f"[b]#{item.id}  {escape_markup(item.title)}[/b]")
+        meta_w.update("\n".join(meta_lines(item)))
         body_w.update(Text(item.body) if item.body else "")
 
     def _selected_item_id(self) -> int | None:
@@ -850,7 +381,7 @@ class TodoListView(Widget):
             row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
         except Exception:
             return None
-        if row_key.value is None or _is_separator(row_key.value):
+        if row_key.value is None or is_separator(row_key.value):
             return None
         try:
             return int(str(row_key.value))
@@ -877,7 +408,7 @@ class TodoListView(Widget):
             result = complete_todo(self._storage, item_id)
         except TodoError as exc:
             # E.g. deleted by another process, or the database is locked.
-            self.notify(_escape_markup(str(exc)), severity="error")
+            self.notify(escape_markup(str(exc)), severity="error")
             self._refresh_list()
             return
         self._notify_unblocked(result)
@@ -886,7 +417,7 @@ class TodoListView(Widget):
     def _notify_unblocked(self, result: CompletionResult | list[TodoItem]) -> None:
         deps = result.unblocked if isinstance(result, CompletionResult) else result
         for dep in deps:
-            self.notify(f"🔓 #{dep.id} {_escape_markup(dep.title)} is now unblocked")
+            self.notify(f"🔓 #{dep.id} {escape_markup(dep.title)} is now unblocked")
 
     def action_inspect(self) -> None:
         item_id = self._selected_item_id()
@@ -897,7 +428,7 @@ class TodoListView(Widget):
         except NotFoundError:
             return
         except TodoError as exc:
-            self.notify(_escape_markup(str(exc)), severity="error")
+            self.notify(escape_markup(str(exc)), severity="error")
             return
         self.app.push_screen(InspectDialog(item))
 
@@ -911,7 +442,7 @@ class TodoListView(Widget):
         except NotFoundError:
             return
         except TodoError as exc:
-            self.notify(_escape_markup(str(exc)), severity="error")
+            self.notify(escape_markup(str(exc)), severity="error")
             return
 
         editor = os.environ.get("EDITOR", "vi")
@@ -920,7 +451,7 @@ class TodoListView(Widget):
         try:
             tmp_path = self._write_editor_buffer(text)
         except OSError as exc:
-            self.notify(f"Editor failed: {_escape_markup(str(exc))}", severity="error")
+            self.notify(f"Editor failed: {escape_markup(str(exc))}", severity="error")
             return
 
         try:
@@ -930,8 +461,8 @@ class TodoListView(Widget):
             # The editor RAN and exited nonzero — the user may already have
             # saved their work into the buffer. Keep it and say where.
             self.notify(
-                f"Editor failed: {_escape_markup(str(exc))} — "
-                f"your buffer is kept at {_escape_markup(tmp_path)}",
+                f"Editor failed: {escape_markup(str(exc))} — "
+                f"your buffer is kept at {escape_markup(tmp_path)}",
                 severity="error",
                 timeout=12,
             )
@@ -942,7 +473,7 @@ class TodoListView(Widget):
             SuspendNotSupported,
         ) as exc:
             # The editor never ran; the buffer holds nothing of the user's.
-            self.notify(f"Editor failed: {_escape_markup(str(exc))}", severity="error")
+            self.notify(f"Editor failed: {escape_markup(str(exc))}", severity="error")
             os.unlink(tmp_path)
             return
 
@@ -977,8 +508,8 @@ class TodoListView(Widget):
                 return f.read()
         except (OSError, ValueError) as exc:
             self.notify(
-                f"Editor failed: {_escape_markup(str(exc))} — "
-                f"your buffer is kept at {_escape_markup(tmp_path)}",
+                f"Editor failed: {escape_markup(str(exc))} — "
+                f"your buffer is kept at {escape_markup(tmp_path)}",
                 severity="error",
                 timeout=12,
             )
@@ -1000,8 +531,8 @@ class TodoListView(Widget):
             result = apply_editor_edit(self._storage, item_id, edited)
         except (ValueError, TodoError) as exc:
             self.notify(
-                f"Edit rejected: {_escape_markup(str(exc))} — "
-                f"your buffer is kept at {_escape_markup(tmp_path)}",
+                f"Edit rejected: {escape_markup(str(exc))} — "
+                f"your buffer is kept at {escape_markup(tmp_path)}",
                 severity="error",
                 timeout=12,
             )
@@ -1021,7 +552,7 @@ class TodoListView(Widget):
                     unblocked = delete_todo(self._storage, item_id)
                 except TodoError as exc:
                     # E.g. deleted by another process while the dialog was open.
-                    self.notify(_escape_markup(str(exc)), severity="error")
+                    self.notify(escape_markup(str(exc)), severity="error")
                 else:
                     self._notify_unblocked(unblocked)
                 self._refresh_list()
@@ -1057,7 +588,7 @@ class TodoListView(Widget):
         try:
             tags = [t for t, _ in count_tags(self._storage)]
         except TodoError as exc:
-            self.notify(_escape_markup(str(exc)), severity="error")
+            self.notify(escape_markup(str(exc)), severity="error")
             return
         if not tags:
             return
@@ -1076,7 +607,7 @@ class TodoListView(Widget):
         try:
             projects = list_all_projects(self._storage, include_archived=True)
         except TodoError as exc:
-            self.notify(_escape_markup(str(exc)), severity="error")
+            self.notify(escape_markup(str(exc)), severity="error")
             return
         if not projects:
             return
@@ -1139,14 +670,14 @@ class TodoListView(Widget):
         except NotFoundError:
             return
         except TodoError as exc:
-            self.notify(_escape_markup(str(exc)), severity="error")
+            self.notify(escape_markup(str(exc)), severity="error")
             return
         next_status = item.status.next()
         if next_status is not None:
             try:
                 result = move_todo(self._storage, item_id, next_status)
             except TodoError as exc:
-                self.notify(_escape_markup(str(exc)), severity="error")
+                self.notify(escape_markup(str(exc)), severity="error")
                 self._refresh_list()
                 return
             self._notify_unblocked(result)
@@ -1161,12 +692,12 @@ class TodoListView(Widget):
         except NotFoundError:
             return
         except TodoError as exc:
-            self.notify(_escape_markup(str(exc)), severity="error")
+            self.notify(escape_markup(str(exc)), severity="error")
             return
         prev_status = item.status.prev()
         if prev_status is not None:
             try:
                 move_todo(self._storage, item_id, prev_status)
             except TodoError as exc:
-                self.notify(_escape_markup(str(exc)), severity="error")
+                self.notify(escape_markup(str(exc)), severity="error")
             self._refresh_list()

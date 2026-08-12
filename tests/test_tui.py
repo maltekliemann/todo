@@ -11,12 +11,13 @@ from todo.adapters.sqlite_storage import SqliteStorage
 from todo.application.commands import add_todo
 from todo.domain.enums import Priority, Status
 from todo.tui.app import TodoApp
-from todo.tui.list_view import TodoListView, _is_separator
+from todo.tui.list_view import TodoListView
+from todo.tui.table import is_separator
 
 
 def _item_rows(table: DataTable) -> int:
     """Count rows in a TodoTable that represent actual items (skip separators)."""
-    return sum(1 for row_key in table.rows if not _is_separator(row_key.value))
+    return sum(1 for row_key in table.rows if not is_separator(row_key.value))
 
 
 @pytest.fixture()
@@ -138,7 +139,7 @@ class TestPrdKeyBindings:
                 key = table.coordinate_to_cell_key(
                     Coordinate(table.cursor_row, 0)
                 ).row_key.value
-                assert not _is_separator(key)
+                assert not is_separator(key)
 
 
 class TestPriorityAndDeadlineStyling:
@@ -233,7 +234,7 @@ class TestDelete:
             await pilot.press("x")
             await pilot.pause()
             # Confirm dialog should be on screen
-            from todo.tui.list_view import ConfirmDialog
+            from todo.tui.dialogs import ConfirmDialog
 
             assert isinstance(app.screen, ConfirmDialog)
 
@@ -272,7 +273,7 @@ class TestNewDialog:
             await pilot.pause()
             await pilot.press("n")
             await pilot.pause()
-            from todo.tui.list_view import NewItemDialog
+            from todo.tui.dialogs import NewItemDialog
 
             assert isinstance(app.screen, NewItemDialog)
 
@@ -293,7 +294,7 @@ class TestNewDialog:
         self, seeded_storage: SqliteStorage
     ) -> None:
         """Step priority up with right arrow, then Enter through the rest to save."""
-        from todo.tui.list_view import AdvancingSelect
+        from todo.tui.dialogs import AdvancingSelect
 
         app = TodoApp(storage=seeded_storage)
         async with app.run_test() as pilot:
@@ -366,7 +367,7 @@ class TestNewDialog:
     ) -> None:
         """Right increases priority (toward urgent); Left decreases it (toward low).
         Both clamp at the ends — no wraparound."""
-        from todo.tui.list_view import AdvancingSelect
+        from todo.tui.dialogs import AdvancingSelect
 
         app = TodoApp(storage=seeded_storage)
         async with app.run_test() as pilot:
@@ -411,7 +412,7 @@ class TestNewDialog:
         """Down advances and Up retreats on every field in the dialog."""
         from textual.widgets import Input
 
-        from todo.tui.list_view import AdvancingSelect
+        from todo.tui.dialogs import AdvancingSelect
 
         app = TodoApp(storage=seeded_storage)
         async with app.run_test() as pilot:
@@ -459,7 +460,7 @@ class TestNewDialog:
         """Down on the priority field advances to deadline (does not open dropdown)."""
         from textual.widgets import Input
 
-        from todo.tui.list_view import AdvancingSelect
+        from todo.tui.dialogs import AdvancingSelect
 
         app = TodoApp(storage=seeded_storage)
         async with app.run_test() as pilot:
@@ -747,7 +748,7 @@ class TestSearch:
             await pilot.pause()
             await pilot.press("slash")
             await pilot.pause()
-            from todo.tui.list_view import SearchDialog
+            from todo.tui.dialogs import SearchDialog
 
             assert isinstance(app.screen, SearchDialog)
 
@@ -810,7 +811,7 @@ class TestDetailPanel:
 
 class TestInspect:
     async def test_i_opens_inspect_dialog(self, seeded_storage: SqliteStorage) -> None:
-        from todo.tui.list_view import InspectDialog
+        from todo.tui.dialogs import InspectDialog
 
         app = TodoApp(storage=seeded_storage)
         async with app.run_test() as pilot:
@@ -822,7 +823,7 @@ class TestInspect:
     async def test_enter_opens_inspect_dialog(
         self, seeded_storage: SqliteStorage
     ) -> None:
-        from todo.tui.list_view import InspectDialog
+        from todo.tui.dialogs import InspectDialog
 
         app = TodoApp(storage=seeded_storage)
         async with app.run_test() as pilot:
@@ -833,7 +834,7 @@ class TestInspect:
 
     async def test_inspect_shows_full_body(self, db_path: Path) -> None:
         """Long bodies are visible in the inspect modal (not clipped)."""
-        from todo.tui.list_view import InspectDialog
+        from todo.tui.dialogs import InspectDialog
 
         storage = SqliteStorage(db_path)
         long_body = "\n".join(f"line {i}" for i in range(40))
@@ -852,7 +853,7 @@ class TestInspect:
             assert "line 39" in rendered
 
     async def test_escape_closes_inspect(self, seeded_storage: SqliteStorage) -> None:
-        from todo.tui.list_view import InspectDialog
+        from todo.tui.dialogs import InspectDialog
 
         app = TodoApp(storage=seeded_storage)
         async with app.run_test() as pilot:
@@ -879,7 +880,7 @@ class TestStatusGroups:
             await pilot.pause()
             table = app.query_one("#item-list", DataTable)
             separator_keys = [
-                row_key.value for row_key in table.rows if _is_separator(row_key.value)
+                row_key.value for row_key in table.rows if is_separator(row_key.value)
             ]
             # One separator per status, in display order
             assert separator_keys == [
@@ -1036,7 +1037,7 @@ class TestBlocking:
             assert "\U0001f6a7" not in blocker_title
 
     async def test_b_opens_block_dialog(self, seeded_storage: SqliteStorage) -> None:
-        from todo.tui.list_view import BlockDialog
+        from todo.tui.dialogs import BlockDialog
 
         app = TodoApp(storage=seeded_storage)
         async with app.run_test() as pilot:
@@ -1063,7 +1064,7 @@ class TestBlocking:
             assert item.blocked_by == [2]
             assert item.is_blocked is True
             # Dialog dismissed back to the list view.
-            from todo.tui.list_view import BlockDialog
+            from todo.tui.dialogs import BlockDialog
 
             assert not isinstance(app.screen, BlockDialog)
 
@@ -1071,7 +1072,7 @@ class TestBlocking:
         self, seeded_storage: SqliteStorage
     ) -> None:
         """A self-block keeps the dialog open and shows the error message."""
-        from todo.tui.list_view import BlockDialog
+        from todo.tui.dialogs import BlockDialog
 
         app = TodoApp(storage=seeded_storage)
         async with app.run_test() as pilot:
@@ -1233,7 +1234,7 @@ class TestLockedDatabaseDialogs:
             await pilot.press("2")
             await pilot.press("enter")
             await pilot.pause()
-            from todo.tui.list_view import BlockDialog
+            from todo.tui.dialogs import BlockDialog
 
             assert app.is_running
             assert isinstance(app.screen, BlockDialog)  # stays open with error
@@ -1295,7 +1296,7 @@ class TestSharedMetaPresenter:
         from datetime import date, datetime, timezone
 
         from todo.domain.models import TodoItem
-        from todo.tui.list_view import _meta_lines
+        from todo.tui.render import meta_lines
 
         item = TodoItem(
             id=7,
@@ -1314,7 +1315,7 @@ class TestSharedMetaPresenter:
             project_id=1,
             project_name="proj [/]",
         )
-        lines = _meta_lines(item)
+        lines = meta_lines(item)
         joined = "\n".join(lines)
         assert "Priority: high" in joined
         assert "Deadline:" in joined

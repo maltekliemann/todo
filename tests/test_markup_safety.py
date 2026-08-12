@@ -157,7 +157,7 @@ class TestTuiMarkupSafety:
             await pilot.pause()
             await pilot.press("i")
             await pilot.pause()
-            from todo.tui.list_view import InspectDialog
+            from todo.tui.dialogs import InspectDialog
 
             assert isinstance(app.screen, InspectDialog)
             await pilot.press("escape")
@@ -215,7 +215,7 @@ class TestTuiMarkupSafety:
                 await pilot.press(ch)
             await pilot.press("enter")
             await pilot.pause()
-            from todo.tui.list_view import BlockDialog
+            from todo.tui.dialogs import BlockDialog
 
             # Dialog stays open showing the (safe) error, no crash.
             assert isinstance(app.screen, BlockDialog)
@@ -240,10 +240,10 @@ class TestTextualMarkupEscaping:
     def test_escaper_covers_textual_tag_shapes(self) -> None:
         from textual.content import Content
 
-        from todo.tui.list_view import _escape_markup
+        from todo.tui.render import escape_markup
 
         for hostile in ("[WIP] refactor", "[Red]x", "[$VAR] y", "[/] z", "[b]lower"):
-            assert Content.from_markup(_escape_markup(hostile)).plain == hostile
+            assert Content.from_markup(escape_markup(hostile)).plain == hostile
 
     async def test_detail_pane_keeps_bracketed_title(self, db_path: Path) -> None:
         from todo.adapters.sqlite_storage import SqliteStorage
@@ -300,10 +300,10 @@ class TestBackslashAndLiteralHints:
         '\\', so doubling backslashes corrupts every sink."""
         from textual.content import Content
 
-        from todo.tui.list_view import _escape_markup
+        from todo.tui.render import escape_markup
 
         for hostile in (r"C:\Users\alice", r"a\[b] c", "back\\\\slash", r"\needle"):
-            assert Content.from_markup(_escape_markup(hostile)).plain == hostile
+            assert Content.from_markup(escape_markup(hostile)).plain == hostile
 
     async def test_windows_path_title_renders_once(self, db_path: Path) -> None:
         from todo.adapters.sqlite_storage import SqliteStorage
