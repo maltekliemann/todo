@@ -66,6 +66,16 @@ CREATE TABLE project_updates (
     created_at TEXT    NOT NULL
 );
 """,
+    # v3: rows written before single-line normalization existed would be
+    # silently truncated by the editor round-trip — clean them in place.
+    """\
+UPDATE todos SET title = TRIM(REPLACE(
+    REPLACE(REPLACE(title, char(13), ' '), char(10), ' '), '  ', ' '))
+WHERE title LIKE '%' || char(10) || '%' OR title LIKE '%' || char(13) || '%';
+UPDATE projects SET name = TRIM(REPLACE(
+    REPLACE(REPLACE(name, char(13), ' '), char(10), ' '), '  ', ' '))
+WHERE name LIKE '%' || char(10) || '%' OR name LIKE '%' || char(13) || '%';
+""",
 ]
 
 
@@ -527,6 +537,18 @@ class SqliteStorage:
         if row is None:
             raise ProjectNotFoundError(name)
         return _row_to_project(row)
+
+    def project_counts(self) -> dict[int, tuple[int, int]]:
+        """project_id -> (open, done) item counts, computed in SQL."""
+        rows = self._conn.execute(
+            "SELECT project_id, "
+            "SUM(CASE WHEN status != 'done' THEN 1 ELSE 0 END) AS open_count, "
+            "SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS done_count "
+            "FROM todos WHERE project_id IS NOT NULL GROUP BY project_id"
+        ).fetchall()
+        return {
+            r["project_id"]: (int(r["open_count"]), int(r["done_count"])) for r in rows
+        }
 
     def list_projects(self, *, include_archived: bool = False) -> "ProjectList":
         where = "" if include_archived else " WHERE status = 'active'"

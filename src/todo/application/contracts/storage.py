@@ -81,6 +81,8 @@ class StorageProtocol(Protocol):
 
     def list_projects(self, *, include_archived: bool = False) -> ProjectList: ...
 
+    def project_counts(self) -> dict[int, tuple[int, int]]: ...
+
     def update_project(
         self,
         project_id: int,

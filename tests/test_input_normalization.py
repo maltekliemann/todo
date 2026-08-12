@@ -71,3 +71,56 @@ class TestTagValidation:
         cli.invoke(main, ["add", "Task", "-t", "real"])
         data = json.loads(cli.invoke(main, ["tags", "--json"]).output)
         assert data == [{"tag": "real", "count": 1}]
+
+
+class TestProjectNameNormalization:
+    def test_multiline_project_name_collapsed(self, storage: SqliteStorage) -> None:
+        from todo.application.commands import add_project
+
+        project = add_project(storage, "sprint\n42")
+        assert project.name == "sprint 42"
+
+    def test_project_name_stripped(self, storage: SqliteStorage) -> None:
+        from todo.application.commands import add_project
+        from todo.exceptions import DuplicateProjectError
+
+        add_project(storage, "work")
+        with pytest.raises(DuplicateProjectError):
+            add_project(storage, "  work ")
+
+    def test_rename_normalized_too(self, storage: SqliteStorage) -> None:
+        from todo.application.commands import add_project, edit_project
+
+        project = add_project(storage, "old")
+        renamed = edit_project(storage, project.id, name="new\nname")
+        assert renamed.name == "new name"
+
+
+class TestDeleteUnblockWarning:
+    def test_rm_blocker_warns_about_unblocked(self, cli: CliRunner) -> None:
+        """Deleting a blocker unblocks dependents via cascade; it must warn
+        exactly like completing the blocker does."""
+        cli.invoke(main, ["add", "Blocker"])
+        cli.invoke(main, ["add", "Waiting"])
+        cli.invoke(main, ["block", "2", "1"])
+        result = cli.invoke(main, ["rm", "1"])
+        assert result.exit_code == 0
+        assert "#2 Waiting is now unblocked" in result.stderr
+
+    def test_rm_non_blocker_does_not_warn(self, cli: CliRunner) -> None:
+        cli.invoke(main, ["add", "Solo"])
+        result = cli.invoke(main, ["rm", "1"])
+        assert result.exit_code == 0
+        assert "unblocked" not in result.stderr
+
+
+class TestEmptyProjectRef:
+    def test_add_with_empty_project_errors_like_edit(self, cli: CliRunner) -> None:
+        result = cli.invoke(main, ["add", "Task", "--project", ""])
+        assert result.exit_code == 1
+        assert "not found" in result.stderr
+
+    def test_list_with_empty_project_errors(self, cli: CliRunner) -> None:
+        result = cli.invoke(main, ["list", "--project", ""])
+        assert result.exit_code == 1
+        assert "not found" in result.stderr

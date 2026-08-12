@@ -152,10 +152,13 @@ class TestMigration:
         storage.close()
 
     def test_genuinely_failed_migration_still_raises(self, tmp_path: Path) -> None:
+        from todo.adapters.sqlite_storage import _MIGRATIONS
+
         db = tmp_path / "db.db"
-        storage = SqliteStorage(db)  # user_version == 2
+        storage = SqliteStorage(db)  # fully migrated
+        future = len(_MIGRATIONS) + 1  # a version nobody has applied
         with pytest.raises(sqlite3.OperationalError):
-            storage._apply_migration(3, "CREATE TABLE projects (x INTEGER);\n")
+            storage._apply_migration(future, "CREATE TABLE projects (x INTEGER);\n")
         storage.close()
 
     def test_migrated_db_supports_projects(self, tmp_path: Path) -> None:
@@ -166,4 +169,26 @@ class TestMigration:
         project = storage.add_project("infra", description="Infra work")
         storage.update(1, project_id=project.id)
         assert storage.get(1).project_name == "infra"
+        storage.close()
+
+
+class TestLegacyDataNormalization:
+    def test_multiline_titles_normalized_by_migration(self, tmp_path: Path) -> None:
+        """Rows written before title normalization existed must be cleaned
+        up in place, or the editor round-trip silently truncates them."""
+        db = tmp_path / "db.db"
+        _make_legacy_db(db)
+        conn = sqlite3.connect(str(db))
+        conn.execute(
+            "INSERT INTO todos (title, body, created_at, updated_at, tags) "
+            "VALUES ('part one' || char(10) || 'part two', '', "
+            "'2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00', '')"
+        )
+        conn.commit()
+        conn.close()
+
+        storage = SqliteStorage(db)
+        titles = [i.title for i in storage.list(include_done=True)]
+        assert "part one part two" in titles
+        assert all("\n" not in t for t in titles)
         storage.close()

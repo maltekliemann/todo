@@ -157,8 +157,29 @@ def complete_todo(
 def delete_todo(
     storage: StorageProtocol,
     item_id: int,
-) -> None:
-    storage.delete(item_id)
+) -> list[TodoItem]:
+    """Delete an item; returns dependents its removal unblocked.
+
+    Cascade removal of dependency edges unblocks dependents exactly like
+    completing the blocker does, so it must report them the same way.
+    """
+    with storage.transaction():
+        victim = storage.get(item_id)
+        was_blocked = {
+            dep_id: storage.get(dep_id).is_blocked for dep_id in victim.blocking
+        }
+        storage.delete(item_id)
+        unblocked: list[TodoItem] = []
+        for dep_id in sorted(victim.blocking):
+            if not was_blocked[dep_id]:
+                continue
+            try:
+                after = storage.get(dep_id)
+            except NotFoundError:
+                continue
+            if not after.is_blocked:
+                unblocked.append(after)
+        return unblocked
 
 
 def block_todo(
@@ -240,13 +261,16 @@ def unblock_todo_batch(
         return storage.get(blocked_id)
 
 
-def _validate_project_name(name: str) -> None:
-    # "none" is the CLI's clear-sentinel for --project; a project by that
-    # name would be unreachable from edit and cause silent detachment.
-    if name.lower() == "none":
-        raise ValueError("'none' is a reserved project name.")
-    if not name.strip():
+def _normalize_project_name(name: str) -> str:
+    # Same single-line contract as titles (plain output is one row per
+    # project), plus: "none" is the CLI's clear-sentinel for --project; a
+    # project by that name would be unreachable from edit.
+    normalized = " ".join(name.split())
+    if not normalized:
         raise ValueError("Project name cannot be empty.")
+    if normalized.lower() == "none":
+        raise ValueError("'none' is a reserved project name.")
+    return normalized
 
 
 def add_project(
@@ -255,8 +279,7 @@ def add_project(
     *,
     description: str = "",
 ) -> Project:
-    _validate_project_name(name)
-    return storage.add_project(name, description=description)
+    return storage.add_project(_normalize_project_name(name), description=description)
 
 
 def edit_project(
@@ -266,9 +289,8 @@ def edit_project(
     name: str | None = None,
     description: str | None = None,
 ) -> Project:
-    if name is not None:
-        _validate_project_name(name)
-    return storage.update_project(project_id, name=name, description=description)
+    normalized = _normalize_project_name(name) if name is not None else None
+    return storage.update_project(project_id, name=normalized, description=description)
 
 
 def archive_project(

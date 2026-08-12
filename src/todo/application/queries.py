@@ -76,22 +76,25 @@ def list_projects(
     *,
     include_archived: bool = False,
 ) -> list[ProjectSummary]:
-    items = storage.list(include_done=True)
-    open_counts: dict[int, int] = {}
-    done_counts: dict[int, int] = {}
-    for item in items:
-        if item.project_id is None:
-            continue
-        bucket = done_counts if item.is_done else open_counts
-        bucket[item.project_id] = bucket.get(item.project_id, 0) + 1
+    counts = storage.project_counts()
     return [
         ProjectSummary(
             project=p,
-            open_count=open_counts.get(p.id, 0),
-            done_count=done_counts.get(p.id, 0),
+            open_count=counts.get(p.id, (0, 0))[0],
+            done_count=counts.get(p.id, (0, 0))[1],
         )
         for p in storage.list_projects(include_archived=include_archived)
     ]
+
+
+def list_all_projects(
+    storage: StorageProtocol,
+    *,
+    include_archived: bool = False,
+) -> list[Project]:
+    """Projects without count computation — for hot paths that only need
+    names/ids (TUI filter cycling and resolution)."""
+    return storage.list_projects(include_archived=include_archived)
 
 
 @dataclass(frozen=True)

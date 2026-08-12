@@ -126,7 +126,11 @@ def add(
     storage = _storage()
     out = create_output()
     dl = _parse_deadline_or_exit(deadline) if deadline else None
-    project_id = _resolve_project_or_exit(storage, project_ref) if project_ref else None
+    project_id = (
+        _resolve_project_or_exit(storage, project_ref)
+        if project_ref is not None
+        else None
+    )
     try:
         item = add_todo(
             storage,
@@ -185,7 +189,11 @@ def list_cmd(
         raise click.UsageError("--blocked and --ready are mutually exclusive.")
     storage = _storage()
     out = create_output()
-    project_id = _resolve_project_or_exit(storage, project_ref) if project_ref else None
+    project_id = (
+        _resolve_project_or_exit(storage, project_ref)
+        if project_ref is not None
+        else None
+    )
     items = list_todos(
         storage,
         status=Status.from_string(status) if status else None,
@@ -340,10 +348,11 @@ def rm(item_id: int) -> None:
     storage = _storage()
     out = create_output()
     try:
-        delete_todo(storage, item_id)
+        unblocked = delete_todo(storage, item_id)
     except NotFoundError as e:
         click.echo(str(e), err=True)
         sys.exit(1)
+    _warn_unblocked(unblocked)
     out.print_deleted(item_id)
 
 

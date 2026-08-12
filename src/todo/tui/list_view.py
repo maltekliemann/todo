@@ -4,7 +4,7 @@ import os
 import shlex
 import subprocess
 import tempfile
-from datetime import date, datetime
+from datetime import date
 
 from rich.markup import escape
 from rich.text import Text
@@ -18,6 +18,12 @@ from textual.screen import ModalScreen
 from textual.widget import Widget
 from textual.widgets import DataTable, Footer, Input, Label, Select, Static
 
+from todo.adapters.output import (
+    _deadline_str,
+    _priority_label,
+    _relative_age,
+    _status_icon,
+)
 from todo.adapters.sqlite_storage import SqliteStorage
 from todo.application.commands import (
     CompletionResult,
@@ -32,7 +38,7 @@ from todo.application.commands import (
 from todo.application.contracts.storage import UNSET, Unset
 from todo.application.queries import (
     count_tags,
-    list_projects,
+    list_all_projects,
     list_todos,
     show_todo,
 )
@@ -83,57 +89,6 @@ class TodoTable(DataTable["str | Text"]):
     def action_cursor_up(self) -> None:
         super().action_cursor_up()
         self._skip_separators(-1)
-
-
-def _priority_label(p: Priority) -> str:
-    if p == Priority.URGENT:
-        return "!! URG"
-    if p == Priority.HIGH:
-        return "!  HIGH"
-    if p == Priority.MEDIUM:
-        return "   MED"
-    return "   LOW"
-
-
-def _status_icon(s: Status) -> str:
-    if s == Status.DONE:
-        return "✓"
-    if s == Status.IN_PROGRESS:
-        return "●"
-    return "○"
-
-
-def _relative_age(dt: datetime) -> str:
-    now = datetime.now(tz=dt.tzinfo)
-    delta = now - dt
-    seconds = int(delta.total_seconds())
-    if seconds < 60:
-        return f"{seconds}s"
-    minutes = seconds // 60
-    if minutes < 60:
-        return f"{minutes}m"
-    hours = minutes // 60
-    if hours < 24:
-        return f"{hours}h"
-    days = hours // 24
-    if days < 7:
-        return f"{days}d"
-    weeks = days // 7
-    if weeks < 4:
-        return f"{weeks}w"
-    return f"{days // 30}mo"
-
-
-def _deadline_str(item: TodoItem) -> str:
-    if item.deadline is None:
-        return ""
-    days = item.days_until_deadline
-    assert days is not None
-    if item.is_overdue:
-        return f"\U0001f534 {item.deadline.strftime('%b %d')} ({abs(days)}d late)"
-    if item.deadline_urgent:
-        return f"⚠ {item.deadline.strftime('%b %d')} ({days}d)"
-    return item.deadline.strftime("%b %d")
 
 
 def _editor_command(editor_value: str, path: str) -> list[str]:
@@ -663,9 +618,9 @@ class TodoListView(Widget):
         if self._project_filter is not None:
             project_filter_id = next(
                 (
-                    s.project.id
-                    for s in list_projects(self._storage, include_archived=True)
-                    if s.project.name == self._project_filter
+                    p.id
+                    for p in list_all_projects(self._storage, include_archived=True)
+                    if p.name == self._project_filter
                 ),
                 None,
             )
@@ -866,8 +821,9 @@ class TodoListView(Widget):
         self._notify_unblocked(result)
         self._refresh_list()
 
-    def _notify_unblocked(self, result: CompletionResult) -> None:
-        for dep in result.unblocked:
+    def _notify_unblocked(self, result: CompletionResult | list[TodoItem]) -> None:
+        deps = result.unblocked if isinstance(result, CompletionResult) else result
+        for dep in deps:
             self.notify(f"🔓 #{dep.id} {escape(dep.title)} is now unblocked")
 
     def action_inspect(self) -> None:
@@ -949,10 +905,12 @@ class TodoListView(Widget):
         def after(confirmed: bool | None) -> None:
             if confirmed:
                 try:
-                    delete_todo(self._storage, item_id)
+                    unblocked = delete_todo(self._storage, item_id)
                 except TodoError as exc:
                     # E.g. deleted by another process while the dialog was open.
                     self.notify(escape(str(exc)), severity="error")
+                else:
+                    self._notify_unblocked(unblocked)
                 self._refresh_list()
 
         self.app.push_screen(ConfirmDialog(f"Delete #{item_id}?"), after)
@@ -999,7 +957,7 @@ class TodoListView(Widget):
     def action_cycle_project(self) -> None:
         """Cycle the project filter: no filter -> each project -> no filter."""
         names = [
-            s.project.name for s in list_projects(self._storage, include_archived=True)
+            p.name for p in list_all_projects(self._storage, include_archived=True)
         ]
         if not names:
             return
