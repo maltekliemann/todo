@@ -372,15 +372,18 @@ class TestBlock:
         assert items[2]["is_blocked"] is True
         assert items[1]["is_blocked"] is False
 
-    def test_list_renders_blocked_marker(self, invoke) -> None:
+    def test_plain_list_has_no_blocked_marker(self, invoke) -> None:
+        """This test previously asserted the opposite: that plain output
+        carried a 🚧 marker. That broke the machine-parseable contract of
+        piped output, so the marker is Rich/TUI-only now."""
         invoke("add Blocker")
         invoke("add Blocked")
         invoke("block 2 1")
 
         r = invoke("list")
         assert r.exit_code == 0
-        # Construction crane emoji prepended to the blocked item's title.
-        assert "\U0001f6a7" in r.output
+        assert "\U0001f6a7" not in r.output
+        assert "Blocked" in r.output
 
 
 class TestUnblock:
@@ -625,6 +628,49 @@ class TestProjectCli:
             cli.invoke(main, ["project", "show", "doomed", "--json"]).output
         )
         assert data["updates"] == []
+
+    def test_numeric_project_name_does_not_hijack_output(self, cli: CliRunner) -> None:
+        """Commands that know the project id must not re-resolve by name."""
+        cli.invoke(main, ["project", "add", "2"])  # project id 1, named "2"
+        result = cli.invoke(main, ["project", "add", "foo", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["name"] == "foo"
+        assert data["id"] == 2
+
+        result = cli.invoke(
+            main, ["project", "edit", "foo", "--description", "d", "--json"]
+        )
+        assert json.loads(result.output)["name"] == "foo"
+
+        result = cli.invoke(main, ["project", "archive", "foo", "--json"])
+        assert json.loads(result.output)["name"] == "foo"
+
+        result = cli.invoke(main, ["project", "log", "foo", "note", "--json"])
+        data = json.loads(result.output)
+        assert data["name"] == "foo"
+        assert data["updates"][0]["body"] == "note"
+
+    def test_summary_json_includes_dependency_fields(self, cli: CliRunner) -> None:
+        """Summary items must report the same dependency data as show/list."""
+        cli.invoke(main, ["add", "Blocker"])
+        cli.invoke(main, ["add", "Waiting"])
+        cli.invoke(main, ["block", "2", "1"])
+        cli.invoke(main, ["done", "1"])
+        result = cli.invoke(main, ["summary", "--since", "1 days", "--json"])
+        data = json.loads(result.output)
+        item = next(i for i in data["items"] if i["id"] == 1)
+        assert item["blocking"] == [2]
+
+    def test_plain_list_titles_are_verbatim_when_blocked(self, invoke) -> None:
+        """PlainOutput is machine-parseable: no decoration on titles."""
+        invoke("add Blocker")
+        invoke("add Waiting")
+        invoke("block 2 1")
+        result = invoke("list")
+        lines = [ln for ln in result.output.split("\n") if "Waiting" in ln]
+        assert lines, result.output
+        assert "\U0001f6a7" not in lines[0]
 
     def test_project_show_lists_its_items(self, invoke) -> None:
         invoke("project add infra")

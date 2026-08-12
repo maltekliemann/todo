@@ -359,10 +359,11 @@ class PlainOutput:
         for item in items:
             dl = _deadline_str(item)
             dl_part = f"  {dl}" if dl else ""
-            title = f"\U0001f6a7 {item.title}" if item.is_blocked else item.title
+            # Plain output is the machine-parseable format: titles verbatim,
+            # no decoration. Blocked state is available via --json.
             print(
                 f"  {item.id:>4}  {_priority_label(item.priority)}  "
-                f"{_status_label(item.status):<13} {title}{dl_part}"
+                f"{_status_label(item.status):<13} {item.title}{dl_part}"
             )
         print(f"\n{len(items)} item{'s' if len(items) != 1 else ''}")
 

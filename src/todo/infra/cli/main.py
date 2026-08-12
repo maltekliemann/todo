@@ -26,6 +26,7 @@ from todo.application.queries import (
     count_tags,
     list_projects,
     list_todos,
+    project_detail,
     resolve_project,
     show_project,
     show_todo,
@@ -33,7 +34,7 @@ from todo.application.queries import (
 )
 from todo.config import get_db_path
 from todo.domain.enums import Priority, Status
-from todo.domain.models import TodoItem
+from todo.domain.models import Project, TodoItem
 from todo.exceptions import (
     DependencyError,
     DuplicateProjectError,
@@ -62,12 +63,16 @@ def _parse_deadline_or_exit(value: str) -> date:
         sys.exit(1)
 
 
-def _resolve_project_or_exit(storage: SqliteStorage, ref: str) -> int:
+def _resolve_project_obj_or_exit(storage: SqliteStorage, ref: str) -> Project:
     try:
-        return resolve_project(storage, ref).id
+        return resolve_project(storage, ref)
     except ProjectNotFoundError as e:
         click.echo(str(e), err=True)
         sys.exit(1)
+
+
+def _resolve_project_or_exit(storage: SqliteStorage, ref: str) -> int:
+    return _resolve_project_obj_or_exit(storage, ref).id
 
 
 @click.group()
@@ -399,7 +404,7 @@ def project_add(name: str, description: str, as_json: bool) -> None:
     except DuplicateProjectError as e:
         click.echo(str(e), err=True)
         sys.exit(1)
-    detail = show_project(storage, str(created.id))
+    detail = project_detail(storage, created)
     if as_json:
         out.print_json_project(detail)
     else:
@@ -455,7 +460,7 @@ def project_edit(
     except DuplicateProjectError as e:
         click.echo(str(e), err=True)
         sys.exit(1)
-    detail = show_project(storage, str(edited.id))
+    detail = project_detail(storage, edited)
     if as_json:
         out.print_json_project(detail)
     else:
@@ -471,7 +476,7 @@ def project_archive(ref: str, as_json: bool) -> None:
     out = create_output()
     project_id = _resolve_project_or_exit(storage, ref)
     archived = archive_project(storage, project_id)
-    detail = show_project(storage, str(archived.id))
+    detail = project_detail(storage, archived)
     if as_json:
         out.print_json_project(detail)
     else:
@@ -486,9 +491,9 @@ def project_log(ref: str, text: str, as_json: bool) -> None:
     """Append a timestamped update to a project's log."""
     storage = _storage()
     out = create_output()
-    project_id = _resolve_project_or_exit(storage, ref)
-    log_project_update(storage, project_id, text)
-    detail = show_project(storage, str(project_id))
+    proj = _resolve_project_obj_or_exit(storage, ref)
+    log_project_update(storage, proj.id, text)
+    detail = project_detail(storage, proj)
     if as_json:
         out.print_json_project(detail)
     else:

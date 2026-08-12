@@ -93,17 +93,29 @@ class ProjectDetail:
     updates: list[ProjectUpdate]
 
 
-def show_project(
+def project_detail(
     storage: StorageProtocol,
-    ref: str,
+    project: Project,
 ) -> ProjectDetail:
-    """A project plus all of its items (done included) and its update log."""
-    project = resolve_project(storage, ref)
+    """Detail for an already-resolved project — items (done included) + log.
+
+    Callers that hold a Project must use this instead of re-resolving via a
+    ref string: name-first resolution could pick a different project whose
+    name happens to equal this project's numeric id.
+    """
     return ProjectDetail(
         project=project,
         items=storage.list(project_id=project.id, include_done=True),
         updates=storage.list_project_updates(project.id),
     )
+
+
+def show_project(
+    storage: StorageProtocol,
+    ref: str,
+) -> ProjectDetail:
+    """A project plus all of its items (done included) and its update log."""
+    return project_detail(storage, resolve_project(storage, ref))
 
 
 def count_tags(storage: StorageProtocol) -> list[tuple[str, int]]:

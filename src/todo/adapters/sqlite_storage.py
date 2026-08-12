@@ -313,7 +313,41 @@ class SqliteStorage:
             "ORDER BY todos.done_at DESC",
             (Status.DONE.value, since.isoformat()),
         ).fetchall()
-        return [_row_to_item(r) for r in rows]
+        return self._hydrate_dependencies(rows)
+
+    def _hydrate_dependencies(self, rows: list[sqlite3.Row]) -> list[TodoItem]:
+        """Build TodoItems with blocked_by/blocking/is_blocked populated.
+
+        Every multi-item query must go through here so dependency data is
+        consistent across list, summary, and any future read path.
+        """
+        dep_rows = self._conn.execute(
+            "SELECT blocker_id, blocked_id FROM todo_dependencies"
+        ).fetchall()
+        status_rows = self._conn.execute("SELECT id, status FROM todos").fetchall()
+        status_by_id = {r["id"]: r["status"] for r in status_rows}
+        blocked_by_map: dict[int, list[int]] = {}
+        blocking_map: dict[int, list[int]] = {}
+        for dep in dep_rows:
+            blocked_by_map.setdefault(dep["blocked_id"], []).append(dep["blocker_id"])
+            blocking_map.setdefault(dep["blocker_id"], []).append(dep["blocked_id"])
+
+        items: list[TodoItem] = []
+        for r in rows:
+            blocked_by = sorted(blocked_by_map.get(r["id"], []))
+            blocking = sorted(blocking_map.get(r["id"], []))
+            is_blocked = r["status"] != Status.DONE.value and any(
+                status_by_id.get(b) != Status.DONE.value for b in blocked_by
+            )
+            items.append(
+                _row_to_item(
+                    r,
+                    blocked_by=blocked_by,
+                    blocking=blocking,
+                    is_blocked=is_blocked,
+                )
+            )
+        return items
 
     def add_blocker(self, blocked_id: int, blocker_id: int) -> None:
         self.get(blocked_id)  # raises NotFoundError if missing
@@ -397,34 +431,7 @@ class SqliteStorage:
             "todos.created_at ASC"
         )
         rows = self._conn.execute(query, params).fetchall()
-
-        dep_rows = self._conn.execute(
-            "SELECT blocker_id, blocked_id FROM todo_dependencies"
-        ).fetchall()
-        status_rows = self._conn.execute("SELECT id, status FROM todos").fetchall()
-        status_by_id = {r["id"]: r["status"] for r in status_rows}
-        blocked_by_map: dict[int, list[int]] = {}
-        blocking_map: dict[int, list[int]] = {}
-        for dep in dep_rows:
-            blocked_by_map.setdefault(dep["blocked_id"], []).append(dep["blocker_id"])
-            blocking_map.setdefault(dep["blocker_id"], []).append(dep["blocked_id"])
-
-        items: list[TodoItem] = []
-        for r in rows:
-            blocked_by = sorted(blocked_by_map.get(r["id"], []))
-            blocking = sorted(blocking_map.get(r["id"], []))
-            is_blocked = r["status"] != Status.DONE.value and any(
-                status_by_id.get(b) != Status.DONE.value for b in blocked_by
-            )
-            items.append(
-                _row_to_item(
-                    r,
-                    blocked_by=blocked_by,
-                    blocking=blocking,
-                    is_blocked=is_blocked,
-                )
-            )
-        return items
+        return self._hydrate_dependencies(rows)
 
     def add_project(self, name: str, *, description: str = "") -> Project:
         now = _now().isoformat()
