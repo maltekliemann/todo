@@ -13,7 +13,7 @@ from todo.domain.enums import Priority, Status
 from todo.tui.app import TodoApp
 from todo.tui.edit_session import EditorSession
 from todo.tui.list_view import TodoListView
-from todo.tui.table import is_separator
+from todo.tui.table import COLUMNS, is_separator
 
 
 def _item_rows(table: DataTable) -> int:
@@ -169,6 +169,67 @@ class TestPrdKeyBindings:
                 assert not is_separator(key)
 
 
+class TestDepsColumn:
+    """Dependencies belong on the row, not only in the detail pane: '←' is
+    what this item waits on, '→' is how many wait on it."""
+
+    @pytest.fixture()
+    def linked(self, db_path: Path) -> SqliteStorage:
+        storage = SqliteStorage(db_path)
+        for n in range(1, 7):
+            add_todo(storage, f"Task {n}")
+        storage.add_blocker(1, 2)  # 1 waits on 2
+        storage.add_blocker(1, 3)  # 1 waits on 3
+        storage.add_blocker(4, 2)  # 4 waits on 2
+        storage.add_blocker(5, 2)  # 5 waits on 2
+        return storage
+
+    @staticmethod
+    def _deps_cell(table: DataTable, title: str) -> str:
+        column = COLUMNS.index("Deps")
+        for row in range(table.row_count):
+            cells = table.get_row_at(row)
+            if any(title == str(c) for c in cells):
+                return str(cells[column])
+        raise AssertionError(f"no row titled {title!r}")
+
+    async def test_shows_blocker_ids_and_blocked_count(
+        self, linked: SqliteStorage
+    ) -> None:
+        app = TodoApp(storage=linked)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            table = app.query_one("#item-list", DataTable)
+            assert self._deps_cell(table, "\U0001f6a7 Task 1") == "←#2,#3"
+            assert self._deps_cell(table, "Task 2") == "→3"
+            assert self._deps_cell(table, "Task 3") == "→1"
+            assert self._deps_cell(table, "Task 6") == ""
+
+    async def test_shows_both_directions_at_once(self, linked: SqliteStorage) -> None:
+        # #3 already blocks #1; make it wait on #6 too, so its cell has to
+        # carry both halves.
+        linked.add_blocker(3, 6)
+        app = TodoApp(storage=linked)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            table = app.query_one("#item-list", DataTable)
+            assert self._deps_cell(table, "\U0001f6a7 Task 3") == "←#6 →1"
+            assert self._deps_cell(table, "\U0001f6a7 Task 4") == "←#2"
+
+    async def test_long_blocker_lists_are_capped(self, db_path: Path) -> None:
+        storage = SqliteStorage(db_path)
+        for n in range(1, 7):
+            add_todo(storage, f"Task {n}")
+        for blocker in (2, 3, 4, 5, 6):
+            storage.add_blocker(1, blocker)
+        app = TodoApp(storage=storage)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            table = app.query_one("#item-list", DataTable)
+            cell = self._deps_cell(table, "\U0001f6a7 Task 1")
+            assert cell == "←#2,#3+3", cell
+
+
 class TestStayCursorMode:
     """Stay mode exists so a run of items can be moved without chasing the
     cursor. Holding a visual row index is not enough: a status step re-sorts
@@ -315,7 +376,7 @@ class TestPriorityAndDeadlineStyling:
         async with app.run_test() as pilot:
             await pilot.pause()
             table = app.query_one("#item-list", DataTable)
-            pri_cell = self._cells(table, title)[1]
+            pri_cell = self._cells(table, title)[COLUMNS.index("Pri")]
             assert str(pri_cell.style) == expected
 
     @pytest.mark.parametrize(
@@ -329,7 +390,7 @@ class TestPriorityAndDeadlineStyling:
         async with app.run_test() as pilot:
             await pilot.pause()
             table = app.query_one("#item-list", DataTable)
-            deadline_cell = self._cells(table, title)[4]
+            deadline_cell = self._cells(table, title)[COLUMNS.index("Deadline")]
             assert str(deadline_cell.style) == expected
 
     async def test_blocked_row_stays_dim_over_its_priority_colour(
@@ -342,7 +403,7 @@ class TestPriorityAndDeadlineStyling:
             table = app.query_one("#item-list", DataTable)
             cells = self._cells(table, "\U0001f6a7 Urgent one")
             assert all("dim" in str(c.style) for c in cells)
-            assert "red" in str(cells[1].style)
+            assert "red" in str(cells[COLUMNS.index("Pri")].style)
 
 
 class TestDoneAction:

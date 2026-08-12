@@ -22,7 +22,11 @@ from todo.tui.render import join_styles
 
 SEPARATOR_PREFIX = "__sep_"
 
-COLUMNS = ("#", "Pri", "Status", "Title", "Deadline", "Age")
+COLUMNS = ("#", "Pri", "Status", "Title", "Deps", "Deadline", "Age")
+
+# Blocker ids past this many collapse into a "+n" tail: the column has to
+# stay narrow enough to leave the title room.
+_MAX_BLOCKER_IDS = 2
 
 # Groups in reading order: what you are doing, then what is next, then
 # what is parked, then what is finished.
@@ -134,21 +138,34 @@ class TodoTable(DataTable["str | Text"]):
             group = groups[status]
             if not group:
                 continue
-            self.add_row(
-                "",
-                "",
-                f"── {status.value} ({len(group)}) ──",
-                "",
-                "",
-                "",
-                key=f"{SEPARATOR_PREFIX}{status.value}",
-            )
+            label = f"── {status.value} ({len(group)}) ──"
+            cells = ["" for _ in COLUMNS]
+            cells[COLUMNS.index("Title")] = label
+            self.add_row(*cells, key=f"{SEPARATOR_PREFIX}{status.value}")
             index += 1
             for item in group:
                 self.add_row(*_cells(item), key=str(item.id))
                 row_index_of[item.id] = index
                 index += 1
         return row_index_of
+
+
+def deps_cell(item: TodoItem) -> str:
+    """What this item waits on, and how many wait on it.
+
+    '←#2,#3' are the blockers by id — you need the id to act on them —
+    while '→3' is only a count, because the ids of dependents are not
+    something you act on from this row.
+    """
+    parts = []
+    if item.blocked_by:
+        shown = item.blocked_by[:_MAX_BLOCKER_IDS]
+        ids = ",".join(f"#{i}" for i in shown)
+        hidden = len(item.blocked_by) - len(shown)
+        parts.append(f"←{ids}+{hidden}" if hidden else f"←{ids}")
+    if item.blocking:
+        parts.append(f"→{len(item.blocking)}")
+    return " ".join(parts)
 
 
 def _cells(item: TodoItem) -> list[Text]:
@@ -164,12 +181,15 @@ def _cells(item: TodoItem) -> list[Text]:
         _priority_label(item.priority),
         f"{_status_icon(item.status)} {item.status.value}",
         f"\U0001f6a7 {item.title}" if item.is_blocked else item.title,
+        deps_cell(item),
         deadline_text,
         _relative_age(item.created_at),
     ]
     row_style = "dim" if item.is_blocked else ""
     styles = [row_style] * len(values)
-    styles[1] = join_styles(row_style, _pri_style(item.priority))
+    styles[COLUMNS.index("Pri")] = join_styles(row_style, _pri_style(item.priority))
     if deadline_text:
-        styles[4] = join_styles(row_style, _deadline_style(item))
+        styles[COLUMNS.index("Deadline")] = join_styles(
+            row_style, _deadline_style(item)
+        )
     return [Text(v, style=s) for v, s in zip(values, styles)]
