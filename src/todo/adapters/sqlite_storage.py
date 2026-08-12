@@ -7,6 +7,7 @@ from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from todo.adapters.sqlite_migrations import MIGRATIONS, SCHEMA
 from todo.application.contracts.storage import (
     UNSET,
     EdgeList,
@@ -17,121 +18,13 @@ from todo.application.contracts.storage import (
 )
 from todo.domain.enums import Priority, ProjectStatus, Status
 from todo.domain.models import Project, ProjectUpdate, TodoItem
-from todo.domain.tags import dedupe_tags, split_tags
-from todo.domain.text import single_line
+from todo.domain.tags import split_tags
 from todo.exceptions import (
     DuplicateProjectError,
     NotFoundError,
     ProjectNotFoundError,
     StorageError,
 )
-
-_SCHEMA = """\
-CREATE TABLE IF NOT EXISTS todos (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    title      TEXT    NOT NULL,
-    body       TEXT    NOT NULL DEFAULT '',
-    priority   TEXT    NOT NULL DEFAULT 'medium',
-    status     TEXT    NOT NULL DEFAULT 'todo',
-    created_at TEXT    NOT NULL,
-    updated_at TEXT    NOT NULL,
-    done_at    TEXT,
-    deadline   TEXT,
-    tags       TEXT    NOT NULL DEFAULT ''
-);
-CREATE TABLE IF NOT EXISTS todo_dependencies (
-    blocker_id INTEGER NOT NULL REFERENCES todos(id) ON DELETE CASCADE,
-    blocked_id INTEGER NOT NULL REFERENCES todos(id) ON DELETE CASCADE,
-    PRIMARY KEY (blocker_id, blocked_id)
-);
-"""
-
-
-def _migration_v3_normalize(conn: sqlite3.Connection) -> None:
-    """Normalize rows written before single-line normalization existed.
-
-    Uses the shared domain helper so migrated rows equal what the write
-    path produces, and project-name collisions get a unique ' #id' suffix
-    instead of blowing up the UNIQUE constraint and locking the user out
-    of the database.
-    """
-    for item_id, title in conn.execute("SELECT id, title FROM todos").fetchall():
-        normalized = single_line(title) or f"Untitled #{item_id}"
-        if normalized != title:
-            conn.execute(
-                "UPDATE todos SET title = ? WHERE id = ?", (normalized, item_id)
-            )
-
-    projects = conn.execute("SELECT id, name FROM projects ORDER BY id").fetchall()
-    taken = {name for _, name in projects if single_line(name) == name}
-    for project_id, name in projects:
-        normalized = single_line(name) or f"project #{project_id}"
-        if normalized == name:
-            continue
-        while normalized in taken:
-            normalized = f"{normalized} #{project_id}"
-        conn.execute(
-            "UPDATE projects SET name = ? WHERE id = ?", (normalized, project_id)
-        )
-        taken.add(normalized)
-
-
-def _normalize_tag_string(raw: str) -> str:
-    """The stored form every read path derives its display from.
-
-    Must produce exactly what the write path produces (single_line per
-    segment, empties dropped, duplicates removed, order preserved) — a
-    migration that stops at strip() leaves legacy rows that can never be
-    matched by the same string a new row is created with.
-    """
-    return ",".join(dedupe_tags(single_line(t) for t in split_tags(raw)))
-
-
-def _migration_v4_normalize_tags(conn: sqlite3.Connection) -> None:
-    """Normalize tags written before tag normalization existed.
-
-    Legacy rows store tags verbatim (padding, empty segments, duplicates)
-    while every read path strips segments for display — so the tag a user
-    sees could never match the SQL tag filter, which compares against the
-    raw column. Rewriting to the displayed form makes filters work again.
-    """
-    for item_id, raw in conn.execute("SELECT id, tags FROM todos").fetchall():
-        normalized = _normalize_tag_string(raw)
-        if normalized != raw:
-            conn.execute(
-                "UPDATE todos SET tags = ? WHERE id = ?", (normalized, item_id)
-            )
-
-
-# Versioned migrations, gated by PRAGMA user_version. Index i migrates a
-# database at user_version i to i+1. A fresh database runs all of them, so
-# fresh and upgraded databases end up with the identical schema. SQL entries
-# are split on ';' — statements must not contain literal semicolons; use a
-# callable for anything data-dependent.
-_MIGRATIONS: list[str | Callable[[sqlite3.Connection], None]] = [
-    """\
-CREATE TABLE projects (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    name        TEXT    NOT NULL UNIQUE,
-    description TEXT    NOT NULL DEFAULT '',
-    status      TEXT    NOT NULL DEFAULT 'active',
-    created_at  TEXT    NOT NULL,
-    updated_at  TEXT    NOT NULL
-);
-ALTER TABLE todos ADD COLUMN project_id INTEGER
-    REFERENCES projects(id) ON DELETE SET NULL;
-""",
-    """\
-CREATE TABLE project_updates (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    body       TEXT    NOT NULL,
-    created_at TEXT    NOT NULL
-);
-""",
-    _migration_v3_normalize,
-    _migration_v4_normalize_tags,
-]
 
 
 def _now() -> datetime:
@@ -217,7 +110,7 @@ class SqliteStorage:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA foreign_keys=ON")
             self._conn.execute("PRAGMA busy_timeout = 5000")
-            self._conn.executescript(_SCHEMA)
+            self._conn.executescript(SCHEMA)
             self._migrate()
         except BaseException as e:
             # A failed init must not leak a connection holding a write lock
@@ -232,7 +125,7 @@ class SqliteStorage:
 
     def _migrate(self) -> None:
         version = int(self._conn.execute("PRAGMA user_version").fetchone()[0])
-        for target, script in enumerate(_MIGRATIONS[version:], start=version + 1):
+        for target, script in enumerate(MIGRATIONS[version:], start=version + 1):
             self._apply_migration(target, script)
 
     def _apply_migration(

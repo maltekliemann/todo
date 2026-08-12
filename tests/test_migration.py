@@ -117,7 +117,7 @@ class TestMigration:
         bad_migration = (
             "CREATE TABLE mig_probe (id INTEGER);\nCREATE TABLE todos (id INTEGER);\n"
         )
-        monkeypatch.setattr(storage_mod, "_MIGRATIONS", [bad_migration])
+        monkeypatch.setattr(storage_mod, "MIGRATIONS", [bad_migration])
         # Wrapped like every other init-time database failure.
         from todo.exceptions import StorageError
 
@@ -144,22 +144,22 @@ class TestMigration:
     def test_losing_a_migration_race_is_not_an_error(self, tmp_path: Path) -> None:
         """If another process applies the migration between our version
         check and our attempt, the failure is recognized as success."""
-        from todo.adapters.sqlite_storage import _MIGRATIONS
+        from todo.adapters.sqlite_migrations import MIGRATIONS
 
         db = tmp_path / "db.db"
         storage = SqliteStorage(db)  # fully migrated: user_version == 2
         # Re-applying migration 1 fails ('projects' exists), but since
         # user_version >= 1 the loser treats it as already done.
-        storage._apply_migration(1, _MIGRATIONS[0])
+        storage._apply_migration(1, MIGRATIONS[0])
         assert storage.get_project_by_name  # still usable
         storage.close()
 
     def test_genuinely_failed_migration_still_raises(self, tmp_path: Path) -> None:
-        from todo.adapters.sqlite_storage import _MIGRATIONS
+        from todo.adapters.sqlite_migrations import MIGRATIONS
 
         db = tmp_path / "db.db"
         storage = SqliteStorage(db)  # fully migrated
-        future = len(_MIGRATIONS) + 1  # a version nobody has applied
+        future = len(MIGRATIONS) + 1  # a version nobody has applied
         with pytest.raises(sqlite3.OperationalError):
             storage._apply_migration(future, "CREATE TABLE projects (x INTEGER);\n")
         storage.close()
@@ -199,11 +199,11 @@ class TestLegacyDataNormalization:
 
 def _make_v2_db_with_projects(path: Path, names: list[str]) -> None:
     """A database exactly as v2 code left it: projects exist, no v3 cleanup."""
-    from todo.adapters.sqlite_storage import _MIGRATIONS
+    from todo.adapters.sqlite_migrations import MIGRATIONS
 
     _make_legacy_db(path)
     conn = sqlite3.connect(str(path))
-    for script in _MIGRATIONS[:2]:
+    for script in MIGRATIONS[:2]:
         conn.executescript(script)
     for name in names:
         conn.execute(

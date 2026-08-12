@@ -328,15 +328,22 @@ class TestSharedNormalizationHelpers:
 
         assert single_line(" a\n\n b\tc ") == "a b c"
 
-    def test_adapter_uses_shared_helpers(self) -> None:
+    def test_nothing_keeps_a_private_copy_of_a_shared_helper(self) -> None:
+        """The five hand-copies diverged. Whichever module needs to collapse
+        whitespace or split tags imports the domain helper — a redefinition
+        anywhere is the bug this guards against."""
         from pathlib import Path
 
-        import todo.adapters.sqlite_storage as mod
+        import todo
 
-        src = Path(str(mod.__file__)).read_text()
-        assert "def _single_line" not in src
-        assert "from todo.domain.text import" in src
-        assert "from todo.domain.tags import" in src
+        root = Path(str(todo.__file__)).parent
+        offenders = [
+            path.relative_to(root)
+            for path in root.rglob("*.py")
+            for name in ("def _single_line", "def _split_tags", "def _dedupe_tags")
+            if name in path.read_text() and path.name not in ("text.py", "tags.py")
+        ]
+        assert offenders == []
 
 
 class TestTagWritePathParity:
@@ -421,7 +428,7 @@ class TestTagFilterMatchesWritePath:
         assert "Task A" in result.output
 
     def test_migration_form_matches_write_path_form(self) -> None:
-        from todo.adapters.sqlite_storage import _normalize_tag_string
+        from todo.adapters.sqlite_migrations import normalize_tag_string
 
-        assert _normalize_tag_string("my  tag") == "my tag"
-        assert _normalize_tag_string("a\tb, c") == "a b,c"
+        assert normalize_tag_string("my  tag") == "my tag"
+        assert normalize_tag_string("a\tb, c") == "a b,c"
