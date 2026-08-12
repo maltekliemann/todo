@@ -185,23 +185,23 @@ real transaction. Treat 'my own fix' as untrusted input to this round.
 
 ## Round 6 — exit-gate review wf_8b4f52fe-9a9 (2026-08-12), 10 reported + 3 capped-out
 
-- [ ] `src/todo/adapters/sqlite_storage.py:52` [correctness] — v3 normalization migration rewrites legacy titles and project names but skips the tags column, so legacy whitespace-padded tags remain stored padded while every read path strips them for display, making the advertised tag unmatchable by tag filtering [also :516]
+- [x] (295b0f0) `src/todo/adapters/sqlite_storage.py:52` [correctness] — v3 normalization migration rewrites legacy titles and project names but skips the tags column, so legacy whitespace-padded tags remain stored padded while every read path strips them for display, making the advertised tag unmatchable by tag filtering [also :516]
       Scenario: Pre-range DB has tags column 'home ' (from `todo add -t "home "`). After upgrade, `todo tags` prints 'home 1' and `todo show` prints 'Tags: home', but `todo list --tag home` matches LIKE '%,home,%' against ',home ,' and prints 'No items.'; TUI tag filter cycles to an empty list. User cannot see or type the real stored value — filtering permanently broken.
-- [ ] `src/todo/adapters/sqlite_storage.py:308` [cleanup] — Read paths (get, list, done_since, data_version, project reads) raise raw sqlite3.Error instead of StorageError, so TUI TodoError guards miss them and the TUI crashes
+- [x] (295b0f0) `src/todo/adapters/sqlite_storage.py:308` [cleanup] — Read paths (get, list, done_since, data_version, project reads) raise raw sqlite3.Error instead of StorageError, so TUI TodoError guards miss them and the TUI crashes
       Scenario: Corrupted/truncated db mid-session: storage.list()/get() raise raw sqlite3.DatabaseError. _refresh_list, _poll_for_external_changes, _update_detail, action_done all guard with `except TodoError` — raw error propagates out of timer/handler and crashes Textual with a traceback. Round-5 'uniform wrapping' only covered writes.
 - [ ] `src/todo/tui/list_view.py:100` [correctness] — shlex-splitting $EDITOR breaks previously-working unquoted editor paths containing spaces
       Scenario: EDITOR=/Applications/My Editor.app/Contents/MacOS/edit worked at 658ec6b (subprocess.run([editor, tmp])); now shlex-splits to ['/Applications/My', ...] → OSError → 'Editor failed' toast, editing dead. Fix the class: keep flag support but fall back to the verbatim value when the split head is not an executable and the whole value is.
 - [ ] `src/todo/tui/list_view.py:187` [cleanup] — Editor round-trip strips the body's leading/trailing whitespace, silently mutating body content even when the user only edited another field
       Scenario: Body "    indented line\n\n  second\n" (pasted code); user edits only the title; _parse_editor_text does '\n'.join(body_lines).strip() → indentation and trailing newline permanently removed without the user touching the body.
-- [ ] `src/todo/adapters/sqlite_storage.py:178` [cleanup] — mkdir/OSError during storage init is not wrapped, so a bad TODO_DB path dumps a raw PermissionError traceback instead of the clean 'Database error' message
+- [x] (295b0f0) `src/todo/adapters/sqlite_storage.py:178` [cleanup] — mkdir/OSError during storage init is not wrapped, so a bad TODO_DB path dumps a raw PermissionError traceback instead of the clean 'Database error' message
       Scenario: `TODO_DB=/etc/nonexistent-dir/sub/t.db todo add hello` → full traceback ending PermissionError; db_path.parent.mkdir raises before any sqlite call so _SafeGroup (StorageError, sqlite3.Error) never sees it. Same crash for `todo ui`.
 - [ ] `src/todo/adapters/output.py:31` [cleanup] — _relative_age renders items 28-29 days old as '0mo' in the Age column
       Scenario: days 28-29: weeks==4 fails weeks<4, days//30==0 → '0mo' ('3w' then '0mo' then '1mo').
-- [ ] `src/todo/application/commands.py:21` [cleanup] — _normalize_tags does not deduplicate, so a repeated tag inflates `todo tags` counts (one item counted twice)
+- [x] (3f6395d) `src/todo/application/commands.py:21` [cleanup] — _normalize_tags does not deduplicate, so a repeated tag inflates `todo tags` counts (one item counted twice)
       Scenario: `todo add x -t a -t a` stores ['a','a']; `todo tags` reports ('a', 2) for one item. Dedupe order-preserving in _normalize_tags fixes every entry path.
-- [ ] `src/todo/application/commands.py:280` [cleanup] — Project descriptions are not normalized to a single line, breaking the one-row-per-project plain output that project-name normalization exists to guarantee
+- [x] (3f6395d) `src/todo/application/commands.py:280` [cleanup] — Project descriptions are not normalized to a single line, breaking the one-row-per-project plain output that project-name normalization exists to guarantee
       Scenario: `project add myproj -D 'line1\nline2'` → piped `project list` emits a bare 'line2' second physical line; a one-row-per-project consumer mis-parses it as another record.
-- [ ] `src/todo/application/commands.py:314` [cleanup] — log_project_update accepts an empty/whitespace body, producing a dangling timestamp-only line in the project log
+- [x] (3f6395d) `src/todo/application/commands.py:314` [cleanup] — log_project_update accepts an empty/whitespace body, producing a dangling timestamp-only line in the project log
       Scenario: `todo project log myproj ""` succeeds; `project show` prints 'Log:' + '  Aug 12, 2026 11:09' with no text, and there is no update-delete command to remove it.
 - [ ] `src/todo/tui/list_view.py:752` [cleanup] — _update_detail re-queries show_todo (4 SQL queries) on every RowHighlighted although _refresh_list already holds the fully hydrated item in self._items
       Scenario: Holding arrow-down fires show_todo → storage.get per row (item + two dependency queries + blocker-status query); a dict built during _refresh_list serves the pane with zero queries; the 2s poll covers staleness.
