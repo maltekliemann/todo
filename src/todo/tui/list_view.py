@@ -171,7 +171,8 @@ def apply_editor_edit(
     """Parse an edited $EDITOR buffer and apply it to the item.
 
     A field line that is present but empty clears that field (deadline,
-    tags); a line the user deleted entirely leaves the field unchanged.
+    tags); a field line the user deleted entirely leaves the field
+    unchanged. The '# Body' marker is required (ValueError otherwise).
     """
     fields = _parse_editor_text(edited)
 
@@ -198,17 +199,15 @@ def apply_editor_edit(
         # Same contract as deadline: bad input errors, never a partial apply.
         raise ValueError("Title cannot be empty.")
 
-    # Absent "body" means the marker line was deleted: leave unchanged. A
-    # present body is compared against the stored one so an untouched body
-    # is never rewritten (editors append a final newline on save; that
-    # alone is not an edit). Only a genuinely edited body drops the single
+    # The body is compared against the stored one so an untouched body is
+    # never rewritten (editors append a final newline on save; that alone
+    # is not an edit). Only a genuinely edited body drops the single
     # trailing newline the editor's save added.
     body: str | None = None
-    if "body" in fields:
-        parsed_body = fields["body"]
-        current_body = storage.get(item_id).body
-        if parsed_body not in (current_body, current_body + "\n"):
-            body = parsed_body.removesuffix("\n")
+    parsed_body = fields["body"]
+    current_body = storage.get(item_id).body
+    if parsed_body not in (current_body, current_body + "\n"):
+        body = parsed_body.removesuffix("\n")
 
     return edit_todo(
         storage,
@@ -241,11 +240,17 @@ def _parse_editor_text(text: str) -> dict[str, str]:
             key = key.strip().lower()
             if key in ("title", "priority", "status", "deadline", "tags"):
                 fields[key] = value.strip()
-    # Only report a body when the marker line was present: a buffer without
-    # the marker must not silently erase the existing body. The body is
-    # kept verbatim — whitespace is content (pasted code, indentation).
-    if in_body:
-        fields["body"] = "\n".join(body_lines)
+    # The marker is required. Without it there is no way to tell fields
+    # from body text: the user's body edits would be silently discarded
+    # and body lines like 'status: done' would override real fields.
+    # Bad input errors (buffer kept upstream) — never a silent no-op.
+    if not in_body:
+        raise ValueError(
+            "The '# Body' marker line is missing — restore it so your "
+            "body edits can be applied."
+        )
+    # The body is kept verbatim — whitespace is content (pasted code).
+    fields["body"] = "\n".join(body_lines)
     return fields
 
 
@@ -612,7 +617,9 @@ class TodoListView(Widget):
         self._item_by_id: dict[int, TodoItem] = {}
         self._search_query: str = ""
         self._tag_filter: str | None = None
-        self._project_filter: str | None = None
+        # Keyed on the stable project id, not the mutable name — an
+        # external rename must not blank the filtered list.
+        self._project_filter: int | None = None
         self._priority_filter: Priority | None = None
         self._cursor_follows_item: bool = True
         self._last_data_version: int = 0
@@ -631,13 +638,10 @@ class TodoListView(Widget):
         table = self.query_one("#item-list", DataTable)
         table.add_columns("#", "Pri", "Status", "Title", "Deadline", "Age")
         table.focus()
+        # _refresh_list_unguarded is the ONLY writer of _last_data_version:
+        # recording a version without a successful refresh would make the
+        # poll see "no change" forever and never retry after a failure.
         self._refresh_list()
-        try:
-            self._last_data_version = self._storage.data_version()
-        except TodoError:
-            # The guarded refresh above already notified; the poll reports
-            # a persisting failure once per streak.
-            pass
         self.set_interval(self.POLL_INTERVAL_SECONDS, self._poll_for_external_changes)
 
     def _poll_for_external_changes(self) -> None:
@@ -652,7 +656,8 @@ class TodoListView(Widget):
             return
         self._poll_error_reported = False
         if version != self._last_data_version:
-            self._last_data_version = version
+            # No version bookkeeping here: only a successful refresh
+            # records it, so a failed refresh is retried next tick.
             self._refresh_list()
 
     @on(DataTable.RowHighlighted, "#item-list")
@@ -690,18 +695,23 @@ class TodoListView(Widget):
         # Tag/priority/project filtering happens in SQL via list_todos; only
         # the search filter stays here because it also matches tag names,
         # which storage-level search (title/body) does not cover.
-        project_filter_id: int | None = None
+        project_filter_id = self._project_filter
+        project_filter_label: str | None = None
         project_filter_missing = False
-        if self._project_filter is not None:
-            project_filter_id = next(
+        if project_filter_id is not None:
+            match = next(
                 (
-                    p.id
+                    p
                     for p in list_all_projects(self._storage, include_archived=True)
-                    if p.name == self._project_filter
+                    if p.id == project_filter_id
                 ),
                 None,
             )
-            project_filter_missing = project_filter_id is None
+            if match is None:
+                project_filter_missing = True
+            else:
+                # Label from the live row, so a rename shows the new name.
+                project_filter_label = match.name
 
         if project_filter_missing:
             # Filtered project no longer exists: show nothing, like before.
@@ -809,7 +819,9 @@ class TodoListView(Widget):
         if self._tag_filter is not None:
             parts.append(f"[dim]Tag:[/dim] [b]{escape(self._tag_filter)}[/b]")
         if self._project_filter is not None:
-            parts.append(f"[dim]Project:[/dim] [b]{escape(self._project_filter)}[/b]")
+            parts.append(
+                f"[dim]Project:[/dim] [b]{escape(project_filter_label or '?')}[/b]"
+            )
         if self._priority_filter is not None:
             parts.append(f"[dim]Priority:[/dim] [b]{self._priority_filter.value}[/b]")
         hint = "  [dim]([0] clears)[/dim]" if parts else ""
@@ -932,12 +944,22 @@ class TodoListView(Widget):
         try:
             with self.app.suspend():
                 subprocess.run(_editor_command(editor, tmp_path), check=True)
+        except subprocess.CalledProcessError as exc:
+            # The editor RAN and exited nonzero — the user may already have
+            # saved their work into the buffer. Keep it and say where.
+            self.notify(
+                f"Editor failed: {escape(str(exc))} — "
+                f"your buffer is kept at {escape(tmp_path)}",
+                severity="error",
+                timeout=12,
+            )
+            return
         except (
             ValueError,  # empty/misquoted $EDITOR
             OSError,  # missing binary, permission denied, ...
-            subprocess.CalledProcessError,
             SuspendNotSupported,
         ) as exc:
+            # The editor never ran; the buffer holds nothing of the user's.
             self.notify(f"Editor failed: {escape(str(exc))}", severity="error")
             os.unlink(tmp_path)
             return
@@ -1054,22 +1076,22 @@ class TodoListView(Widget):
     def action_cycle_project(self) -> None:
         """Cycle the project filter: no filter -> each project -> no filter."""
         try:
-            names = [
-                p.name for p in list_all_projects(self._storage, include_archived=True)
+            ids = [
+                p.id for p in list_all_projects(self._storage, include_archived=True)
             ]
         except TodoError as exc:
             self.notify(escape(str(exc)), severity="error")
             return
-        if not names:
+        if not ids:
             return
         if self._project_filter is None:
-            self._project_filter = names[0]
+            self._project_filter = ids[0]
         else:
             try:
-                idx = names.index(self._project_filter)
+                idx = ids.index(self._project_filter)
             except ValueError:
                 idx = -1
-            self._project_filter = names[idx + 1] if idx + 1 < len(names) else None
+            self._project_filter = ids[idx + 1] if idx + 1 < len(ids) else None
         self._refresh_list()
 
     def action_filter_priority(self, value: str) -> None:

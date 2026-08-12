@@ -256,6 +256,13 @@ real transaction. Treat 'my own fix' as untrusted input to this round.
 - [x] (round-9 final commit) `src/todo/application/commands.py:115` [cleanup] — Status changes run blocked_ids() scans even when the item blocks nothing; skip the diff when there are no dependents
 - [x] (round-9 final commit) `src/todo/adapters/sqlite_storage.py:48` [cleanup] — _single_line duplicates the write path's whitespace normalization with a docstring admitting manual sync; share one domain helper
 
+## Round 10 — exit-gate review wf_4d259557-1f8 (2026-08-12), 4 distinct
+
+- [ ] `src/todo/tui/list_view.py:247` [correctness] — Deleting the '# Body' marker silently discards body edits (reported as success, buffer unlinked) and lets 'key: value' body lines override real fields; a missing marker must be an error with the buffer kept
+- [ ] `src/todo/tui/list_view.py:942` [correctness] — CalledProcessError handler unlinks the temp buffer though the editor RAN and the user may have saved; keep the buffer and report its path like every sibling failure path
+- [ ] `src/todo/tui/list_view.py:654` [cleanup] — Poll and on_mount record _last_data_version redundantly before/without a successful refresh, permanently disabling the poll's retry after a transient failure; let the refresh be the single writer
+- [ ] `src/todo/tui/list_view.py:696` [cleanup] — Project filter keyed on mutable name blanks the list when the project is renamed externally; key on the stable project id
+
 ## Triage log
 
 - Round-5 finding `FINDINGS.md:1` (process artifacts committed to repo root):

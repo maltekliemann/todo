@@ -1353,3 +1353,72 @@ class TestEditorBufferReadFailure:
             assert content is None
             assert notices
             assert str(missing) in notices[0]
+
+
+class TestPollRetryAndRenameStableFilter:
+    async def test_poll_retries_after_transient_refresh_failure(
+        self, db_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed refresh must not record the new data_version, or the
+        poll never retries and the TUI shows stale rows forever."""
+        from todo.exceptions import StorageError
+        from todo.tui.list_view import TodoListView
+
+        storage = SqliteStorage(db_path)
+        for title in ("one", "two", "three"):
+            add_todo(storage, title)
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            view = app.query_one(TodoListView)
+            table = app.query_one("#item-list", DataTable)
+            assert _item_rows(table) == 3
+
+            # External write bumps data_version.
+            other = SqliteStorage(db_path)
+            add_todo(other, "four")
+            other.close()
+
+            original = SqliteStorage.list
+            fail_once = {"armed": True}
+
+            def flaky(self: SqliteStorage, **kwargs: object):  # type: ignore[no-untyped-def]
+                if fail_once["armed"]:
+                    fail_once["armed"] = False
+                    raise StorageError("database is locked")
+                return original(self, **kwargs)
+
+            monkeypatch.setattr(SqliteStorage, "list", flaky)
+            view._poll_for_external_changes()  # sees change, refresh fails
+            await pilot.pause()
+            view._poll_for_external_changes()  # must retry, not no-op
+            await pilot.pause()
+            assert _item_rows(table) == 4
+
+    async def test_project_filter_survives_external_rename(self, db_path: Path) -> None:
+        """The filter keys on the stable project id: a rename must neither
+        blank the list nor mislabel the status bar."""
+        from todo.application.commands import add_project, edit_project
+        from todo.tui.list_view import TodoListView
+
+        storage = SqliteStorage(db_path)
+        project = add_project(storage, "Alpha")
+        add_todo(storage, "in alpha", project_id=project.id)
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("p")  # filter: Alpha
+            await pilot.pause()
+            table = app.query_one("#item-list", DataTable)
+            assert _item_rows(table) == 1
+
+            other = SqliteStorage(db_path)
+            edit_project(other, project.id, name="Beta")
+            other.close()
+
+            view = app.query_one(TodoListView)
+            view._refresh_list()
+            await pilot.pause()
+            assert _item_rows(table) == 1  # still filtered to the project
+            status = str(app.query_one("#search-status", Static).render())
+            assert "Beta" in status

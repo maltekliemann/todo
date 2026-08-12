@@ -81,16 +81,18 @@ class TestApplyEditorEdit:
 
 
 class TestEditorBodyContract:
-    def test_missing_body_marker_keeps_body(self, storage: SqliteStorage) -> None:
-        """Deleting the '# Body' marker line must not erase the body."""
+    def test_missing_body_marker_rejects_edit(self, storage: SqliteStorage) -> None:
+        """Deleting the '# Body' marker errors (round-10: previously it
+        silently kept the body while discarding the user's body edits)."""
         add_todo(storage, "Task", body="important body text")
         text = "\n".join(
             line
             for line in _item_to_editor_text(storage.get(1)).split("\n")
             if not line.startswith("# Body")
         )
-        result = apply_editor_edit(storage, 1, text)
-        assert result.item.body == "important body text"
+        with pytest.raises(ValueError, match="[Bb]ody"):
+            apply_editor_edit(storage, 1, text)
+        assert storage.get(1).body == "important body text"
 
     def test_emptying_body_below_marker_clears_it(self, storage: SqliteStorage) -> None:
         add_todo(storage, "Task", body="old body")
@@ -351,3 +353,92 @@ class TestWhitespaceOnlyBodyEdit:
             assert after.body == "print(x)"
             assert after.updated_at == item_before.updated_at  # true no-op
             assert not buf.exists()
+
+
+class TestMissingBodyMarkerErrors:
+    def test_deleted_marker_rejects_edit_instead_of_silent_drop(
+        self, storage: SqliteStorage
+    ) -> None:
+        """Deleting the '# Body' marker must error (buffer kept upstream),
+        never report success while the user's body edits are discarded."""
+        add_todo(storage, "Task", body="draft the outline")
+        text = "\n".join(
+            line
+            for line in _item_to_editor_text(storage.get(1)).split("\n")
+            if not line.startswith("# Body")
+        )
+        text += "\nsend to Alice"  # the body edit that silently vanished
+        with pytest.raises(ValueError, match="[Bb]ody"):
+            apply_editor_edit(storage, 1, text)
+        assert storage.get(1).body == "draft the outline"  # nothing applied
+
+    async def test_marker_less_buffer_keeps_file_and_notifies(
+        self, db_path: Path, tmp_path: Path
+    ) -> None:
+        from todo.tui.list_view import TodoListView
+
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Task", body="keep me")
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            view = app.query_one(TodoListView)
+            original = _item_to_editor_text(storage.get(1))
+            edited = "\n".join(
+                line for line in original.split("\n") if not line.startswith("# Body")
+            )
+            buf = tmp_path / "buffer.todo.txt"
+            buf.write_text(edited)
+            view._apply_edited_buffer(1, original, edited, str(buf))
+            await pilot.pause()
+            assert app.is_running
+            assert storage.get(1).body == "keep me"
+            assert buf.exists()  # user's work recoverable
+
+    def test_body_lines_cannot_inject_fields(self, storage: SqliteStorage) -> None:
+        """With the marker required, 'status: done' inside the body region
+        is body text, never a field override."""
+        add_todo(storage, "Task")
+        text = _item_to_editor_text(storage.get(1)) + "status: done"
+        result = apply_editor_edit(storage, 1, text)
+        assert result.item.status.value == "todo"
+        assert "status: done" in result.item.body
+
+
+class TestEditorNonzeroExitKeepsBuffer:
+    async def test_called_process_error_keeps_saved_buffer(
+        self, db_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A nonzero editor exit can happen AFTER the user saved; the
+        buffer must be kept and its path reported, not unlinked."""
+        import contextlib
+        import re
+        import subprocess as sp
+
+        from todo.tui.list_view import TodoListView
+
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Task", body="typed work")
+        monkeypatch.setenv("EDITOR", "vi")
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            view = app.query_one(TodoListView)
+            monkeypatch.setattr(
+                type(app), "suspend", lambda self: contextlib.nullcontext()
+            )
+
+            def failing_run(*args: object, **kwargs: object) -> None:
+                raise sp.CalledProcessError(1, "vi")
+
+            monkeypatch.setattr(sp, "run", failing_run)
+            notices: list[str] = []
+            monkeypatch.setattr(
+                view, "notify", lambda msg, **kw: notices.append(str(msg))
+            )
+            view.action_edit()
+            await pilot.pause()
+            assert notices and "kept at" in notices[0]
+            match = re.search(r"kept at (\S+)", notices[0])
+            assert match is not None
+            assert Path(match.group(1)).exists()
