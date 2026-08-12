@@ -194,17 +194,21 @@ def list_cmd(
         if project_ref is not None
         else None
     )
-    items = list_todos(
-        storage,
-        status=Status.from_string(status) if status else None,
-        priority=Priority.from_string(priority) if priority else None,
-        tags=list(tag) if tag else None,
-        search=search,
-        project_id=project_id,
-        include_done=include_all,
-        blocked=blocked,
-        ready=ready,
-    )
+    try:
+        items = list_todos(
+            storage,
+            status=Status.from_string(status) if status else None,
+            priority=Priority.from_string(priority) if priority else None,
+            tags=list(tag) if tag else None,
+            search=search,
+            project_id=project_id,
+            include_done=include_all,
+            blocked=blocked,
+            ready=ready,
+        )
+    except ValueError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
     if as_json:
         out.print_json_list(items)
     else:

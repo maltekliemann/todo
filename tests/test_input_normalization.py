@@ -210,3 +210,49 @@ class TestTagFilterNormalization:
 
         add_todo(storage, "x", tags=["foo"])
         assert [i.title for i in list_todos(storage, tags=[" foo "])] == ["x"]
+
+
+class TestTagFilterValidation:
+    """A filter tag that can never match a stored tag must error, not
+    silently run unfiltered or with adjacency semantics."""
+
+    def test_blank_tag_filter_errors_instead_of_matching_everything(
+        self, cli: CliRunner
+    ) -> None:
+        cli.invoke(main, ["add", "One", "-t", "work"])
+        cli.invoke(main, ["add", "Two"])
+        for value in ("", " "):
+            result = cli.invoke(main, ["list", "--tag", value])
+            assert result.exit_code == 1
+            assert "Two" not in result.output
+
+    def test_comma_tag_filter_errors_like_add_does(self, cli: CliRunner) -> None:
+        cli.invoke(main, ["add", "one", "-t", "a", "-t", "b", "-t", "c"])
+        result = cli.invoke(main, ["list", "-t", "a,b"])
+        assert result.exit_code == 1
+        assert "comma" in (result.output + result.stderr)
+
+    def test_query_layer_rejects_blank_and_comma_filters(
+        self, storage: SqliteStorage
+    ) -> None:
+        from todo.application.queries import list_todos
+
+        add_todo(storage, "x", tags=["a"])
+        with pytest.raises(ValueError, match="[Tt]ag"):
+            list_todos(storage, tags=[" "])
+        with pytest.raises(ValueError, match="comma"):
+            list_todos(storage, tags=["a,b"])
+
+
+class TestParseSinceNegative:
+    def test_negative_amount_rejected(self) -> None:
+        from todo.application.queries import parse_since
+
+        for value in ("-5 days", "-1 week", "0 days"):
+            with pytest.raises(ValueError):
+                parse_since(value)
+
+    def test_cli_summary_negative_since_errors_cleanly(self, cli: CliRunner) -> None:
+        result = cli.invoke(main, ["summary", "--since", "-5 days"])
+        assert result.exit_code == 1
+        assert result.exception is None or isinstance(result.exception, SystemExit)

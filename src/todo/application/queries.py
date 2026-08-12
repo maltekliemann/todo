@@ -26,8 +26,22 @@ def list_todos(
         raise ValueError("'blocked' and 'ready' are mutually exclusive.")
     # Stored tags are stripped at the write boundary; filters must apply
     # the same normalization or the same input silently matches nothing.
+    # A filter no stored tag could ever equal (blank, or containing the
+    # comma delimiter) is an error — never a silent no-filter or an
+    # adjacency match against the raw column.
     if tags is not None:
-        tags = [t.strip() for t in tags if t.strip()] or None
+        cleaned: list[str] = []
+        for tag in tags:
+            stripped = tag.strip()
+            if not stripped:
+                raise ValueError("Tag filter cannot be empty.")
+            if "," in stripped:
+                raise ValueError(
+                    f"Tag filter '{stripped}' contains a comma; "
+                    "use separate --tag flags."
+                )
+            cleaned.append(stripped)
+        tags = cleaned
     items = storage.list(
         status=status,
         priority=priority,
@@ -162,6 +176,10 @@ def parse_since(since: str) -> datetime:
             days_per_unit = {"day": 1, "week": 7, "month": 30}.get(unit)
             if days_per_unit is None:
                 raise ValueError(f"Unknown time unit: '{unit}'")
+            if amount < 1:
+                # A negative amount would silently build an inverted future
+                # window that reports "no items" as a valid empty summary.
+                raise ValueError(f"Cannot parse '{since}': amount must be positive.")
             try:
                 return datetime.now(tz=ZoneInfo("UTC")) - timedelta(
                     days=amount * days_per_unit
