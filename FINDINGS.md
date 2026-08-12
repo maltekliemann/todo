@@ -210,6 +210,27 @@ real transaction. Treat 'my own fix' as untrusted input to this round.
 - [x] (see round-6 commit 4) (capped-out, verified CONFIRMED) `src/todo/tui/list_view.py:512` [cleanup] — The deadline/created/updated/done/project/tags/blocked-by/blocking metadata block is written three times (InspectDialog.compose, detail pane, and a third site); extract one shared presenter
 - [x] (see round-6 commit 4) (capped-out, verified PLAUSIBLE) `src/todo/adapters/output.py:248` [cleanup] — All six print_json_* methods are byte-identical between RichOutput and PlainOutput; extract a shared base/mixin so the copies cannot drift
 
+## Round 7 — exit-gate review wf_6b978333-d44 (2026-08-12), 9 distinct
+
+- [x] (a439c59) `src/todo/tui/list_view.py:972` [correctness] — TUI read paths (cycle_tag/cycle_project, _refresh_list, poll timer, show_todo in edit/inspect/status moves) do not catch StorageError, so a database-level read failure crashes the whole TUI — including from inside the except-handlers of guarded write actions, which call _refresh_list() after notifying
+      Scenario: Corrupt db mid-session; press 't' → count_tags raises StorageError → app exits with traceback. Class fix: _refresh_list guards internally (all callers become safe), and every remaining unguarded read path notifies instead of crashing.
+- [x] (10a735d) `src/todo/adapters/sqlite_storage.py:361` [correctness] — OverflowError from >64-bit ids escapes the sqlite3.Error-only guards (reads and writes), bypassing CLI _SafeGroup and TUI dialogs [same root at list_view:529 via BlockDialog]
+      Scenario: `todo show 99999999999999999999` dumps a raw OverflowError traceback. Fix the class: adapter guards catch (sqlite3.Error, OverflowError).
+- [x] (10a735d) `src/todo/application/queries.py:159` [correctness] — parse_since raises OverflowError (not ValueError) for huge amounts, escaping summary's `except ValueError`
+      Scenario: `todo summary --since "9999999 days"` → OverflowError traceback instead of the clean 'Cannot parse' message.
+- [ ] `src/todo/tui/list_view.py:911` [cleanup] — Whitespace-only body edits silently discarded by the coarse strip()-equality no-op guard, contradicting the 'whitespace is content' contract
+      Scenario: Append trailing blank lines to the body, save → strip() equality classifies unchanged, edit dropped without notification. Fix: exact equality (modulo the editor's single trailing newline).
+- [ ] `src/todo/infra/cli/main.py:201` [cleanup] — `--tag` filter not normalized while stored tags are, so incidental whitespace silently matches nothing
+      Scenario: `todo list -t 'foo '` prints 'No items.' though 'foo' exists. Fix at the query layer so CLI and TUI both normalize.
+- [ ] `src/todo/application/commands.py:116` [cleanup] — Completing/deleting a blocker runs ~8 hydrating queries per dependent; the once-per-batch edge-load strategy was not applied here
+      Scenario: 'done' on an item blocking N others costs ~8N queries; a blocked-ids set query before/after plus per-unblocked hydration does it in O(1)+unblocked.
+- [ ] `src/todo/adapters/sqlite_storage.py:523` [cleanup] — add_blocker re-runs two full hydrating get() calls for existence checks its only caller just performed
+      Scenario: ~12 queries per blocker in a batch; a `SELECT 1` existence probe keeps the NotFoundError contract at a fraction of the cost.
+- [ ] `src/todo/tui/list_view.py:626` [cleanup] — data_version() lives only on SqliteStorage, not StorageProtocol, forcing the whole TUI onto the concrete type instead of the port
+      Scenario: TodoListView/NewItemDialog/BlockDialog annotated with SqliteStorage; storage cannot be substituted. Fix: declare data_version on the protocol and type the TUI against StorageProtocol.
+- [ ] `src/todo/tui/list_view.py:70` [cleanup] — _skip_separators nests a second negated copy of its own loop for the boundary case
+      Scenario: Two loops, two boundary checks, return from the middle; refactor to one direction-scan helper called with +d then -d (behavior covered by existing cursor tests).
+
 ## Triage log
 
 - Round-5 finding `FINDINGS.md:1` (process artifacts committed to repo root):
