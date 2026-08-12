@@ -42,13 +42,14 @@ def edit_todo(
     deadline: date | None | Unset = Unset.UNSET,
     tags: list[str] | None = None,
     project_id: int | None | Unset = Unset.UNSET,
-) -> TodoItem:
-    return storage.update(
+) -> CompletionResult:
+    return _tracked_update(
+        storage,
         item_id,
+        status,
         title=title,
         body=body,
         priority=priority,
-        status=status,
         deadline=deadline,
         tags=tags,
         project_id=project_id,
@@ -63,23 +64,47 @@ class CompletionResult:
     unblocked: list[TodoItem]
 
 
-def _update_status(
+def _tracked_update(
     storage: StorageProtocol,
     item_id: int,
-    status: Status,
+    status: Status | None,
+    *,
+    title: str | None = None,
+    body: str | None = None,
+    priority: Priority | None = None,
+    deadline: date | None | Unset = Unset.UNSET,
+    tags: list[str] | None = None,
+    project_id: int | None | Unset = Unset.UNSET,
 ) -> CompletionResult:
+    """Apply an update; when it completes the item, report newly unblocked
+    dependents. Every path that can set status=done must go through here so
+    the unblock warning can never silently miss a completion path."""
     before = storage.get(item_id)
-    if status != Status.DONE or before.is_done:
-        return CompletionResult(
-            item=storage.update(item_id, status=status), unblocked=[]
-        )
-    was_blocked = {dep_id: storage.get(dep_id).is_blocked for dep_id in before.blocking}
-    item = storage.update(item_id, status=Status.DONE)
-    unblocked = [
-        storage.get(dep_id)
-        for dep_id in sorted(before.blocking)
-        if was_blocked[dep_id] and not storage.get(dep_id).is_blocked
-    ]
+    completing = status == Status.DONE and not before.is_done
+    was_blocked = (
+        {dep_id: storage.get(dep_id).is_blocked for dep_id in before.blocking}
+        if completing
+        else {}
+    )
+    item = storage.update(
+        item_id,
+        title=title,
+        body=body,
+        priority=priority,
+        status=status,
+        deadline=deadline,
+        tags=tags,
+        project_id=project_id,
+    )
+    unblocked = (
+        [
+            storage.get(dep_id)
+            for dep_id in sorted(before.blocking)
+            if was_blocked[dep_id] and not storage.get(dep_id).is_blocked
+        ]
+        if completing
+        else []
+    )
     return CompletionResult(item=item, unblocked=unblocked)
 
 
@@ -88,14 +113,14 @@ def move_todo(
     item_id: int,
     status: Status,
 ) -> CompletionResult:
-    return _update_status(storage, item_id, status)
+    return _tracked_update(storage, item_id, status)
 
 
 def complete_todo(
     storage: StorageProtocol,
     item_id: int,
 ) -> CompletionResult:
-    return _update_status(storage, item_id, Status.DONE)
+    return _tracked_update(storage, item_id, Status.DONE)
 
 
 def delete_todo(

@@ -711,6 +711,26 @@ class TestUnblockWarning:
         assert result.exit_code == 0
         assert "#2 Waiting is now unblocked" in result.stderr
 
+    def test_edit_to_done_warns(self, invoke) -> None:
+        """Completing via 'edit -s done' must behave like done/mv."""
+        invoke("add Blocker")
+        invoke("add Waiting")
+        invoke("block 2 1")
+        result = invoke("edit 1 -s done")
+        assert result.exit_code == 0
+        assert "#2 Waiting is now unblocked" in result.stderr
+
+    def test_edit_to_done_with_other_fields_warns(self, invoke) -> None:
+        invoke("add Blocker")
+        invoke("add Waiting")
+        invoke("block 2 1")
+        result = invoke("edit 1 -s done -p low")
+        assert result.exit_code == 0
+        assert "unblocked" in result.stderr
+        data = json.loads(invoke("show 1 --json").output)
+        assert data["priority"] == "low"
+        assert data["status"] == "done"
+
     def test_mv_to_done_warns(self, invoke) -> None:
         invoke("add Blocker")
         invoke("add Waiting")

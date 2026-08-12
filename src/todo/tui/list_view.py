@@ -8,7 +8,7 @@ from datetime import date, datetime
 from rich.markup import escape
 from rich.text import Text
 from textual import on
-from textual.app import ComposeResult
+from textual.app import ComposeResult, SuspendNotSupported
 from textual.binding import Binding
 from textual.containers import Container, Vertical, VerticalScroll
 from textual.coordinate import Coordinate
@@ -145,6 +145,45 @@ def _item_to_editor_text(item: TodoItem) -> str:
         f"\n"
         f"# Body (everything below this line is the body):\n"
         f"{item.body}"
+    )
+
+
+def apply_editor_edit(
+    storage: SqliteStorage, item_id: int, edited: str
+) -> CompletionResult:
+    """Parse an edited $EDITOR buffer and apply it to the item.
+
+    A field line that is present but empty clears that field (deadline,
+    tags); a line the user deleted entirely leaves the field unchanged.
+    """
+    fields = _parse_editor_text(edited)
+
+    deadline_val: date | None | Unset = UNSET
+    if "deadline" in fields:
+        dl_str = fields["deadline"]
+        if dl_str == "":
+            deadline_val = None
+        else:
+            try:
+                deadline_val = date.fromisoformat(dl_str)
+            except ValueError:
+                deadline_val = UNSET
+
+    tags: list[str] | None = None
+    if "tags" in fields:
+        tags = [t.strip() for t in fields["tags"].split(",") if t.strip()]
+
+    return edit_todo(
+        storage,
+        item_id,
+        title=fields.get("title") or None,
+        body=fields.get("body") or "",
+        priority=(
+            Priority.from_string(fields["priority"]) if fields.get("priority") else None
+        ),
+        status=(Status.from_string(fields["status"]) if fields.get("status") else None),
+        deadline=deadline_val,
+        tags=tags,
     )
 
 
@@ -814,8 +853,16 @@ class TodoListView(Widget):
             tmp_path = f.name
 
         try:
-            with self.app.suspend():
-                subprocess.run([editor, tmp_path], check=True)
+            try:
+                with self.app.suspend():
+                    subprocess.run([editor, tmp_path], check=True)
+            except (
+                FileNotFoundError,
+                subprocess.CalledProcessError,
+                SuspendNotSupported,
+            ) as exc:
+                self.notify(f"Editor failed: {escape(str(exc))}", severity="error")
+                return
 
             with open(tmp_path) as f:
                 edited = f.read()
@@ -823,40 +870,8 @@ class TodoListView(Widget):
             if edited.strip() == text.strip():
                 return
 
-            fields = _parse_editor_text(edited)
-
-            deadline_val: date | None | Unset = UNSET
-            dl_str = fields.get("deadline", "")
-            if dl_str == "":
-                deadline_val = None
-            else:
-                try:
-                    deadline_val = date.fromisoformat(dl_str)
-                except ValueError:
-                    deadline_val = UNSET
-
-            tags = None
-            if fields.get("tags"):
-                tags = [t.strip() for t in fields["tags"].split(",") if t.strip()]
-
-            edit_todo(
-                self._storage,
-                item_id,
-                title=fields.get("title") or None,
-                body=fields.get("body") or "",
-                priority=(
-                    Priority.from_string(fields["priority"])
-                    if fields.get("priority")
-                    else None
-                ),
-                status=(
-                    Status.from_string(fields["status"])
-                    if fields.get("status")
-                    else None
-                ),
-                deadline=deadline_val,
-                tags=tags,
-            )
+            result = apply_editor_edit(self._storage, item_id, edited)
+            self._notify_unblocked(result)
             self._refresh_list()
         finally:
             os.unlink(tmp_path)

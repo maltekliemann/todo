@@ -251,7 +251,7 @@ def edit(
             project_id = _resolve_project_or_exit(storage, project_ref)
 
     try:
-        item = edit_todo(
+        result = edit_todo(
             storage,
             item_id,
             title=title,
@@ -265,10 +265,11 @@ def edit(
     except NotFoundError as e:
         click.echo(str(e), err=True)
         sys.exit(1)
+    _warn_unblocked(result.unblocked)
     if as_json:
-        out.print_json_item(item)
+        out.print_json_item(result.item)
     else:
-        out.print_item(item)
+        out.print_item(result.item)
 
 
 @main.command()
