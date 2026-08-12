@@ -717,13 +717,14 @@ class TodoListView(Widget):
             )
 
         if self._search_query:
-            q = self._search_query.lower()
+            # casefold, matching the storage layer's SQL search semantics.
+            q = self._search_query.casefold()
             self._items = [
                 i
                 for i in self._items
-                if q in i.title.lower()
-                or q in i.body.lower()
-                or any(q in t.lower() for t in i.tags)
+                if q in i.title.casefold()
+                or q in i.body.casefold()
+                or any(q in t.casefold() for t in i.tags)
             ]
 
         # The detail pane renders from this cache instead of re-querying

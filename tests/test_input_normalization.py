@@ -256,3 +256,58 @@ class TestParseSinceNegative:
         result = cli.invoke(main, ["summary", "--since", "-5 days"])
         assert result.exit_code == 1
         assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
+class TestProjectRefNormalization:
+    """Refs must resolve under the same normalization the write path
+    applied — the exact string a project was created with always works."""
+
+    def test_creation_string_resolves_after_normalization(self, cli: CliRunner) -> None:
+        cli.invoke(main, ["project", "add", "my  project"])
+        result = cli.invoke(main, ["project", "show", "my  project"])
+        assert result.exit_code == 0
+        assert "my project" in result.output
+
+    def test_padded_ref_resolves(self, cli: CliRunner) -> None:
+        cli.invoke(main, ["project", "add", "myproj"])
+        assert cli.invoke(main, ["project", "show", " myproj "]).exit_code == 0
+        result = cli.invoke(main, ["add", "x", "--project", "myproj "])
+        assert result.exit_code == 0
+
+    def test_padded_numeric_ref_resolves_as_id(self, storage: SqliteStorage) -> None:
+        from todo.application.commands import add_project
+        from todo.application.queries import resolve_project
+
+        project = add_project(storage, "anything")
+        assert resolve_project(storage, f" {project.id} ").id == project.id
+
+
+class TestMatchingSemantics:
+    def test_tag_filter_is_case_sensitive_like_tag_identity(
+        self, cli: CliRunner
+    ) -> None:
+        """`todo tags` treats 'Work' and 'work' as distinct; the filter
+        must agree instead of returning their union via LIKE."""
+        cli.invoke(main, ["add", "lower", "-t", "work"])
+        cli.invoke(main, ["add", "upper", "-t", "Work"])
+        result = cli.invoke(main, ["list", "-t", "Work"])
+        assert "upper" in result.output
+        assert "lower" not in result.output
+
+    def test_search_is_unicode_case_insensitive(self, cli: CliRunner) -> None:
+        """The CLI search must match what the TUI's Python search matches."""
+        cli.invoke(main, ["add", "Über uns"])
+        result = cli.invoke(main, ["list", "--search", "über"])
+        assert "Über uns" in result.output
+
+    def test_search_still_matches_ascii_case_variants(self, cli: CliRunner) -> None:
+        cli.invoke(main, ["add", "Fix Login Bug"])
+        result = cli.invoke(main, ["list", "--search", "login"])
+        assert "Fix Login Bug" in result.output
+
+    def test_search_wildcards_stay_literal(self, cli: CliRunner) -> None:
+        cli.invoke(main, ["add", "done 100% sure"])
+        cli.invoke(main, ["add", "unrelated"])
+        result = cli.invoke(main, ["list", "--search", "100%"])
+        assert "done 100% sure" in result.output
+        assert "unrelated" not in result.output

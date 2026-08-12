@@ -244,6 +244,18 @@ real transaction. Treat 'my own fix' as untrusted input to this round.
 - [x] (37186ed) `src/todo/application/commands.py:242` [cleanup] — block_todo_batch validates blocker existence at two altitudes (full-hydration get per blocker + add_blocker's own probes); ~6 queries per edge where 2 do
 - [x] (37186ed) `src/todo/infra/cli/main.py:86` [cleanup] — _SafeGroup catches raw sqlite3.Error, papering over adapter wrapping-contract gaps the TUI would still crash on; rely on StorageError only
 
+## Round 9 — exit-gate review wf_80147dfd-f09 (2026-08-12), 9 distinct
+
+- [ ] `src/todo/adapters/sqlite_storage.py:208` [correctness] — sqlite3.connect failures (path is a directory, chmod-0 file) raise raw sqlite3.OperationalError; init's first try wraps only OSError
+- [ ] `src/todo/application/queries.py:79` [correctness] — Project names are whitespace-normalized on write but refs are looked up raw, so the exact creation string ("my  project") fails to resolve in every command
+- [ ] `src/todo/adapters/sqlite_storage.py:590` [correctness] — Tag filter uses ASCII-case-insensitive LIKE while tag identity is case-sensitive, so `-t Work` returns the union of 'Work' and 'work' contradicting `todo tags`
+- [ ] `src/todo/adapters/sqlite_storage.py:594` [correctness] — --search relies on LIKE's ASCII-only case folding, so 'über' misses 'Über' in the CLI while the TUI's Python search finds it — two frontends, same query, different results
+- [ ] `README.md:134` [correctness] — Key table claims Enter = 'Edit in $EDITOR' but Enter opens the read-only Inspect modal; 'i' is undocumented
+- [ ] `src/todo/adapters/sqlite_storage.py:769` [cleanup] — add_project_update's post-commit read-back is the only storage read outside _read_guard
+- [ ] `src/todo/application/commands.py:21` [cleanup] — Comma-tag parsing re-implemented in five places with diverged behavior; one shared domain helper should own the rule
+- [ ] `src/todo/application/commands.py:115` [cleanup] — Status changes run blocked_ids() scans even when the item blocks nothing; skip the diff when there are no dependents
+- [ ] `src/todo/adapters/sqlite_storage.py:48` [cleanup] — _single_line duplicates the write path's whitespace normalization with a docstring admitting manual sync; share one domain helper
+
 ## Triage log
 
 - Round-5 finding `FINDINGS.md:1` (process artifacts committed to repo root):

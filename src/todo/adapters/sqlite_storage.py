@@ -140,9 +140,8 @@ def _now() -> datetime:
     return datetime.now(tz=ZoneInfo("UTC"))
 
 
-def _like_escape(value: str) -> str:
-    """Escape LIKE wildcards so user input matches literally."""
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+def _sql_casefold(value: str | None) -> str | None:
+    return value.casefold() if value is not None else None
 
 
 def _row_to_item(
@@ -206,13 +205,16 @@ class SqliteStorage:
         try:
             db_path.parent.mkdir(parents=True, exist_ok=True)
             self._conn = sqlite3.connect(str(db_path))
-        except OSError as e:
-            # A bad db path (unwritable parent, file in the way) must be
-            # StorageError like every other failure, so both frontends
-            # report it cleanly instead of dumping a traceback.
+        except (OSError, sqlite3.Error) as e:
+            # A bad db path (unwritable parent, file in the way, path is a
+            # directory) must be StorageError like every other failure, so
+            # both frontends report it cleanly instead of a traceback.
             raise StorageError(f"Cannot open database at {db_path}: {e}") from e
         self._in_txn = False
         self._conn.row_factory = sqlite3.Row
+        # SQL-side Unicode case folding for search: SQLite's LIKE/lower()
+        # only fold ASCII, which would contradict the TUI's Python search.
+        self._conn.create_function("casefold", 1, _sql_casefold, deterministic=True)
         try:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA foreign_keys=ON")
@@ -587,15 +589,20 @@ class SqliteStorage:
             params.append(priority.value)
 
         for tag in tags or []:
-            clauses.append("(',' || todos.tags || ',') LIKE ? ESCAPE '\\'")
-            params.append(f"%,{_like_escape(tag)},%")
+            # instr, not LIKE: exact case-sensitive match (tag identity is
+            # case-sensitive — `todo tags` counts 'Work' and 'work' apart)
+            # with no wildcard semantics to escape.
+            clauses.append("instr(',' || todos.tags || ',', ',' || ? || ',') > 0")
+            params.append(tag)
 
         if search is not None and search != "":
+            # casefold + instr: Unicode case-insensitive literal substring
+            # match, agreeing with the TUI's Python-side search.
             clauses.append(
-                "(todos.title LIKE ? ESCAPE '\\' OR todos.body LIKE ? ESCAPE '\\')"
+                "(instr(casefold(todos.title), casefold(?)) > 0 "
+                "OR instr(casefold(todos.body), casefold(?)) > 0)"
             )
-            pattern = f"%{_like_escape(search)}%"
-            params.extend([pattern, pattern])
+            params.extend([search, search])
 
         if project_id is not None:
             clauses.append("todos.project_id = ?")
@@ -766,9 +773,10 @@ class SqliteStorage:
             self._commit()
         except (sqlite3.Error, OverflowError) as e:
             raise StorageError(f"Failed to log project update: {e}") from e
-        row = self._conn.execute(
-            "SELECT * FROM project_updates WHERE id = ?", (cur.lastrowid,)
-        ).fetchone()
+        with self._read_guard("read project log"):
+            row = self._conn.execute(
+                "SELECT * FROM project_updates WHERE id = ?", (cur.lastrowid,)
+            ).fetchone()
         return _row_to_update(row)
 
     def list_project_updates(self, project_id: int) -> "UpdateList":

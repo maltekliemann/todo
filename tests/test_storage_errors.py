@@ -139,3 +139,33 @@ class TestInitSqliteErrorWrapping:
         bad.write_bytes(b"this is not a sqlite database at all --------")
         with pytest.raises(StorageError):
             SqliteStorage(bad)
+
+
+class TestConnectErrorWrapping:
+    def test_db_path_is_a_directory_raises_storage_error(self, tmp_path: Path) -> None:
+        """sqlite3.connect failures are init-time database failures like
+        any other and must wrap as StorageError."""
+        with pytest.raises(StorageError):
+            SqliteStorage(tmp_path)  # the path IS a directory
+
+    def test_project_log_readback_is_wrapped(self, tmp_path: Path) -> None:
+        """The post-commit read-back in add_project_update is a storage
+        read like any other."""
+        import sqlite3
+
+        storage = SqliteStorage(tmp_path / "db.db")
+        project = storage.add_project("p")
+        real_conn = storage._conn
+
+        class _Proxy:
+            def __getattr__(self, name: str) -> object:
+                return getattr(real_conn, name)
+
+            def execute(self, sql: str, *args: object) -> object:
+                if sql.startswith("SELECT * FROM project_updates"):
+                    raise sqlite3.OperationalError("disk I/O error")
+                return real_conn.execute(sql, *args)
+
+        storage._conn = _Proxy()  # type: ignore[assignment]
+        with pytest.raises(StorageError):
+            storage.add_project_update(project.id, "hello")
