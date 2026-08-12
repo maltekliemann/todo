@@ -24,6 +24,10 @@ def list_todos(
 ) -> list[TodoItem]:
     if blocked and ready:
         raise ValueError("'blocked' and 'ready' are mutually exclusive.")
+    # Stored tags are stripped at the write boundary; filters must apply
+    # the same normalization or the same input silently matches nothing.
+    if tags is not None:
+        tags = [t.strip() for t in tags if t.strip()] or None
     items = storage.list(
         status=status,
         priority=priority,

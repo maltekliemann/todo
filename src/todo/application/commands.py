@@ -108,15 +108,13 @@ def _tracked_update(
     the unblock warning can never silently miss a completion path. The whole
     read-update-read runs in one transaction, and a dependent deleted by a
     concurrent process is simply omitted — a completion never reports
-    failure after it has already mutated."""
+    failure after it has already mutated. Blocked-ness is diffed as a set
+    (one query each side) and only the newly unblocked dependents are
+    hydrated, so cost does not scale with dependent count."""
     with storage.transaction():
         before = storage.get(item_id)
         completing = status == Status.DONE and not before.is_done
-        was_blocked = (
-            {dep_id: storage.get(dep_id).is_blocked for dep_id in before.blocking}
-            if completing
-            else {}
-        )
+        blocked_before = storage.blocked_ids() if completing else set()
         item = storage.update(
             item_id,
             title=_normalize_title(title) if title is not None else None,
@@ -129,16 +127,26 @@ def _tracked_update(
         )
         unblocked: list[TodoItem] = []
         if completing:
-            for dep_id in sorted(before.blocking):
-                if not was_blocked[dep_id]:
-                    continue
-                try:
-                    after = storage.get(dep_id)
-                except NotFoundError:
-                    continue  # dependent deleted concurrently
-                if not after.is_blocked:
-                    unblocked.append(after)
+            unblocked = _newly_unblocked(storage, before.blocking, blocked_before)
     return CompletionResult(item=item, unblocked=unblocked)
+
+
+def _newly_unblocked(
+    storage: StorageProtocol,
+    dependents: list[int],
+    blocked_before: set[int],
+) -> list[TodoItem]:
+    """Hydrate the dependents that just transitioned blocked -> unblocked."""
+    blocked_after = storage.blocked_ids()
+    unblocked: list[TodoItem] = []
+    for dep_id in sorted(dependents):
+        if dep_id not in blocked_before or dep_id in blocked_after:
+            continue
+        try:
+            unblocked.append(storage.get(dep_id))
+        except NotFoundError:
+            continue  # dependent deleted concurrently
+    return unblocked
 
 
 def move_todo(
@@ -167,21 +175,9 @@ def delete_todo(
     """
     with storage.transaction():
         victim = storage.get(item_id)
-        was_blocked = {
-            dep_id: storage.get(dep_id).is_blocked for dep_id in victim.blocking
-        }
+        blocked_before = storage.blocked_ids()
         storage.delete(item_id)
-        unblocked: list[TodoItem] = []
-        for dep_id in sorted(victim.blocking):
-            if not was_blocked[dep_id]:
-                continue
-            try:
-                after = storage.get(dep_id)
-            except NotFoundError:
-                continue
-            if not after.is_blocked:
-                unblocked.append(after)
-        return unblocked
+        return _newly_unblocked(storage, victim.blocking, blocked_before)
 
 
 def _assert_no_cycle(

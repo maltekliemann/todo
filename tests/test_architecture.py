@@ -102,3 +102,23 @@ class TestArchitecture:
     def test_every_module_is_covered_by_a_rule(self) -> None:
         for path in SRC.rglob("*.py"):
             assert _layer_of(path) in _RULES, f"No layer rule for {path}"
+
+
+class TestStoragePortCompleteness:
+    def test_data_version_is_on_the_protocol(self) -> None:
+        """The TUI's change polling must depend on the port, not the
+        concrete adapter."""
+        from todo.application.contracts.storage import StorageProtocol
+
+        assert "data_version" in dir(StorageProtocol)
+        assert "blocked_ids" in dir(StorageProtocol)
+
+    def test_tui_view_typed_against_the_port(self) -> None:
+        from pathlib import Path
+
+        import todo.tui.list_view as lv
+
+        src = Path(lv.__file__).read_text()
+        assert "SqliteStorage" not in src, (
+            "tui/list_view must depend on StorageProtocol, not the adapter"
+        )

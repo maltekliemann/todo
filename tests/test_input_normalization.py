@@ -192,3 +192,21 @@ class TestProjectLogNormalization:
         cli.invoke(main, ["project", "add", "p"])
         result = cli.invoke(main, ["project", "log", "p", "   "])
         assert result.exit_code != 0
+
+
+class TestTagFilterNormalization:
+    def test_cli_tag_filter_with_incidental_whitespace_matches(
+        self, cli: CliRunner
+    ) -> None:
+        """Write path strips tags before storing; the read path must apply
+        the same normalization or the same input silently matches nothing."""
+        cli.invoke(main, ["add", "x", "-t", "foo"])
+        result = cli.invoke(main, ["list", "-t", "foo "])
+        assert "x" in result.output
+        assert "No items." not in result.output
+
+    def test_query_layer_normalizes_filter_tags(self, storage: SqliteStorage) -> None:
+        from todo.application.queries import list_todos
+
+        add_todo(storage, "x", tags=["foo"])
+        assert [i.title for i in list_todos(storage, tags=[" foo "])] == ["x"]

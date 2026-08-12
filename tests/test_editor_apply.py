@@ -303,3 +303,51 @@ class TestEditorPathWithSpaces:
         editor.write_text("#!/bin/sh\nexit 0\n")
         editor.chmod(0o755)
         assert _editor_command(str(editor), "/tmp/x") == [str(editor), "/tmp/x"]
+
+
+class TestWhitespaceOnlyBodyEdit:
+    async def test_trailing_blank_line_edit_is_applied(
+        self, db_path: Path, tmp_path: Path
+    ) -> None:
+        """The no-op guard must be exact: a whitespace-only body edit is an
+        edit ('whitespace is content'), not an unchanged buffer."""
+        from todo.tui.list_view import TodoListView
+
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Task", body="print(x)")
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            view = app.query_one(TodoListView)
+            original = _item_to_editor_text(storage.get(1))
+            edited = original + "\n\n"  # append a trailing blank line to the body
+            buf = tmp_path / "buffer.todo.txt"
+            buf.write_text(edited)
+
+            view._apply_edited_buffer(1, original, edited, str(buf))
+            await pilot.pause()
+            assert storage.get(1).body == "print(x)\n"
+
+    async def test_editor_final_newline_alone_is_still_a_noop(
+        self, db_path: Path, tmp_path: Path
+    ) -> None:
+        from todo.tui.list_view import TodoListView
+
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Task", body="print(x)")
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            view = app.query_one(TodoListView)
+            item_before = storage.get(1)
+            original = _item_to_editor_text(item_before)
+            edited = original + "\n"  # only the editor's final newline
+            buf = tmp_path / "buffer.todo.txt"
+            buf.write_text(edited)
+
+            view._apply_edited_buffer(1, original, edited, str(buf))
+            await pilot.pause()
+            after = storage.get(1)
+            assert after.body == "print(x)"
+            assert after.updated_at == item_before.updated_at  # true no-op
+            assert not buf.exists()

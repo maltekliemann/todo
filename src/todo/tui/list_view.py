@@ -25,7 +25,6 @@ from todo.adapters.output import (
     _relative_age,
     _status_icon,
 )
-from todo.adapters.sqlite_storage import SqliteStorage
 from todo.application.commands import (
     CompletionResult,
     add_todo,
@@ -36,7 +35,7 @@ from todo.application.commands import (
     move_todo,
     unblock_todo,
 )
-from todo.application.contracts.storage import UNSET, Unset
+from todo.application.contracts.storage import UNSET, StorageProtocol, Unset
 from todo.application.queries import (
     count_tags,
     list_all_projects,
@@ -67,21 +66,31 @@ class TodoTable(DataTable["str | Text"]):
         except Exception:
             return None
 
+    def _row_key_at(self, row: int) -> object:
+        try:
+            return self.coordinate_to_cell_key(Coordinate(row, 0)).row_key.value
+        except Exception:
+            return None
+
+    def _first_non_separator(self, start: int, direction: int) -> int | None:
+        row = start
+        while 0 <= row < self.row_count:
+            if not _is_separator(self._row_key_at(row)):
+                return row
+            row += direction
+        return None
+
     def _skip_separators(self, direction: int) -> None:
-        # direction: +1 = down, -1 = up
-        while _is_separator(self._current_row_key()):
-            new_row = self.cursor_row + direction
-            if new_row < 0 or new_row >= self.row_count:
-                # Hit a boundary — try the opposite direction so the cursor
-                # never rests on a separator.
-                opposite = -direction
-                while _is_separator(self._current_row_key()):
-                    other_row = self.cursor_row + opposite
-                    if other_row < 0 or other_row >= self.row_count:
-                        return
-                    self.move_cursor(row=other_row)
-                return
-            self.move_cursor(row=new_row)
+        # direction: +1 = down, -1 = up. Scan that way for the first item
+        # row; at a boundary scan the other way, so the cursor never rests
+        # on a separator.
+        if not _is_separator(self._current_row_key()):
+            return
+        target = self._first_non_separator(self.cursor_row, direction)
+        if target is None:
+            target = self._first_non_separator(self.cursor_row, -direction)
+        if target is not None:
+            self.move_cursor(row=target)
 
     def action_cursor_down(self) -> None:
         super().action_cursor_down()
@@ -156,7 +165,7 @@ def _item_to_editor_text(item: TodoItem) -> str:
 
 
 def apply_editor_edit(
-    storage: SqliteStorage, item_id: int, edited: str
+    storage: StorageProtocol, item_id: int, edited: str
 ) -> CompletionResult:
     """Parse an edited $EDITOR buffer and apply it to the item.
 
@@ -331,7 +340,7 @@ class NewItemDialog(ModalScreen[TodoItem | None]):
         Binding("up", "field_retreat", show=False),
     ]
 
-    def __init__(self, storage: SqliteStorage) -> None:
+    def __init__(self, storage: StorageProtocol) -> None:
         super().__init__()
         self._storage = storage
 
@@ -507,7 +516,7 @@ class BlockDialog(ModalScreen[str | None]):
 
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
-    def __init__(self, storage: SqliteStorage, blocked_id: int) -> None:
+    def __init__(self, storage: StorageProtocol, blocked_id: int) -> None:
         super().__init__()
         self._storage = storage
         self._blocked_id = blocked_id
@@ -597,7 +606,7 @@ class TodoListView(Widget):
 
     POLL_INTERVAL_SECONDS = 2.0
 
-    def __init__(self, storage: SqliteStorage) -> None:
+    def __init__(self, storage: StorageProtocol) -> None:
         super().__init__()
         self._storage = storage
         self._items: list[TodoItem] = []
@@ -935,7 +944,9 @@ class TodoListView(Widget):
         """Apply an edited $EDITOR buffer. On rejection the buffer file is
         kept and its path reported, so a field typo never destroys the
         user's work."""
-        if edited.strip() == original.strip():
+        # Exact no-op check (plus the editor's final newline): anything
+        # else — including whitespace-only body edits — is a real edit.
+        if edited in (original, original + "\n"):
             os.unlink(tmp_path)
             return
 

@@ -51,3 +51,91 @@ class TestBatchGraphLoad:
             block_todo_batch(storage, 1, [1])
         with pytest.raises(NotFoundError):
             block_todo_batch(storage, 1, [999])
+
+
+class TestCompletionDependentQueries:
+    def test_completing_a_blocker_does_not_hydrate_every_dependent(
+        self, storage: SqliteStorage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Completion needs before/after blocked-ness of dependents, not two
+        full hydrations per dependent — use the blocked-ids set like the
+        batch graph load does, and hydrate only the newly unblocked."""
+        from todo.application.commands import complete_todo
+
+        add_todo(storage, "blocker")  # 1
+        add_todo(storage, "second blocker")  # 2
+        for i in range(5):
+            add_todo(storage, f"dep{i}")  # 3..7
+        block_todo_batch(storage, 3, [1])  # only dep 3 unblocks when 1 is done
+        for dep in (4, 5, 6, 7):
+            block_todo_batch(storage, dep, [1, 2])
+
+        calls = 0
+        original = SqliteStorage.get
+
+        def counting(self: SqliteStorage, item_id: int):  # type: ignore[no-untyped-def]
+            nonlocal calls
+            calls += 1
+            return original(self, item_id)
+
+        monkeypatch.setattr(SqliteStorage, "get", counting)
+        result = complete_todo(storage, 1)
+        assert [d.id for d in result.unblocked] == [3]
+        # item + update's pair + one hydration per newly-unblocked dep —
+        # NOT two hydrations for each of the five dependents.
+        assert calls <= 6
+
+    def test_delete_unblock_reporting_same_bound(
+        self, storage: SqliteStorage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from todo.application.commands import delete_todo
+
+        add_todo(storage, "blocker")  # 1
+        add_todo(storage, "second blocker")  # 2
+        for i in range(5):
+            add_todo(storage, f"dep{i}")  # 3..7
+        block_todo_batch(storage, 3, [1])
+        for dep in (4, 5, 6, 7):
+            block_todo_batch(storage, dep, [1, 2])
+
+        calls = 0
+        original = SqliteStorage.get
+
+        def counting(self: SqliteStorage, item_id: int):  # type: ignore[no-untyped-def]
+            nonlocal calls
+            calls += 1
+            return original(self, item_id)
+
+        monkeypatch.setattr(SqliteStorage, "get", counting)
+        unblocked = delete_todo(storage, 1)
+        assert [d.id for d in unblocked] == [3]
+        assert calls <= 5
+
+
+class TestAddBlockerExistenceChecks:
+    def test_add_blocker_does_not_hydrate_for_existence(
+        self, storage: SqliteStorage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """add_blocker only needs existence, not two full hydrations the
+        caller already performed."""
+        add_todo(storage, "a")
+        add_todo(storage, "b")
+
+        calls = 0
+        original = SqliteStorage.get
+
+        def counting(self: SqliteStorage, item_id: int):  # type: ignore[no-untyped-def]
+            nonlocal calls
+            calls += 1
+            return original(self, item_id)
+
+        monkeypatch.setattr(SqliteStorage, "get", counting)
+        block_todo_batch(storage, 1, [2])
+        assert calls <= 3  # batch's own checks + returned item, none inside add_blocker
+
+    def test_add_blocker_keeps_not_found_contract(self, storage: SqliteStorage) -> None:
+        add_todo(storage, "a")
+        with pytest.raises(NotFoundError):
+            storage.add_blocker(1, 999)
+        with pytest.raises(NotFoundError):
+            storage.add_blocker(999, 1)

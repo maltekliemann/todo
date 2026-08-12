@@ -519,9 +519,18 @@ class SqliteStorage:
             )
         return items
 
+    def _assert_exists(self, item_id: int) -> None:
+        """Existence check without dependency hydration."""
+        with self._read_guard(f"read todo #{item_id}"):
+            row = self._conn.execute(
+                "SELECT 1 FROM todos WHERE id = ?", (item_id,)
+            ).fetchone()
+        if row is None:
+            raise NotFoundError(item_id)
+
     def add_blocker(self, blocked_id: int, blocker_id: int) -> None:
-        self.get(blocked_id)  # raises NotFoundError if missing
-        self.get(blocker_id)  # raises NotFoundError if missing
+        self._assert_exists(blocked_id)
+        self._assert_exists(blocker_id)
         try:
             self._conn.execute(
                 "INSERT OR IGNORE INTO todo_dependencies (blocker_id, blocked_id) "
@@ -636,6 +645,21 @@ class SqliteStorage:
         if row is None:
             raise ProjectNotFoundError(name)
         return _row_to_project(row)
+
+    def blocked_ids(self) -> set[int]:
+        """Ids of non-done items with at least one non-done blocker.
+
+        One indexed query instead of hydrating an item per dependent —
+        the completion/delete paths diff this set before and after.
+        """
+        with self._read_guard("read blocked items"):
+            rows = self._conn.execute(
+                "SELECT DISTINCT d.blocked_id FROM todo_dependencies d "
+                "JOIN todos b ON b.id = d.blocker_id "
+                "JOIN todos t ON t.id = d.blocked_id "
+                "WHERE b.status != 'done' AND t.status != 'done'"
+            ).fetchall()
+        return {r["blocked_id"] for r in rows}
 
     def dependency_edges(self) -> EdgeList:
         """All (blocker_id, blocked_id) edges — one query for graph walks."""

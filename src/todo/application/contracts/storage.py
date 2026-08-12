@@ -29,6 +29,10 @@ TagStringList = list[str]
 class StorageProtocol(Protocol):
     def transaction(self) -> AbstractContextManager[None]: ...
 
+    def data_version(self) -> int: ...
+
+    def blocked_ids(self) -> set[int]: ...
+
     def add(
         self,
         title: str,
