@@ -128,6 +128,32 @@ class TestPrdKeyBindings:
             await pilot.pause()
             assert table.cursor_row == start
 
+    async def test_shift_arrows_still_scroll_a_too_wide_table(
+        self, db_path: Path
+    ) -> None:
+        """Binding the plain arrows to status took over DataTable's
+        incremental horizontal scroll. A title wider than the terminal must
+        still be readable from the keyboard, and scrolling must not mutate
+        the item."""
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "X" * 200)
+        app = TodoApp(storage=storage)
+        async with app.run_test(size=(60, 20)) as pilot:
+            await pilot.pause()
+            table = app.query_one("#item-list", DataTable)
+            assert table.max_scroll_x > 0, "table is not actually scrollable"
+
+            await pilot.press("shift+right")
+            await pilot.pause()
+            assert table.scroll_x > 0
+            assert storage.get(1).status == Status.TODO
+
+            scrolled = table.scroll_x
+            await pilot.press("shift+left")
+            await pilot.pause()
+            assert table.scroll_x < scrolled
+            assert storage.get(1).status == Status.TODO
+
     async def test_j_skips_separator_rows(self, seeded_storage: SqliteStorage) -> None:
         """j must behave exactly like down, separators included."""
         app = TodoApp(storage=seeded_storage)

@@ -46,6 +46,12 @@ class TodoTable(DataTable["str | Text"]):
         Binding("k", "cursor_up", "Up", show=False),
         Binding("l", "cursor_right", "Status >", show=False),
         Binding("h", "cursor_left", "Status <", show=False),
+        # Under a row cursor DataTable's horizontal keys scroll the table,
+        # and taking them for the status step would otherwise leave a title
+        # wider than the terminal unreachable (home/end jump to the
+        # extremes; nothing else scrolls by a column).
+        Binding("shift+right", "scroll_right", "Scroll right", show=False),
+        Binding("shift+left", "scroll_left", "Scroll left", show=False),
     ]
 
     class StatusStep(Message):
