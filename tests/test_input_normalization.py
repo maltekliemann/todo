@@ -124,3 +124,71 @@ class TestEmptyProjectRef:
         result = cli.invoke(main, ["list", "--project", ""])
         assert result.exit_code == 1
         assert "not found" in result.stderr
+
+
+class TestTagDeduplication:
+    def test_duplicate_tags_deduped_on_add(self, storage: SqliteStorage) -> None:
+        item = add_todo(storage, "x", tags=["a", "a", "b", " a "])
+        assert item.tags == ["a", "b"]
+
+    def test_duplicate_tags_deduped_on_edit(self, storage: SqliteStorage) -> None:
+        add_todo(storage, "x")
+        result = edit_todo(storage, 1, tags=["dup", "dup"])
+        assert result.item.tags == ["dup"]
+
+    def test_tag_counts_count_items_not_occurrences(
+        self, storage: SqliteStorage
+    ) -> None:
+        from todo.application.queries import count_tags
+
+        add_todo(storage, "x", tags=["a", "a"])
+        assert count_tags(storage) == [("a", 1)]
+
+
+class TestProjectDescriptionNormalization:
+    def test_multiline_description_collapsed_on_add(
+        self, storage: SqliteStorage
+    ) -> None:
+        """project list is one row per project — a newline in the
+        description would break that contract just like one in the name."""
+        from todo.application.commands import add_project
+
+        project = add_project(storage, "p", description="line1\nline2")
+        assert project.description == "line1 line2"
+
+    def test_multiline_description_collapsed_on_edit(
+        self, storage: SqliteStorage
+    ) -> None:
+        from todo.application.commands import add_project, edit_project
+
+        project = add_project(storage, "p")
+        updated = edit_project(storage, project.id, description="a\n\nb")
+        assert updated.description == "a b"
+
+    def test_empty_description_still_allowed(self, storage: SqliteStorage) -> None:
+        from todo.application.commands import add_project
+
+        assert add_project(storage, "p", description="").description == ""
+
+
+class TestProjectLogNormalization:
+    def test_empty_log_body_rejected(self, storage: SqliteStorage) -> None:
+        """An empty update would render as a dangling timestamp-only log
+        line the user can never remove."""
+        from todo.application.commands import add_project, log_project_update
+
+        project = add_project(storage, "p")
+        with pytest.raises(ValueError, match="[Bb]ody|[Uu]pdate"):
+            log_project_update(storage, project.id, "   ")
+
+    def test_multiline_log_body_collapsed(self, storage: SqliteStorage) -> None:
+        from todo.application.commands import add_project, log_project_update
+
+        project = add_project(storage, "p")
+        update = log_project_update(storage, project.id, "shipped\nthe thing")
+        assert update.body == "shipped the thing"
+
+    def test_cli_empty_log_errors_cleanly(self, cli: CliRunner) -> None:
+        cli.invoke(main, ["project", "add", "p"])
+        result = cli.invoke(main, ["project", "log", "p", "   "])
+        assert result.exit_code != 0

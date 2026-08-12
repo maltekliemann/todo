@@ -518,7 +518,11 @@ def project_log(ref: str, text: str, as_json: bool) -> None:
     storage = _storage()
     out = create_output()
     proj = _resolve_project_obj_or_exit(storage, ref)
-    log_project_update(storage, proj.id, text)
+    try:
+        log_project_update(storage, proj.id, text)
+    except ValueError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
     detail = project_detail(storage, proj)
     if as_json:
         out.print_json_project(detail)

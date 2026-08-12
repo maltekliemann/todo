@@ -30,7 +30,9 @@ def _normalize_tags(tags: list[str] | None) -> list[str] | None:
             continue
         if "," in stripped:
             raise ValueError(f"Tag '{stripped}' contains a comma; use separate tags.")
-        cleaned.append(stripped)
+        if stripped not in cleaned:
+            # Dedupe here so tag counts count items, not occurrences.
+            cleaned.append(stripped)
     return cleaned
 
 
@@ -277,13 +279,22 @@ def _normalize_project_name(name: str) -> str:
     return normalized
 
 
+def _normalize_description(description: str) -> str:
+    # Descriptions render inside the one-row-per-project list output, so
+    # they share the single-line contract; empty stays allowed.
+    return " ".join(description.split())
+
+
 def add_project(
     storage: StorageProtocol,
     name: str,
     *,
     description: str = "",
 ) -> Project:
-    return storage.add_project(_normalize_project_name(name), description=description)
+    return storage.add_project(
+        _normalize_project_name(name),
+        description=_normalize_description(description),
+    )
 
 
 def edit_project(
@@ -294,7 +305,13 @@ def edit_project(
     description: str | None = None,
 ) -> Project:
     normalized = _normalize_project_name(name) if name is not None else None
-    return storage.update_project(project_id, name=normalized, description=description)
+    return storage.update_project(
+        project_id,
+        name=normalized,
+        description=(
+            _normalize_description(description) if description is not None else None
+        ),
+    )
 
 
 def archive_project(
@@ -316,4 +333,9 @@ def log_project_update(
     project_id: int,
     body: str,
 ) -> ProjectUpdate:
-    return storage.add_project_update(project_id, body)
+    # Log entries render as one timestamped row; an empty body would leave
+    # a dangling timestamp with no way to delete the entry.
+    normalized = " ".join(body.split())
+    if not normalized:
+        raise ValueError("Update body cannot be empty.")
+    return storage.add_project_update(project_id, normalized)
