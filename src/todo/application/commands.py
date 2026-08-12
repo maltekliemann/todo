@@ -234,12 +234,13 @@ def block_todo_batch(
         if blocked_id == blocker_id:
             raise DependencyError("An item cannot block itself.")
     with storage.transaction():
-        storage.get(blocked_id)
+        storage.get(blocked_id)  # raises NotFoundError before any graph work
         blocking_map: dict[int, list[int]] = {}
         for edge_blocker, edge_blocked in storage.dependency_edges():
             blocking_map.setdefault(edge_blocker, []).append(edge_blocked)
+        # Blocker existence is enforced once, by add_blocker's probes —
+        # not duplicated here with a full hydration per blocker.
         for blocker_id in blocker_ids:
-            storage.get(blocker_id)
             _assert_no_cycle(blocking_map, blocked_id, blocker_id)
             storage.add_blocker(blocked_id, blocker_id)
             blocking_map.setdefault(blocker_id, []).append(blocked_id)

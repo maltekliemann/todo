@@ -139,3 +139,86 @@ class TestAddBlockerExistenceChecks:
             storage.add_blocker(1, 999)
         with pytest.raises(NotFoundError):
             storage.add_blocker(999, 1)
+
+
+class TestWritePathExistenceChecks:
+    def test_edit_does_not_triple_hydrate(
+        self, storage: SqliteStorage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """update()'s existence check must be a probe, not a third full
+        dependency hydration of the same item."""
+        from todo.application.commands import edit_todo
+
+        add_todo(storage, "x")
+        calls = 0
+        original = SqliteStorage.get
+
+        def counting(self: SqliteStorage, item_id: int):  # type: ignore[no-untyped-def]
+            nonlocal calls
+            calls += 1
+            return original(self, item_id)
+
+        monkeypatch.setattr(SqliteStorage, "get", counting)
+        edit_todo(storage, 1, title="renamed")
+        assert calls <= 2  # the command's read + the returned item
+
+    def test_delete_does_not_hydrate_for_existence(
+        self, storage: SqliteStorage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from todo.application.commands import delete_todo
+
+        add_todo(storage, "x")
+        calls = 0
+        original = SqliteStorage.get
+
+        def counting(self: SqliteStorage, item_id: int):  # type: ignore[no-untyped-def]
+            nonlocal calls
+            calls += 1
+            return original(self, item_id)
+
+        monkeypatch.setattr(SqliteStorage, "get", counting)
+        delete_todo(storage, 1)
+        assert calls <= 1  # only the command's victim read
+
+    def test_update_keeps_not_found_and_done_at_contracts(
+        self, storage: SqliteStorage
+    ) -> None:
+        from datetime import datetime
+
+        from todo.domain.enums import Status
+
+        with pytest.raises(NotFoundError):
+            storage.update(999, title="x")
+        add_todo(storage, "x")
+        done = storage.update(1, status=Status.DONE)
+        assert isinstance(done.done_at, datetime)
+        reopened = storage.update(1, status=Status.TODO)
+        assert reopened.done_at is None
+
+    def test_batch_existence_validated_once_per_id(
+        self, storage: SqliteStorage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """block_todo_batch must not enforce existence at two altitudes
+        (full-hydration get per blocker plus the adapter's own probes)."""
+        for title in ("a", "b", "c", "d"):
+            add_todo(storage, title)
+        calls = 0
+        original = SqliteStorage.get
+
+        def counting(self: SqliteStorage, item_id: int):  # type: ignore[no-untyped-def]
+            nonlocal calls
+            calls += 1
+            return original(self, item_id)
+
+        monkeypatch.setattr(SqliteStorage, "get", counting)
+        block_todo_batch(storage, 1, [2, 3, 4])
+        assert calls <= 2  # blocked item + returned item, none per blocker
+
+    def test_batch_missing_blocker_still_not_found_and_rolls_back(
+        self, storage: SqliteStorage
+    ) -> None:
+        add_todo(storage, "a")
+        add_todo(storage, "b")
+        with pytest.raises(NotFoundError):
+            block_todo_batch(storage, 1, [2, 999])
+        assert storage.get(1).blocked_by == []  # nothing half-applied

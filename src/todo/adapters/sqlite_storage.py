@@ -213,17 +213,21 @@ class SqliteStorage:
             raise StorageError(f"Cannot open database at {db_path}: {e}") from e
         self._in_txn = False
         self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA foreign_keys=ON")
-        self._conn.execute("PRAGMA busy_timeout = 5000")
         try:
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA foreign_keys=ON")
+            self._conn.execute("PRAGMA busy_timeout = 5000")
             self._conn.executescript(_SCHEMA)
             self._migrate()
-        except BaseException:
+        except BaseException as e:
             # A failed init must not leak a connection holding a write lock
             # (closing rolls back any transaction the failure left open).
             self._conn.rollback()
             self._conn.close()
+            if isinstance(e, sqlite3.Error):
+                # Same wrapping contract as reads and writes: a corrupt or
+                # unusable database file surfaces as StorageError.
+                raise StorageError(f"Cannot open database at {db_path}: {e}") from e
             raise
 
     def _migrate(self) -> None:
@@ -402,8 +406,15 @@ class SqliteStorage:
         tags: list[str] | None = None,
         project_id: int | None | Unset = UNSET,
     ) -> TodoItem:
-        # Verify it exists
-        existing = self.get(item_id)
+        # Existence + the one field the done_at transition needs — not a
+        # full dependency hydration used as an existence check.
+        with self._read_guard(f"read todo #{item_id}"):
+            status_row = self._conn.execute(
+                "SELECT status FROM todos WHERE id = ?", (item_id,)
+            ).fetchone()
+        if status_row is None:
+            raise NotFoundError(item_id)
+        existing_status = Status(status_row["status"])
 
         sets: list[str] = []
         params: list[str | int | None] = []
@@ -420,7 +431,7 @@ class SqliteStorage:
         if status is not None:
             sets.append("status = ?")
             params.append(status.value)
-            if status == Status.DONE and existing.status != Status.DONE:
+            if status == Status.DONE and existing_status != Status.DONE:
                 sets.append("done_at = ?")
                 params.append(_now().isoformat())
             elif status != Status.DONE:
@@ -437,7 +448,7 @@ class SqliteStorage:
             params.append(project_id)
 
         if not sets:
-            return existing
+            return self.get(item_id)
 
         sets.append("updated_at = ?")
         params.append(_now().isoformat())
@@ -454,7 +465,7 @@ class SqliteStorage:
         return self.get(item_id)
 
     def delete(self, item_id: int) -> None:
-        self.get(item_id)  # raises NotFoundError if missing
+        self._assert_exists(item_id)
         try:
             self._conn.execute("DELETE FROM todos WHERE id = ?", (item_id,))
             self._commit()

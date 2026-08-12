@@ -129,3 +129,13 @@ class TestParseSinceOverflow:
         assert result.exit_code == 1
         assert result.exception is None or isinstance(result.exception, SystemExit)
         assert "Traceback" not in result.stderr
+
+
+class TestInitSqliteErrorWrapping:
+    def test_corrupt_db_file_raises_storage_error(self, tmp_path: Path) -> None:
+        """Init-time sqlite failures (corrupt file) are part of the same
+        wrapping contract as reads and writes."""
+        bad = tmp_path / "corrupt.db"
+        bad.write_bytes(b"this is not a sqlite database at all --------")
+        with pytest.raises(StorageError):
+            SqliteStorage(bad)

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sqlite3
 import sys
 from datetime import date
 
@@ -83,7 +82,11 @@ class _SafeGroup(click.Group):
     def invoke(self, ctx: click.Context) -> object:
         try:
             return super().invoke(ctx)
-        except (StorageError, sqlite3.Error) as e:
+        # StorageError only: the adapter's contract is that every
+        # database-level failure is wrapped — catching raw driver
+        # exceptions here would paper over contract gaps that still
+        # crash the TUI.
+        except StorageError as e:
             click.echo(f"Database error: {e}", err=True)
             sys.exit(1)
 

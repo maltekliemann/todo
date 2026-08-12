@@ -122,3 +122,18 @@ class TestStoragePortCompleteness:
         assert "SqliteStorage" not in src, (
             "tui/list_view must depend on StorageProtocol, not the adapter"
         )
+
+
+class TestErrorWrappingContract:
+    def test_cli_relies_on_the_adapter_wrapping_contract(self) -> None:
+        """The adapter wraps every sqlite3.Error as StorageError; a raw
+        sqlite3 catch at the CLI layer would paper over contract gaps the
+        TUI still crashes on."""
+        import importlib
+        from pathlib import Path
+
+        cli_main = importlib.import_module("todo.infra.cli.main")
+        src = Path(str(cli_main.__file__)).read_text()
+        assert "sqlite3" not in src, (
+            "infra/cli must rely on StorageError, not raw sqlite3 exceptions"
+        )

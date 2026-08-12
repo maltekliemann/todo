@@ -118,7 +118,10 @@ class TestMigration:
             "CREATE TABLE mig_probe (id INTEGER);\nCREATE TABLE todos (id INTEGER);\n"
         )
         monkeypatch.setattr(storage_mod, "_MIGRATIONS", [bad_migration])
-        with pytest.raises(sqlite3.OperationalError):
+        # Wrapped like every other init-time database failure.
+        from todo.exceptions import StorageError
+
+        with pytest.raises(StorageError):
             SqliteStorage(db)
 
         conn = sqlite3.connect(str(db))
