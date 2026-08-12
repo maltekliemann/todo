@@ -37,10 +37,11 @@ class TestTitleNormalization:
         cli.invoke(main, ["add", "multi\nline"])
         cli.invoke(main, ["add", "single"])
         result = cli.invoke(main, ["list"])
+        # Item rows are indented; the "N items" footer is not.
         item_lines = [
             ln
             for ln in result.output.splitlines()
-            if ln.strip().startswith(("1 ", "2 "))
+            if ln.startswith("  ") and ln.strip()
         ]
         assert len(item_lines) == 2
         assert any("multi line" in ln for ln in item_lines)
