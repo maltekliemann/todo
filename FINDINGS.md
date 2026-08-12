@@ -240,9 +240,9 @@ real transaction. Treat 'my own fix' as untrusted input to this round.
 - [x] (d08562a) `src/todo/tui/list_view.py:636` [correctness] — on_mount's data_version() call is outside any TodoError guard: a StorageError there crashes startup while the same failure in the poll degrades
 - [x] (7ca9021) `src/todo/application/queries.py:157` [correctness] — parse_since accepts negative amounts, silently producing an inverted future window ("No items completed") instead of rejecting the input
 - [x] (d08562a) `src/todo/tui/list_view.py:934` [correctness] — Buffer-read OSError branch strands the tmp file silently: no unlink, no "buffer kept at <path>" notice, unlike the rejection branch
-- [ ] `src/todo/adapters/sqlite_storage.py:406` [cleanup] — update()/delete() run full dependency-hydrating get() purely as existence checks though _assert_exists exists; one edit = 15 SQL statements, 3 full hydrations
-- [ ] `src/todo/application/commands.py:242` [cleanup] — block_todo_batch validates blocker existence at two altitudes (full-hydration get per blocker + add_blocker's own probes); ~6 queries per edge where 2 do
-- [ ] `src/todo/infra/cli/main.py:86` [cleanup] — _SafeGroup catches raw sqlite3.Error, papering over adapter wrapping-contract gaps the TUI would still crash on; rely on StorageError only
+- [x] (37186ed) `src/todo/adapters/sqlite_storage.py:406` [cleanup] — update()/delete() run full dependency-hydrating get() purely as existence checks though _assert_exists exists; one edit = 15 SQL statements, 3 full hydrations
+- [x] (37186ed) `src/todo/application/commands.py:242` [cleanup] — block_todo_batch validates blocker existence at two altitudes (full-hydration get per blocker + add_blocker's own probes); ~6 queries per edge where 2 do
+- [x] (37186ed) `src/todo/infra/cli/main.py:86` [cleanup] — _SafeGroup catches raw sqlite3.Error, papering over adapter wrapping-contract gaps the TUI would still crash on; rely on StorageError only
 
 ## Triage log
 
@@ -260,6 +260,7 @@ Anything without a failed reproduction attempt gets fixed, not triaged.)
 
 ## Status log
 
+- iter 19: round-8 queue closed — tag-filter validation (blank/comma filters error), negative --since rejected, refresh keeps last good rows, detail pane clears on empty, guarded startup, buffer path reported, probe-based existence checks, single-altitude validation, adapter-complete wrapping incl. init-time corrupt-file (7ca9021, d08562a, 37186ed). 378 tests green. QUEUE EMPTY (round 8).
 - iter 17: round-7 queue closed — TUI storage-failure guards, OverflowError class, parse_since overflow, exact editor no-op, tag-filter normalization, blocked-ids completion diff, add_blocker probes, StorageProtocol port completeness, separator-scan refactor (10a735d, a439c59, +1). 362 tests green. QUEUE EMPTY (round 7).
 - iter 15: round-6 queue closed — v4 tag migration, read-path/init StorageError wrapping, tag dedupe, description/log normalization, spaced $EDITOR fallback, verbatim body round-trip, age buckets, detail-pane cache, batch graph load, meta/JSON dedup (295b0f0, 3f6395d, 7a057ab, +1). 341 tests green. QUEUE EMPTY (round 6).
 - iter 1: markup class closed, 8 findings (3508897). 225 tests green.
