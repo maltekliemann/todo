@@ -36,6 +36,7 @@ from todo.tui.dialogs import (
     SearchDialog,
 )
 from todo.tui.editor import apply_editor_edit, editor_command, item_to_editor_text
+from todo.tui.filters import Filters
 from todo.tui.render import escape_markup, meta_lines
 from todo.tui.table import COLUMNS, TodoTable, is_separator
 
@@ -70,15 +71,7 @@ class TodoListView(Widget):
         self._storage = storage
         self._items: list[TodoItem] = []
         self._item_by_id: dict[int, TodoItem] = {}
-        self._search_query: str = ""
-        self._tag_filter: str | None = None
-        # Keyed on the stable project id, not the mutable name — an
-        # external rename must not blank the filtered list. The name is
-        # remembered alongside it so a deleted project can still be named
-        # in the status bar instead of degrading to '?'.
-        self._project_filter: int | None = None
-        self._project_filter_name: str | None = None
-        self._priority_filter: Priority | None = None
+        self._filters = Filters()
         self._cursor_follows_item: bool = True
         self._last_data_version: int = 0
         # One error toast per failure streak: a persistently broken
@@ -157,7 +150,7 @@ class TodoListView(Widget):
         else:
             self._read_error_reported = False
 
-    def _rows_for_refresh(self) -> tuple[int, list[TodoItem], str | None]:
+    def _rows_for_refresh(self) -> tuple[int, list[TodoItem]]:
         """Every storage read a refresh needs, plus the data_version read
         BEFORE them.
 
@@ -166,47 +159,38 @@ class TodoListView(Widget):
         flight is newer than the version we return, so the next tick still
         sees a change and displays it. A version read afterwards would
         record that concurrent write as already seen and lose it.
-
-        Returns (version, items, project_filter_label).
         """
         version = self._storage.data_version()
 
         # Tag/priority/project filtering happens in SQL via list_todos; only
-        # the search filter stays here because it also matches tag names,
-        # which storage-level search (title/body) does not cover.
-        project_filter_id = self._project_filter
-        project_filter_label = self._project_filter_name
-        project_filter_missing = False
-        if project_filter_id is not None:
+        # the search filter stays in Filters, because it also matches tag
+        # names, which storage-level search (title/body) does not cover.
+        project_id = self._filters.project_id
+        if project_id is not None:
             match = next(
                 (
                     p
                     for p in list_all_projects(self._storage, include_archived=True)
-                    if p.id == project_filter_id
+                    if p.id == project_id
                 ),
                 None,
             )
             if match is None:
-                project_filter_missing = True
-            else:
-                # Label from the live row, so a rename shows the new name.
-                project_filter_label = match.name
-                self._project_filter_name = match.name
+                # Filtered project no longer exists: show nothing, but keep
+                # its remembered name — the last known name beats a bare '?'.
+                return version, []
+            # Label from the live row, so a rename shows the new name.
+            self._filters.project_name = match.name
 
-        if project_filter_missing:
-            # Filtered project no longer exists: show nothing, like before,
-            # but keep naming it — the last known name beats a bare '?'.
-            return version, [], project_filter_label
         return (
             version,
             list_todos(
                 self._storage,
                 include_done=True,
-                tags=[self._tag_filter] if self._tag_filter is not None else None,
-                priority=self._priority_filter,
-                project_id=project_filter_id,
+                tags=[self._filters.tag] if self._filters.tag is not None else None,
+                priority=self._filters.priority,
+                project_id=project_id,
             ),
-            project_filter_label,
         )
 
     def _refresh_list_unguarded(self) -> None:
@@ -217,18 +201,8 @@ class TodoListView(Widget):
         # All storage reads happen BEFORE the table is touched: a degraded
         # (notified) read failure must leave the last good rows visible,
         # not wipe the list into a dead blank state.
-        version, self._items, project_filter_label = self._rows_for_refresh()
-
-        if self._search_query:
-            # casefold, matching the storage layer's SQL search semantics.
-            q = self._search_query.casefold()
-            self._items = [
-                i
-                for i in self._items
-                if q in i.title.casefold()
-                or q in i.body.casefold()
-                or any(q in t.casefold() for t in i.tags)
-            ]
+        version, items = self._rows_for_refresh()
+        self._items = self._filters.apply_search(items)
 
         # The detail pane renders from this cache instead of re-querying
         # storage on every cursor move; the refresh that builds the rows is
@@ -261,18 +235,7 @@ class TodoListView(Widget):
         self._last_data_version = version
 
         search_status = self.query_one("#search-status", Static)
-        parts: list[str] = []
-        if self._search_query:
-            parts.append(
-                f"[dim]Search:[/dim] [b]{escape_markup(self._search_query)}[/b]"
-            )
-        if self._tag_filter is not None:
-            parts.append(f"[dim]Tag:[/dim] [b]{escape_markup(self._tag_filter)}[/b]")
-        if self._project_filter is not None:
-            label = escape_markup(project_filter_label or "?")
-            parts.append(f"[dim]Project:[/dim] [b]{label}[/b]")
-        if self._priority_filter is not None:
-            parts.append(f"[dim]Priority:[/dim] [b]{self._priority_filter.value}[/b]")
+        parts = self._filters.status_parts()
         hint = "  [dim]([0] clears)[/dim]" if parts else ""
         if not self._cursor_follows_item:
             parts.append("[dim]Cursor:[/dim] [b]stay[/b]")
@@ -335,7 +298,7 @@ class TodoListView(Widget):
                 self._refresh_list()
 
         self.app.push_screen(
-            NewItemDialog(self._storage, project_id=self._project_filter), after
+            NewItemDialog(self._storage, project_id=self._filters.project_id), after
         )
 
     def action_done(self) -> None:
@@ -511,67 +474,36 @@ class TodoListView(Widget):
     def action_search(self) -> None:
         def after(query: str | None) -> None:
             if query is not None:
-                self._search_query = query
+                self._filters.search = query
                 self._refresh_list()
 
         self.app.push_screen(SearchDialog(), after)
 
     def action_clear_search(self) -> None:
-        if self._search_query:
-            self._search_query = ""
+        if self._filters.search:
+            self._filters.search = ""
             self._refresh_list()
 
     def action_cycle_tag(self) -> None:
-        """Cycle the tag filter: no filter -> each known tag -> no filter."""
         try:
             tags = [t for t, _ in count_tags(self._storage)]
         except TodoError as exc:
             self.notify(escape_markup(str(exc)), severity="error")
             return
-        if not tags:
-            return
-        if self._tag_filter is None:
-            self._tag_filter = tags[0]
-        else:
-            try:
-                idx = tags.index(self._tag_filter)
-            except ValueError:
-                idx = -1
-            self._tag_filter = tags[idx + 1] if idx + 1 < len(tags) else None
+        self._filters.cycle_tag(tags)
         self._refresh_list()
 
     def action_cycle_project(self) -> None:
-        """Cycle the project filter: no filter -> each project -> no filter."""
         try:
             projects = list_all_projects(self._storage, include_archived=True)
         except TodoError as exc:
             self.notify(escape_markup(str(exc)), severity="error")
             return
-        if not projects:
-            return
-        ids = [p.id for p in projects]
-        if self._project_filter is None:
-            idx = 0
-        else:
-            try:
-                current = ids.index(self._project_filter)
-            except ValueError:
-                current = -1
-            idx = current + 1
-        if idx < len(ids):
-            # Remember the name too: if the project is deleted while the
-            # filter is active, the status bar can still name it.
-            self._project_filter = ids[idx]
-            self._project_filter_name = projects[idx].name
-        else:
-            self._project_filter = None
-            self._project_filter_name = None
+        self._filters.cycle_project(projects)
         self._refresh_list()
 
     def action_filter_priority(self, value: str) -> None:
-        """Set the priority filter; pressing the same key again clears it."""
-        priority = Priority.from_string(value)
-        self._priority_filter = None if self._priority_filter == priority else priority
+        self._filters.toggle_priority(Priority.from_string(value))
         self._refresh_list()
 
     def action_toggle_cursor_mode(self) -> None:
@@ -586,17 +518,8 @@ class TodoListView(Widget):
         self._refresh_list()
 
     def action_clear_filters(self) -> None:
-        if (
-            self._search_query
-            or self._tag_filter
-            or self._project_filter
-            or self._priority_filter
-        ):
-            self._search_query = ""
-            self._tag_filter = None
-            self._project_filter = None
-            self._project_filter_name = None
-            self._priority_filter = None
+        if self._filters.any_active():
+            self._filters.clear()
             self._refresh_list()
 
     def action_status_next(self) -> None:

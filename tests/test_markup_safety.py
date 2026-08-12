@@ -287,7 +287,7 @@ class TestTextualMarkupEscaping:
         async with app.run_test() as pilot:
             await pilot.pause()
             view = app.query_one(TodoListView)
-            view._search_query = "[WIP]"
+            view._filters.search = "[WIP]"
             view._refresh_list()
             await pilot.pause()
             status = str(app.query_one("#search-status", Static).render())
