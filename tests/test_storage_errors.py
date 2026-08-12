@@ -70,3 +70,62 @@ class TestInitErrorWrapping:
         assert result.exit_code == 1
         assert "Database error:" in result.stderr
         assert "Traceback" not in result.stderr
+
+
+class TestOversizedIds:
+    """Ids beyond SQLite's 64-bit integer range raise OverflowError at bind
+    time — outside the sqlite3.Error hierarchy, so they slipped past every
+    guard. They must surface as the domain hierarchy like any other bad id."""
+
+    def test_get_with_oversized_id_raises_domain_error(self, tmp_path: Path) -> None:
+        from todo.exceptions import TodoError
+
+        storage = SqliteStorage(tmp_path / "db.db")
+        with pytest.raises(TodoError):
+            storage.get(10**20)
+        storage.close()
+
+    def test_update_with_oversized_id_raises_domain_error(self, tmp_path: Path) -> None:
+        from todo.exceptions import TodoError
+
+        storage = SqliteStorage(tmp_path / "db.db")
+        with pytest.raises(TodoError):
+            storage.update(10**20, title="x")
+        storage.close()
+
+    def test_add_blocker_with_oversized_id_raises_domain_error(
+        self, tmp_path: Path
+    ) -> None:
+        from todo.exceptions import TodoError
+
+        storage = SqliteStorage(tmp_path / "db.db")
+        storage.add("a")
+        with pytest.raises(TodoError):
+            storage.add_blocker(1, 10**20)
+        storage.close()
+
+    def test_cli_show_oversized_id_errors_cleanly(self, tmp_path: Path) -> None:
+        runner = CliRunner()
+        env = {"TODO_DB": str(tmp_path / "t.db")}
+        runner.invoke(main, ["add", "x"], env=env)
+        result = runner.invoke(main, ["show", "99999999999999999999"], env=env)
+        assert result.exit_code == 1
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        assert "Traceback" not in result.stderr
+
+
+class TestParseSinceOverflow:
+    def test_huge_since_amount_raises_value_error(self) -> None:
+        from todo.application.queries import parse_since
+
+        for value in ("9999999 days", "99999999999 days", "999999999999999 weeks"):
+            with pytest.raises(ValueError, match="Cannot parse|too large"):
+                parse_since(value)
+
+    def test_cli_summary_huge_since_errors_cleanly(self, tmp_path: Path) -> None:
+        runner = CliRunner()
+        env = {"TODO_DB": str(tmp_path / "t.db")}
+        result = runner.invoke(main, ["summary", "--since", "9999999 days"], env=env)
+        assert result.exit_code == 1
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        assert "Traceback" not in result.stderr

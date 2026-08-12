@@ -274,7 +274,7 @@ class SqliteStorage:
             return
         try:
             self._conn.execute("BEGIN IMMEDIATE")
-        except sqlite3.Error as e:
+        except (sqlite3.Error, OverflowError) as e:
             raise StorageError(f"Failed to start transaction: {e}") from e
         self._in_txn = True
         try:
@@ -287,7 +287,7 @@ class SqliteStorage:
             self._in_txn = False
             try:
                 self._conn.commit()
-            except sqlite3.Error as e:
+            except (sqlite3.Error, OverflowError) as e:
                 raise StorageError(f"Failed to commit transaction: {e}") from e
 
     def _commit(self) -> None:
@@ -306,7 +306,7 @@ class SqliteStorage:
         """
         try:
             yield
-        except sqlite3.Error as e:
+        except (sqlite3.Error, OverflowError) as e:
             raise StorageError(f"Failed to {action}: {e}") from e
 
     def data_version(self) -> int:
@@ -349,7 +349,7 @@ class SqliteStorage:
                 ),
             )
             self._commit()
-        except sqlite3.Error as e:
+        except (sqlite3.Error, OverflowError) as e:
             raise StorageError(f"Failed to add todo: {e}") from e
         return self.get(cur.lastrowid)  # type: ignore[arg-type]
 
@@ -449,7 +449,7 @@ class SqliteStorage:
                 params,
             )
             self._commit()
-        except sqlite3.Error as e:
+        except (sqlite3.Error, OverflowError) as e:
             raise StorageError(f"Failed to update todo #{item_id}: {e}") from e
         return self.get(item_id)
 
@@ -458,7 +458,7 @@ class SqliteStorage:
         try:
             self._conn.execute("DELETE FROM todos WHERE id = ?", (item_id,))
             self._commit()
-        except sqlite3.Error as e:
+        except (sqlite3.Error, OverflowError) as e:
             raise StorageError(f"Failed to delete todo #{item_id}: {e}") from e
 
     def done_since(self, since: datetime) -> list[TodoItem]:
@@ -529,7 +529,7 @@ class SqliteStorage:
                 (blocker_id, blocked_id),
             )
             self._commit()
-        except sqlite3.Error as e:
+        except (sqlite3.Error, OverflowError) as e:
             raise StorageError(f"Failed to add blocker: {e}") from e
 
     def remove_blocker(self, blocked_id: int, blocker_id: int) -> None:
@@ -539,7 +539,7 @@ class SqliteStorage:
                 (blocker_id, blocked_id),
             )
             self._commit()
-        except sqlite3.Error as e:
+        except (sqlite3.Error, OverflowError) as e:
             raise StorageError(f"Failed to remove blocker: {e}") from e
 
     def list(
@@ -615,7 +615,7 @@ class SqliteStorage:
             self._commit()
         except sqlite3.IntegrityError as e:
             raise DuplicateProjectError(name) from e
-        except sqlite3.Error as e:
+        except (sqlite3.Error, OverflowError) as e:
             raise StorageError(f"Failed to add project: {e}") from e
         return self.get_project(cur.lastrowid)  # type: ignore[arg-type]
 
@@ -707,7 +707,7 @@ class SqliteStorage:
             self._commit()
         except sqlite3.IntegrityError as e:
             raise DuplicateProjectError(name or "") from e
-        except sqlite3.Error as e:
+        except (sqlite3.Error, OverflowError) as e:
             raise StorageError(f"Failed to update project #{project_id}: {e}") from e
         return self.get_project(project_id)
 
@@ -716,7 +716,7 @@ class SqliteStorage:
         try:
             self._conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
             self._commit()
-        except sqlite3.Error as e:
+        except (sqlite3.Error, OverflowError) as e:
             raise StorageError(f"Failed to delete project #{project_id}: {e}") from e
 
     def add_project_update(self, project_id: int, body: str) -> ProjectUpdate:
@@ -729,7 +729,7 @@ class SqliteStorage:
                 (project_id, body, now),
             )
             self._commit()
-        except sqlite3.Error as e:
+        except (sqlite3.Error, OverflowError) as e:
             raise StorageError(f"Failed to log project update: {e}") from e
         row = self._conn.execute(
             "SELECT * FROM project_updates WHERE id = ?", (cur.lastrowid,)

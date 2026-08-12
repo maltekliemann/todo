@@ -155,13 +155,17 @@ def parse_since(since: str) -> datetime:
             pass
         else:
             unit = unit.lower().rstrip("s")  # "days" -> "day"
-            if unit == "day":
-                return datetime.now(tz=ZoneInfo("UTC")) - timedelta(days=amount)
-            if unit == "week":
-                return datetime.now(tz=ZoneInfo("UTC")) - timedelta(weeks=amount)
-            if unit == "month":
-                return datetime.now(tz=ZoneInfo("UTC")) - timedelta(days=amount * 30)
-            raise ValueError(f"Unknown time unit: '{unit}'")
+            days_per_unit = {"day": 1, "week": 7, "month": 30}.get(unit)
+            if days_per_unit is None:
+                raise ValueError(f"Unknown time unit: '{unit}'")
+            try:
+                return datetime.now(tz=ZoneInfo("UTC")) - timedelta(
+                    days=amount * days_per_unit
+                )
+            except OverflowError:
+                # timedelta/datetime overflow is not ValueError, but to the
+                # caller it's the same malformed --since input.
+                raise ValueError(f"Cannot parse '{since}': amount too large.") from None
 
     # Try ISO date
     try:
