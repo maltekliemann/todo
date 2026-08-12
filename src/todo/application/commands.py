@@ -179,11 +179,3 @@ def log_project_update(
     body: str,
 ) -> ProjectUpdate:
     return storage.add_project_update(project_id, body)
-
-
-def assign_project(
-    storage: StorageProtocol,
-    item_id: int,
-    project_id: int | None,
-) -> TodoItem:
-    return storage.update(item_id, project_id=project_id)
