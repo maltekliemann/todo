@@ -92,12 +92,14 @@ is done.
 
 ## Phase 6 — Final verification (see LOOP.md stop condition)
 
-- [ ] From a clean checkout state: `uv sync && uv run pytest -q && uv run mypy &&
-      uv run ruff check src tests && uv run ruff format --check src tests` all green.
-- [ ] Scripted end-to-end smoke against a temp `TODO_DB`: add/list/search/block/
-      project flow via the real CLI; verify JSON output parses.
-- [ ] Migration smoke: build a DB with the pre-loop schema (commit `658ec6b`),
-      run current code against it, verify data intact.
+- [x] Clean state: uv sync + pytest (208) + mypy + ruff check + format --check
+      all green. (iter 16)
+- [x] E2E smoke on temp TODO_DB: project/add/block/ready/blocked/search/done-
+      with-🔓-warning/log/tags/summary/edit--project-none all correct, JSON
+      parses. (iter 16)
+- [x] Migration smoke: DB built from the actual 658ec6b schema (todos only,
+      no deps/projects/user_version) opens with current code — data intact,
+      blockers/projects/log all work, user_version lands at 2. (iter 16)
 - [ ] Full-diff review pass vs `658ec6b`; then write `FINAL_REPORT.md` and stop
       the loop.
 
@@ -145,3 +147,6 @@ is done.
 - 2026-08-12 iter 15: project update log, all feature phases now complete
   (34320d4). Gates green: 208 passed, all clean. Next: Phase 6 final
   verification, then the closing review pass.
+- 2026-08-12 iter 16: Phase 6 verification complete — clean-state gates, e2e
+  CLI smoke, migration smoke from true pre-loop schema. Only the full-diff
+  review pass + FINAL_REPORT.md remain.
