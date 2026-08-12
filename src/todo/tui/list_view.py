@@ -167,7 +167,11 @@ def apply_editor_edit(
             try:
                 deadline_val = date.fromisoformat(dl_str)
             except ValueError:
-                deadline_val = UNSET
+                # Same contract as the CLI: bad input errors, never a
+                # silent no-op.
+                raise ValueError(
+                    f"Invalid deadline '{dl_str}'. Use YYYY-MM-DD."
+                ) from None
 
     tags: list[str] | None = None
     if "tags" in fields:
@@ -177,7 +181,8 @@ def apply_editor_edit(
         storage,
         item_id,
         title=fields.get("title") or None,
-        body=fields.get("body") or "",
+        # Absent "body" means the marker line was deleted: leave unchanged.
+        body=fields["body"] if "body" in fields else None,
         priority=(
             Priority.from_string(fields["priority"]) if fields.get("priority") else None
         ),
@@ -204,7 +209,10 @@ def _parse_editor_text(text: str) -> dict[str, str]:
             key = key.strip().lower()
             if key in ("title", "priority", "status", "deadline", "tags"):
                 fields[key] = value.strip()
-    fields["body"] = "\n".join(body_lines).strip()
+    # Only report a body when the marker line was present: a buffer without
+    # the marker must not silently erase the existing body.
+    if in_body:
+        fields["body"] = "\n".join(body_lines).strip()
     return fields
 
 
@@ -630,7 +638,33 @@ class TodoListView(Widget):
         previous_cursor = table.cursor_row
         table.clear()
 
-        self._items = list_todos(self._storage, include_done=True)
+        # Tag/priority/project filtering happens in SQL via list_todos; only
+        # the search filter stays here because it also matches tag names,
+        # which storage-level search (title/body) does not cover.
+        project_filter_id: int | None = None
+        project_filter_missing = False
+        if self._project_filter is not None:
+            project_filter_id = next(
+                (
+                    s.project.id
+                    for s in list_projects(self._storage, include_archived=True)
+                    if s.project.name == self._project_filter
+                ),
+                None,
+            )
+            project_filter_missing = project_filter_id is None
+
+        if project_filter_missing:
+            # Filtered project no longer exists: show nothing, like before.
+            self._items = []
+        else:
+            self._items = list_todos(
+                self._storage,
+                include_done=True,
+                tags=[self._tag_filter] if self._tag_filter is not None else None,
+                priority=self._priority_filter,
+                project_id=project_filter_id,
+            )
 
         if self._search_query:
             q = self._search_query.lower()
@@ -640,16 +674,6 @@ class TodoListView(Widget):
                 if q in i.title.lower()
                 or q in i.body.lower()
                 or any(q in t.lower() for t in i.tags)
-            ]
-        if self._tag_filter is not None:
-            self._items = [i for i in self._items if self._tag_filter in i.tags]
-        if self._project_filter is not None:
-            self._items = [
-                i for i in self._items if i.project_name == self._project_filter
-            ]
-        if self._priority_filter is not None:
-            self._items = [
-                i for i in self._items if i.priority == self._priority_filter
             ]
 
         # Group items by status, preserving the per-group ordering from the
@@ -870,7 +894,12 @@ class TodoListView(Widget):
             if edited.strip() == text.strip():
                 return
 
-            result = apply_editor_edit(self._storage, item_id, edited)
+            try:
+                result = apply_editor_edit(self._storage, item_id, edited)
+            except ValueError as exc:
+                # Mistyped priority/status/deadline: report, don't crash.
+                self.notify(f"Edit rejected: {escape(str(exc))}", severity="error")
+                return
             self._notify_unblocked(result)
             self._refresh_list()
         finally:

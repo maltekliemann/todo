@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from todo.adapters.sqlite_storage import SqliteStorage
 from todo.application.commands import add_todo, block_todo
 from todo.domain.enums import Priority, Status
@@ -76,6 +78,50 @@ class TestApplyEditorEdit:
         add_todo(storage, "Task")
         result = apply_editor_edit(storage, 1, _edited(storage, 1, priority="urgent"))
         assert result.item.priority == Priority.URGENT
+
+
+class TestEditorBodyContract:
+    def test_missing_body_marker_keeps_body(self, storage: SqliteStorage) -> None:
+        """Deleting the '# Body' marker line must not erase the body."""
+        add_todo(storage, "Task", body="important body text")
+        text = "\n".join(
+            line
+            for line in _item_to_editor_text(storage.get(1)).split("\n")
+            if not line.startswith("# Body")
+        )
+        result = apply_editor_edit(storage, 1, text)
+        assert result.item.body == "important body text"
+
+    def test_emptying_body_below_marker_clears_it(self, storage: SqliteStorage) -> None:
+        add_todo(storage, "Task", body="old body")
+        text = _item_to_editor_text(storage.get(1))
+        marker_idx = text.index("# Body")
+        result = apply_editor_edit(
+            storage, 1, text[: marker_idx + text[marker_idx:].index("\n") + 1]
+        )
+        assert result.item.body == ""
+
+
+class TestEditorInvalidFields:
+    def test_invalid_priority_raises_clean_error(self, storage: SqliteStorage) -> None:
+        add_todo(storage, "Task")
+        with pytest.raises(ValueError, match="Invalid priority"):
+            apply_editor_edit(storage, 1, _edited(storage, 1, priority="hgih"))
+        # Nothing changed.
+        assert storage.get(1).priority.value == "medium"
+
+    def test_invalid_status_raises_clean_error(self, storage: SqliteStorage) -> None:
+        add_todo(storage, "Task")
+        with pytest.raises(ValueError, match="Invalid status"):
+            apply_editor_edit(storage, 1, _edited(storage, 1, status="doen"))
+        assert storage.get(1).status.value == "todo"
+
+    def test_invalid_deadline_raises_like_cli(self, storage: SqliteStorage) -> None:
+        """CLI rejects bad deadlines; the editor path must too, not silently
+        ignore them (mutation-path parity)."""
+        add_todo(storage, "Task")
+        with pytest.raises(ValueError, match="[Dd]eadline"):
+            apply_editor_edit(storage, 1, _edited(storage, 1, deadline="garbage"))
 
 
 class TestEditorFailureHandling:

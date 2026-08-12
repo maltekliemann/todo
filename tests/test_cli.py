@@ -649,6 +649,27 @@ class TestProjectCli:
         )
         assert data["updates"] == []
 
+    def test_project_named_none_is_rejected(self, invoke) -> None:
+        """'none' is the clear-sentinel in --project; a project by that name
+        would be unreachable from edit and could cause silent detachment."""
+        result = invoke("project add none")
+        assert result.exit_code == 1
+        assert "reserved" in result.stderr
+        result = invoke("project add NONE")
+        assert result.exit_code == 1
+
+    def test_project_rename_to_none_is_rejected(self, invoke) -> None:
+        invoke("project add ok")
+        result = invoke("project edit ok --name none")
+        assert result.exit_code == 1
+        assert "reserved" in result.stderr
+
+    def test_show_displays_project(self, invoke) -> None:
+        invoke("project add infra")
+        invoke("add Task --project infra")
+        result = invoke("show 1")
+        assert "Project: infra" in result.output
+
     def test_numeric_project_name_does_not_hijack_output(self, cli: CliRunner) -> None:
         """Commands that know the project id must not re-resolve by name."""
         cli.invoke(main, ["project", "add", "2"])  # project id 1, named "2"

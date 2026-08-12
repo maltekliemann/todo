@@ -213,12 +213,22 @@ def unblock_todo_batch(
     return storage.get(blocked_id)
 
 
+def _validate_project_name(name: str) -> None:
+    # "none" is the CLI's clear-sentinel for --project; a project by that
+    # name would be unreachable from edit and cause silent detachment.
+    if name.lower() == "none":
+        raise ValueError("'none' is a reserved project name.")
+    if not name.strip():
+        raise ValueError("Project name cannot be empty.")
+
+
 def add_project(
     storage: StorageProtocol,
     name: str,
     *,
     description: str = "",
 ) -> Project:
+    _validate_project_name(name)
     return storage.add_project(name, description=description)
 
 
@@ -229,6 +239,8 @@ def edit_project(
     name: str | None = None,
     description: str | None = None,
 ) -> Project:
+    if name is not None:
+        _validate_project_name(name)
     return storage.update_project(project_id, name=name, description=description)
 
 

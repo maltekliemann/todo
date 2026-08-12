@@ -139,6 +139,7 @@ class SqliteStorage:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
+        self._conn.execute("PRAGMA busy_timeout = 5000")
         try:
             self._conn.executescript(_SCHEMA)
             self._migrate()
@@ -152,12 +153,24 @@ class SqliteStorage:
     def _migrate(self) -> None:
         version = int(self._conn.execute("PRAGMA user_version").fetchone()[0])
         for target, script in enumerate(_MIGRATIONS[version:], start=version + 1):
-            # Each migration and its version bump run in ONE transaction:
-            # a crash partway can never strand a half-applied schema that
-            # would make every subsequent open fail.
+            self._apply_migration(target, script)
+
+    def _apply_migration(self, target: int, script: str) -> None:
+        # Each migration and its version bump run in ONE IMMEDIATE
+        # transaction: a crash partway can never strand a half-applied
+        # schema, and concurrent openers serialize on the write lock.
+        try:
             self._conn.executescript(
-                f"BEGIN;\n{script}\nPRAGMA user_version = {target};\nCOMMIT;"
+                f"BEGIN IMMEDIATE;\n{script}\nPRAGMA user_version = {target};\nCOMMIT;"
             )
+        except sqlite3.OperationalError:
+            self._conn.rollback()
+            current = int(self._conn.execute("PRAGMA user_version").fetchone()[0])
+            if current >= target:
+                # Lost the race: another process applied this migration
+                # between our version check and our attempt. That's success.
+                return
+            raise
 
     def close(self) -> None:
         self._conn.close()

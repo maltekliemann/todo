@@ -401,7 +401,7 @@ def project_add(name: str, description: str, as_json: bool) -> None:
     out = create_output()
     try:
         created = add_project(storage, name, description=description)
-    except DuplicateProjectError as e:
+    except (DuplicateProjectError, ValueError) as e:
         click.echo(str(e), err=True)
         sys.exit(1)
     detail = project_detail(storage, created)
@@ -457,7 +457,7 @@ def project_edit(
     project_id = _resolve_project_or_exit(storage, ref)
     try:
         edited = edit_project(storage, project_id, name=name, description=description)
-    except DuplicateProjectError as e:
+    except (DuplicateProjectError, ValueError) as e:
         click.echo(str(e), err=True)
         sys.exit(1)
     detail = project_detail(storage, edited)

@@ -138,6 +138,26 @@ class TestMigration:
         assert storage.get(1).title == "Old item"
         storage.close()
 
+    def test_losing_a_migration_race_is_not_an_error(self, tmp_path: Path) -> None:
+        """If another process applies the migration between our version
+        check and our attempt, the failure is recognized as success."""
+        from todo.adapters.sqlite_storage import _MIGRATIONS
+
+        db = tmp_path / "db.db"
+        storage = SqliteStorage(db)  # fully migrated: user_version == 2
+        # Re-applying migration 1 fails ('projects' exists), but since
+        # user_version >= 1 the loser treats it as already done.
+        storage._apply_migration(1, _MIGRATIONS[0])
+        assert storage.get_project_by_name  # still usable
+        storage.close()
+
+    def test_genuinely_failed_migration_still_raises(self, tmp_path: Path) -> None:
+        db = tmp_path / "db.db"
+        storage = SqliteStorage(db)  # user_version == 2
+        with pytest.raises(sqlite3.OperationalError):
+            storage._apply_migration(3, "CREATE TABLE projects (x INTEGER);\n")
+        storage.close()
+
     def test_migrated_db_supports_projects(self, tmp_path: Path) -> None:
         legacy = tmp_path / "legacy.db"
         _make_legacy_db(legacy)

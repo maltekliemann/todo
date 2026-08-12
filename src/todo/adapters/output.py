@@ -193,6 +193,8 @@ class RichOutput:
         )
         if item.done_at:
             lines.append(f"   Done: {item.done_at.strftime('%b %d, %Y %H:%M')}")
+        if item.project_name:
+            lines.append(f"\nProject: {item.project_name}")
         if item.tags:
             lines.append(f"\nTags: {', '.join(item.tags)}")
         if item.blocked_by:
@@ -378,6 +380,8 @@ class PlainOutput:
         )
         if item.done_at:
             print(f"Done: {item.done_at.isoformat()}")
+        if item.project_name:
+            print(f"Project: {item.project_name}")
         if item.tags:
             print(f"Tags: {', '.join(item.tags)}")
         if item.blocked_by:
