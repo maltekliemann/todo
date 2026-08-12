@@ -253,7 +253,12 @@ def show(item_id: int, as_json: bool) -> None:
     default=None,
 )
 @click.option("--deadline", "-d", default=None, help="Due date (YYYY-MM-DD or 'none')")
-@click.option("--tag", "-t", multiple=True, help="Replace tags (repeatable)")
+@click.option(
+    "--tag",
+    "-t",
+    multiple=True,
+    help="Replace tags (repeatable), or 'none' to clear them",
+)
 @click.option(
     "--project", "project_ref", default=None, help="Project name or id, or 'none'"
 )
@@ -287,6 +292,13 @@ def edit(
         else:
             project_id = _resolve_project_or_exit(storage, project_ref)
 
+    # 'none' clears, like --deadline and --project. Omitting --tag leaves
+    # tags untouched; a blank tag is an error, so this sentinel is the
+    # only way to clear them (and cannot come from an unset shell var).
+    tags: list[str] | None = None
+    if tag:
+        tags = [] if len(tag) == 1 and tag[0].lower() == "none" else list(tag)
+
     try:
         result = edit_todo(
             storage,
@@ -296,7 +308,7 @@ def edit(
             priority=Priority.from_string(priority) if priority else None,
             status=Status.from_string(status) if status else None,
             deadline=dl,
-            tags=list(tag) if tag else None,
+            tags=tags,
             project_id=project_id,
         )
     except (NotFoundError, ValueError) as e:

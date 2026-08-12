@@ -8,6 +8,7 @@ from todo.application.contracts.storage import StorageProtocol
 from todo.domain.enums import Priority, Status
 from todo.domain.models import Project, ProjectUpdate, TodoItem
 from todo.domain.tags import split_tags
+from todo.domain.text import single_line
 from todo.exceptions import ProjectNotFoundError
 
 
@@ -33,15 +34,18 @@ def list_todos(
     if tags is not None:
         cleaned: list[str] = []
         for tag in tags:
-            stripped = tag.strip()
-            if not stripped:
+            # single_line, not strip: the write path normalizes internal
+            # whitespace runs too, so anything less means the exact string
+            # that created a tag can fail to match it.
+            normalized = single_line(tag)
+            if not normalized:
                 raise ValueError("Tag filter cannot be empty.")
-            if "," in stripped:
+            if "," in normalized:
                 raise ValueError(
-                    f"Tag filter '{stripped}' contains a comma; "
+                    f"Tag filter '{normalized}' contains a comma; "
                     "use separate --tag flags."
                 )
-            cleaned.append(stripped)
+            cleaned.append(normalized)
         tags = cleaned
     items = storage.list(
         status=status,

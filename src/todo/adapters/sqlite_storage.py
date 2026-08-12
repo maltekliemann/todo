@@ -77,9 +77,14 @@ def _migration_v3_normalize(conn: sqlite3.Connection) -> None:
 
 
 def _normalize_tag_string(raw: str) -> str:
-    """The stored form every read path derives its display from: segments
-    stripped, empties dropped, duplicates removed (order-preserving)."""
-    return ",".join(dedupe_tags(split_tags(raw)))
+    """The stored form every read path derives its display from.
+
+    Must produce exactly what the write path produces (single_line per
+    segment, empties dropped, duplicates removed, order preserved) — a
+    migration that stops at strip() leaves legacy rows that can never be
+    matched by the same string a new row is created with.
+    """
+    return ",".join(dedupe_tags(single_line(t) for t in split_tags(raw)))
 
 
 def _migration_v4_normalize_tags(conn: sqlite3.Connection) -> None:

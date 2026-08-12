@@ -58,11 +58,13 @@ def _escape_markup(text: str) -> str:
 
     rich.markup.escape only escapes "[" before [a-z#/@], but Textual's
     Content.from_markup also parses [WIP], [Red] and [$VAR] — so a title
-    like "[WIP] refactor" was silently swallowed. Escaping every bracket
-    (and pre-doubling backslashes so an existing escape is preserved) is
-    the only rule that covers both parsers.
+    like "[WIP] refactor" was silently swallowed.
+
+    Escape brackets ONLY. Textual (unlike rich) never collapses "\\\\" back
+    to a single backslash, so doubling them here rendered every Windows
+    path, regex and LaTeX fragment with doubled slashes.
     """
-    return text.replace("\\", "\\\\").replace("[", "\\[")
+    return text.replace("[", "\\[")
 
 
 class TodoTable(DataTable["str | Text"]):
@@ -288,7 +290,9 @@ class ConfirmDialog(ModalScreen[bool]):
     def compose(self) -> ComposeResult:
         with Container(id="confirm-container"):
             yield Label(self._message)
-            yield Label("[y] Yes   [n] No", id="confirm-hint")
+            # Text, not markup: Textual parses "[y]"/"[n]" as style tags
+            # and would render the hint with no key labels at all.
+            yield Label(Text("[y] Yes   [n] No"), id="confirm-hint")
 
     def action_yes(self) -> None:
         self.dismiss(True)

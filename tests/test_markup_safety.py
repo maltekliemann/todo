@@ -292,3 +292,49 @@ class TestTextualMarkupEscaping:
             await pilot.pause()
             status = str(app.query_one("#search-status", Static).render())
             assert "[WIP]" in status
+
+
+class TestBackslashAndLiteralHints:
+    def test_escaper_round_trips_backslashes(self) -> None:
+        """Textual's Content.from_markup does not collapse '\\\\' back to
+        '\\', so doubling backslashes corrupts every sink."""
+        from textual.content import Content
+
+        from todo.tui.list_view import _escape_markup
+
+        for hostile in (r"C:\Users\alice", r"a\[b] c", "back\\\\slash", r"\needle"):
+            assert Content.from_markup(_escape_markup(hostile)).plain == hostile
+
+    async def test_windows_path_title_renders_once(self, db_path: Path) -> None:
+        from todo.adapters.sqlite_storage import SqliteStorage
+        from todo.application.commands import add_todo
+        from todo.tui.app import TodoApp
+
+        storage = SqliteStorage(db_path)
+        add_todo(storage, r"Sync C:\Users\alice\notes", tags=[r"win\path"])
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            title = str(app.query_one("#detail-title", Static).render())
+            meta = str(app.query_one("#detail-meta", Static).render())
+            assert r"Sync C:\Users\alice\notes" in title
+            assert r"\\Users" not in title
+            assert r"win\path" in meta
+
+    async def test_confirm_dialog_shows_key_hints(self, db_path: Path) -> None:
+        """The app's own literal '[y] Yes   [n] No' hint was being eaten as
+        markup, so the user saw no key labels at all."""
+        from todo.adapters.sqlite_storage import SqliteStorage
+        from todo.application.commands import add_todo
+        from todo.tui.app import TodoApp
+
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "item")
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("x")
+            await pilot.pause()
+            hint = str(app.screen.query_one("#confirm-hint", Label).render())
+            assert "[y]" in hint
+            assert "[n]" in hint

@@ -376,3 +376,52 @@ class TestTagWritePathParity:
         result = cli.invoke(main, ["show", "1"])
         tag_lines = [ln for ln in result.output.splitlines() if ln.startswith("Tags:")]
         assert tag_lines == ["Tags: urgent review"]
+
+
+class TestTagClearSentinel:
+    """Round 11 made blank tags an error, which removed the only CLI way
+    to clear tags. `none` is the clear-sentinel, matching --deadline and
+    --project, and is not producible by an unset shell variable."""
+
+    def test_tag_none_clears_tags(self, cli: CliRunner) -> None:
+        cli.invoke(main, ["add", "task one", "-t", "work", "-t", "home"])
+        result = cli.invoke(main, ["edit", "1", "-t", "none"])
+        assert result.exit_code == 0
+        data = json.loads(cli.invoke(main, ["show", "1", "--json"]).output)
+        assert data["tags"] == []
+
+    def test_blank_tag_still_rejected(self, cli: CliRunner) -> None:
+        cli.invoke(main, ["add", "task", "-t", "work"])
+        assert cli.invoke(main, ["edit", "1", "-t", ""]).exit_code == 1
+        data = json.loads(cli.invoke(main, ["show", "1", "--json"]).output)
+        assert data["tags"] == ["work"]
+
+    def test_none_is_a_reserved_tag_name(self, storage: SqliteStorage) -> None:
+        """Reserved so a real tag can never be shadowed by the sentinel."""
+        with pytest.raises(ValueError, match="reserved"):
+            add_todo(storage, "x", tags=["none"])
+
+    def test_omitting_tag_flag_still_leaves_tags_untouched(
+        self, cli: CliRunner
+    ) -> None:
+        cli.invoke(main, ["add", "task", "-t", "work"])
+        cli.invoke(main, ["edit", "1", "--title", "renamed"])
+        data = json.loads(cli.invoke(main, ["show", "1", "--json"]).output)
+        assert data["tags"] == ["work"]
+
+
+class TestTagFilterMatchesWritePath:
+    def test_internal_whitespace_tag_matches_creating_string(
+        self, cli: CliRunner
+    ) -> None:
+        """The write path applies single_line; the filter must too, or the
+        exact string that created the tag matches nothing."""
+        cli.invoke(main, ["add", "Task A", "-t", "deep  work"])
+        result = cli.invoke(main, ["list", "-t", "deep  work"])
+        assert "Task A" in result.output
+
+    def test_migration_form_matches_write_path_form(self) -> None:
+        from todo.adapters.sqlite_storage import _normalize_tag_string
+
+        assert _normalize_tag_string("my  tag") == "my tag"
+        assert _normalize_tag_string("a\tb, c") == "a b,c"

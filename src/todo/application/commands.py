@@ -37,6 +37,10 @@ def _normalize_tags(tags: list[str] | None) -> list[str] | None:
         normalized = single_line(tag)
         if not normalized:
             raise ValueError("Tag cannot be empty.")
+        if normalized.lower() == "none":
+            # 'none' is the CLI's clear-sentinel for --tag; a tag by that
+            # name would be unreachable, exactly as for --project.
+            raise ValueError("'none' is a reserved tag name.")
         if "," in normalized:
             raise ValueError(f"Tag '{normalized}' contains a comma; use separate tags.")
         if normalized not in cleaned:
