@@ -5,9 +5,7 @@ reproduced against the running code before being listed.
 
 ## todo
 
-6. **`adapters/sqlite_storage.py` is 809 lines.** LOOP3 § Maintain clean
-   architecture — "one reason to change per module, no file over ~400
-   lines". Not yet examined for whether it holds more than one concern.
+_(none)_
 
 ## declined
 
@@ -42,3 +40,10 @@ reproduced against the running code before being listed.
    above 88%. The gaps that were real behaviour (filter cycling when the
    filtered tag or project has been deleted) now have direct tests.
    `363ecb4`.
+8. **`adapters/sqlite_storage.py`** — the schema and its four versioned
+   migrations moved to `sqlite_migrations.py` (`7186670`); they change for
+   their own reason and are append-only. The remaining 702 lines are one
+   class implementing one Protocol over one connection. Splitting it
+   further (todos vs projects) would mean mixins sharing the connection,
+   the transaction and the read guard through a base class's private
+   state — worse code than the line count it would fix. Stopping here.
