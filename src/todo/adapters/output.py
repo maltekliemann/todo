@@ -31,18 +31,27 @@ def _relative_age(dt: datetime) -> str:
     return f"{days // 30}mo"
 
 
+# All labels are the same width: PlainOutput interpolates this directly
+# and a longer HIGH label shifted every high-priority row's columns.
+_PRIORITY_LABELS = {
+    Priority.URGENT: "!! URG ",
+    Priority.HIGH: "!  HIGH",
+    Priority.MEDIUM: "   MED ",
+    Priority.LOW: "   LOW ",
+}
+
+
 def _priority_label(p: Priority) -> str:
-    if p == Priority.URGENT:
-        return "!! URG"
-    if p == Priority.HIGH:
-        return "!  HIGH"
-    if p == Priority.MEDIUM:
-        return "   MED"
-    return "   LOW"
+    return _PRIORITY_LABELS[p]
 
 
 def _status_label(s: Status) -> str:
     return s.value
+
+
+# Wide enough for the longest overdue form ("🔴 Sep 06 (3400d overdue)",
+# where the emoji is a double-width cell) so rows never wrap in two.
+_DEADLINE_COL_WIDTH = 28
 
 
 def _deadline_str(item: TodoItem) -> str:
@@ -191,7 +200,7 @@ class RichOutput(_JsonOutput):
         table.add_column("Pri", width=7)
         table.add_column("Status", width=13)
         table.add_column("Title", min_width=20)
-        table.add_column("Deadline", width=22)
+        table.add_column("Deadline", width=_DEADLINE_COL_WIDTH)
         table.add_column("Age", width=5, justify="right")
 
         from rich.text import Text

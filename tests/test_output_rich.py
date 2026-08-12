@@ -234,3 +234,44 @@ class TestJsonOutputShared:
             "print_json_project",
         ):
             assert getattr(RichOutput, name) is getattr(PlainOutput, name), name
+
+
+class TestColumnAlignment:
+    def test_plain_priority_labels_are_equal_width(self) -> None:
+        """PlainOutput is the machine-parseable format: a 7-char HIGH label
+        against 6-char others shifts every high-priority row's columns."""
+        from todo.adapters.output import _priority_label
+        from todo.domain.enums import Priority
+
+        widths = {len(_priority_label(p)) for p in Priority}
+        assert len(widths) == 1, {p.value: _priority_label(p) for p in Priority}
+
+    def test_plain_rows_align_across_priorities(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from todo.adapters.output import PlainOutput
+
+        items = [
+            _item(id=i + 1, title=f"item {p.value}", priority=p)
+            for i, p in enumerate(Priority)
+        ]
+        PlainOutput().print_list(items)
+        rows = [
+            ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("  ")
+        ]
+        starts = {ln.index("todo") for ln in rows}
+        assert len(starts) == 1, rows
+
+    def test_overdue_deadline_cell_does_not_wrap(self) -> None:
+        """The fixed-width Deadline column must hold the longest overdue
+        form, or every such row wraps onto two lines."""
+        from datetime import date, timedelta
+
+        from todo.adapters.output import _DEADLINE_COL_WIDTH, _deadline_str
+
+        longest = max(
+            len(_deadline_str(_item(deadline=date.today() - timedelta(days=d))))
+            for d in (1, 12, 340, 3400)
+        )
+        # The 🔴 prefix is a double-width cell, so it costs one more column.
+        assert _DEADLINE_COL_WIDTH >= longest + 1

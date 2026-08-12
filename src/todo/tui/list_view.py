@@ -371,9 +371,13 @@ class NewItemDialog(ModalScreen[TodoItem | None]):
         Binding("up", "field_retreat", show=False),
     ]
 
-    def __init__(self, storage: StorageProtocol) -> None:
+    def __init__(self, storage: StorageProtocol, project_id: int | None = None) -> None:
         super().__init__()
         self._storage = storage
+        # The list's active project filter. Creating an item while a
+        # filter is on used to store it unfiled, so it never appeared and
+        # the user re-added it — inheriting the filter matches intent.
+        self._project_id = project_id
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog-container"):
@@ -503,6 +507,7 @@ class NewItemDialog(ModalScreen[TodoItem | None]):
                 priority=priority,
                 deadline=deadline,
                 tags=tags,
+                project_id=self._project_id,
             )
         except (TodoError, ValueError) as exc:
             # E.g. a locked database or a rejected tag: report inline and
@@ -947,7 +952,9 @@ class TodoListView(Widget):
             if item is not None:
                 self._refresh_list()
 
-        self.app.push_screen(NewItemDialog(self._storage), after)
+        self.app.push_screen(
+            NewItemDialog(self._storage, project_id=self._project_filter), after
+        )
 
     def action_done(self) -> None:
         item_id = self._selected_item_id()

@@ -1525,3 +1525,50 @@ class TestPollVersionRaceAndToastStreak:
             status = str(app.query_one("#search-status", Static).render())
             assert "?" not in status
             assert "Apollo" in status
+
+
+class TestCreateUnderActiveFilter:
+    async def test_new_item_lands_in_the_filtered_project(self, db_path: Path) -> None:
+        """Creating while a project filter is active must not produce an
+        item the user can never see."""
+        from todo.application.commands import add_project
+
+        storage = SqliteStorage(db_path)
+        project = add_project(storage, "Alpha")
+        add_todo(storage, "Alpha work item", project_id=project.id)
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("p")  # filter: Alpha
+            await pilot.pause()
+            await pilot.press("n")
+            await pilot.pause()
+            for ch in "Buy milk":
+                await pilot.press(ch)
+            for _ in range(4):
+                await pilot.press("enter")
+                await pilot.pause()
+
+            created = next(
+                i for i in storage.list(include_done=True) if i.title == "Buy milk"
+            )
+            assert created.project_id == project.id
+            table = app.query_one("#item-list", DataTable)
+            assert _item_rows(table) == 2  # visible, not invisible
+
+    async def test_new_item_visible_with_no_filter(self, db_path: Path) -> None:
+        storage = SqliteStorage(db_path)
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("n")
+            await pilot.pause()
+            for ch in "Solo":
+                await pilot.press(ch)
+            for _ in range(4):
+                await pilot.press("enter")
+                await pilot.pause()
+            created = next(
+                i for i in storage.list(include_done=True) if i.title == "Solo"
+            )
+            assert created.project_id is None
