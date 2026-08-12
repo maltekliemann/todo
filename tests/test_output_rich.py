@@ -190,3 +190,30 @@ class TestRichTagsProjects:
         assert data["name"] == "infra"
         assert len(data["items"]) == 1
         assert data["updates"] == []
+
+
+class TestRelativeAgeBuckets:
+    """days 28-29 sit past the '<4 weeks' branch but below one month and
+    must render as weeks, never '0mo'."""
+
+    @staticmethod
+    def _age_for(days: int) -> str:
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+
+        from todo.adapters.output import _relative_age
+
+        dt = datetime.now(tz=ZoneInfo("UTC")) - timedelta(days=days, minutes=1)
+        return _relative_age(dt)
+
+    def test_27_days_is_3w(self) -> None:
+        assert self._age_for(27) == "3w"
+
+    def test_28_days_is_4w_not_0mo(self) -> None:
+        assert self._age_for(28) == "4w"
+
+    def test_29_days_is_4w_not_0mo(self) -> None:
+        assert self._age_for(29) == "4w"
+
+    def test_30_days_is_1mo(self) -> None:
+        assert self._age_for(30) == "1mo"

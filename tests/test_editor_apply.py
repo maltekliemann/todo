@@ -263,3 +263,43 @@ class TestEditorEmptyTitle:
         # Nothing applied: status unchanged too.
         assert storage.get(1).status.value == "todo"
         assert storage.get(1).title == "Keep me"
+
+
+class TestEditorBodyWhitespacePreserved:
+    def test_title_only_edit_keeps_body_bytes(self, storage: SqliteStorage) -> None:
+        """Editing another field must not silently mutate an untouched body
+        (indentation and trailing newline included — think pasted code)."""
+        body = "    indented line\n\n  second\n"
+        add_todo(storage, "Task", body=body)
+        result = apply_editor_edit(storage, 1, _edited(storage, 1, title="Renamed"))
+        assert result.item.title == "Renamed"
+        assert result.item.body == body
+
+    def test_editor_added_trailing_newline_is_not_a_body_change(
+        self, storage: SqliteStorage
+    ) -> None:
+        body = "plain body"
+        add_todo(storage, "Task", body=body)
+        # POSIX editors terminate the file with a newline on save.
+        edited = _edited(storage, 1, title="Renamed") + "\n"
+        result = apply_editor_edit(storage, 1, edited)
+        assert result.item.body == body
+
+    def test_edited_body_preserves_indentation(self, storage: SqliteStorage) -> None:
+        add_todo(storage, "Task", body="old")
+        text = _item_to_editor_text(storage.get(1))
+        edited = text.replace("\nold", "\n    def f():\n        pass") + "\n"
+        result = apply_editor_edit(storage, 1, edited)
+        assert result.item.body == "    def f():\n        pass"
+
+
+class TestEditorPathWithSpaces:
+    def test_unquoted_spaced_path_falls_back_to_verbatim(self, tmp_path: Path) -> None:
+        """An unquoted $EDITOR path containing spaces (common on macOS)
+        worked before shlex-splitting existed and must keep working."""
+        from todo.tui.list_view import _editor_command
+
+        editor = tmp_path / "My Editor"
+        editor.write_text("#!/bin/sh\nexit 0\n")
+        editor.chmod(0o755)
+        assert _editor_command(str(editor), "/tmp/x") == [str(editor), "/tmp/x"]

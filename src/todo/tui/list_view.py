@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import shutil
 import subprocess
 import tempfile
 from datetime import date
@@ -94,12 +95,23 @@ class TodoTable(DataTable["str | Text"]):
 def _editor_command(editor_value: str, path: str) -> list[str]:
     """Split $EDITOR like git does, so values such as 'code --wait' work.
 
+    An unquoted path containing spaces (common on macOS) is not a command
+    plus arguments: when the split head doesn't resolve to an executable
+    but the verbatim value does, the verbatim value wins — that form
+    worked before splitting existed and must keep working.
+
     Raises ValueError for an empty value or unbalanced quoting rather than
     letting subprocess execute something nonsensical.
     """
     parts = shlex.split(editor_value)  # raises ValueError on bad quoting
     if not parts:
         raise ValueError("EDITOR is empty.")
+    if (
+        len(parts) > 1
+        and shutil.which(parts[0]) is None
+        and shutil.which(editor_value) is not None
+    ):
+        return [editor_value, path]
     return [*parts, path]
 
 
@@ -149,12 +161,23 @@ def apply_editor_edit(
         # Same contract as deadline: bad input errors, never a partial apply.
         raise ValueError("Title cannot be empty.")
 
+    # Absent "body" means the marker line was deleted: leave unchanged. A
+    # present body is compared against the stored one so an untouched body
+    # is never rewritten (editors append a final newline on save; that
+    # alone is not an edit). Only a genuinely edited body drops the single
+    # trailing newline the editor's save added.
+    body: str | None = None
+    if "body" in fields:
+        parsed_body = fields["body"]
+        current_body = storage.get(item_id).body
+        if parsed_body not in (current_body, current_body + "\n"):
+            body = parsed_body.removesuffix("\n")
+
     return edit_todo(
         storage,
         item_id,
         title=fields.get("title") or None,
-        # Absent "body" means the marker line was deleted: leave unchanged.
-        body=fields["body"] if "body" in fields else None,
+        body=body,
         priority=(
             Priority.from_string(fields["priority"]) if fields.get("priority") else None
         ),
@@ -182,9 +205,10 @@ def _parse_editor_text(text: str) -> dict[str, str]:
             if key in ("title", "priority", "status", "deadline", "tags"):
                 fields[key] = value.strip()
     # Only report a body when the marker line was present: a buffer without
-    # the marker must not silently erase the existing body.
+    # the marker must not silently erase the existing body. The body is
+    # kept verbatim — whitespace is content (pasted code, indentation).
     if in_body:
-        fields["body"] = "\n".join(body_lines).strip()
+        fields["body"] = "\n".join(body_lines)
     return fields
 
 

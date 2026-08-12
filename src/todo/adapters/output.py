@@ -25,11 +25,10 @@ def _relative_age(dt: datetime) -> str:
     days = hours // 24
     if days < 7:
         return f"{days}d"
-    weeks = days // 7
-    if weeks < 4:
-        return f"{weeks}w"
-    months = days // 30
-    return f"{months}mo"
+    if days < 30:
+        # Threshold on days, not weeks: 28-29 days is '4w', never '0mo'.
+        return f"{days // 7}w"
+    return f"{days // 30}mo"
 
 
 def _priority_label(p: Priority) -> str:
