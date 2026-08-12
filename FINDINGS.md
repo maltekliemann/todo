@@ -270,16 +270,16 @@ NOTE: the first pass-11 attempt (wf_2df2b10d-167) reported "no findings" but
 the rerun below found 10 defects — including two regressions introduced by
 round 10's own fixes. A partial review is not a clean review.
 
-- [ ] `src/todo/tui/list_view.py:980` [correctness] — Editor buffer read/write use the locale encoding with an OSError-only handler, so a non-UTF-8 buffer raises UnicodeDecodeError (a ValueError) and kills the TUI session without reporting the buffer path
-- [ ] `src/todo/adapters/sqlite_storage.py:308` [cleanup] — _read_guard wraps only sqlite3.Error/OverflowError, so an undecodable row (bad enum, malformed timestamp) escapes as raw ValueError and crashes TUI and CLI
-- [ ] `src/todo/tui/list_view.py:813` [correctness] — REGRESSION (round 10): data_version is recorded AFTER the table rebuild, so an external commit landing during the rebuild is marked already-seen and never displayed — the update is lost until relaunch. Capture the version BEFORE the reads, record it only after a successful refresh
-- [ ] `src/todo/application/commands.py:30` [cleanup] — `todo edit ID -t ""` (unset shell var) silently wipes every tag, while the read path rejects `-t ""` outright; the write copy of the rule is the one that loses data
-- [ ] `src/todo/tui/list_view.py:861` [correctness] — rich.markup.escape does not escape Textual's uppercase-initial/`$`-prefixed tags, so `[WIP] title` is silently swallowed in the detail pane, inspect modal, filter bar and toasts. Class fix: never build markup strings from user text — pass Text objects
-- [ ] `src/todo/adapters/sqlite_storage.py:605` [correctness] — Overdue items are not sorted to the top: the ORDER BY has no deadline term, contradicting README and the query's own comment
-- [ ] `src/todo/application/commands.py:29` [correctness] — Tags skip the single_line contract every other field has, so a tag with a newline breaks the one-line-per-field plain output
-- [ ] `src/todo/tui/list_view.py:217` [cleanup] — A blanked `priority:`/`status:` line in the editor buffer is a silent no-op that deletes the buffer, contradicting the blank-title-errors rule
-- [ ] `src/todo/tui/list_view.py:684` [cleanup] — The error-toast streak guard covers only data_version failures, so a failing refresh toasts every 2s forever and buries the UI
-- [ ] `src/todo/tui/list_view.py:823` [correctness] — REGRESSION (round 10): re-keying the project filter on id dropped the name, so a deleted filtered project leaves a filter labelled '?' hiding items that still exist
+- [x] (42b46c4) `src/todo/tui/list_view.py:980` [correctness] — Editor buffer read/write use the locale encoding with an OSError-only handler, so a non-UTF-8 buffer raises UnicodeDecodeError (a ValueError) and kills the TUI session without reporting the buffer path
+- [x] (42b46c4) `src/todo/adapters/sqlite_storage.py:308` [cleanup] — _read_guard wraps only sqlite3.Error/OverflowError, so an undecodable row (bad enum, malformed timestamp) escapes as raw ValueError and crashes TUI and CLI
+- [x] (ce4af95) `src/todo/tui/list_view.py:813` [correctness] — REGRESSION (round 10): data_version is recorded AFTER the table rebuild, so an external commit landing during the rebuild is marked already-seen and never displayed — the update is lost until relaunch. Capture the version BEFORE the reads, record it only after a successful refresh
+- [x] (654d24c) `src/todo/application/commands.py:30` [cleanup] — `todo edit ID -t ""` (unset shell var) silently wipes every tag, while the read path rejects `-t ""` outright; the write copy of the rule is the one that loses data
+- [x] (eab087b) `src/todo/tui/list_view.py:861` [correctness] — rich.markup.escape does not escape Textual's uppercase-initial/`$`-prefixed tags, so `[WIP] title` is silently swallowed in the detail pane, inspect modal, filter bar and toasts. Class fix: never build markup strings from user text — pass Text objects
+- [x] (654d24c) `src/todo/adapters/sqlite_storage.py:605` [correctness] — Overdue items are not sorted to the top: the ORDER BY has no deadline term, contradicting README and the query's own comment
+- [x] (654d24c) `src/todo/application/commands.py:29` [correctness] — Tags skip the single_line contract every other field has, so a tag with a newline breaks the one-line-per-field plain output
+- [x] (eab087b) `src/todo/tui/list_view.py:217` [cleanup] — A blanked `priority:`/`status:` line in the editor buffer is a silent no-op that deletes the buffer, contradicting the blank-title-errors rule
+- [x] (ce4af95) `src/todo/tui/list_view.py:684` [cleanup] — The error-toast streak guard covers only data_version failures, so a failing refresh toasts every 2s forever and buries the UI
+- [x] (ce4af95) `src/todo/tui/list_view.py:823` [correctness] — REGRESSION (round 10): re-keying the project filter on id dropped the name, so a deleted filtered project leaves a filter labelled '?' hiding items that still exist
 
 ## Triage log
 
@@ -297,6 +297,9 @@ Anything without a failed reproduction attempt gets fixed, not triaged.)
 
 ## Status log
 
+- iter 22: round-11 queue closed — undecodable-row + non-UTF-8 buffer wrapping, two round-10 regressions (pre-read data_version capture, named deleted project filter), poll toast streak, blank-tag rejection, single-line tags, overdue-first sorting, Textual-aware markup escaping, blank editor enum fields (42b46c4, ce4af95, 654d24c, eab087b). 421 tests green. QUEUE EMPTY (round 11).
+  NOTE: the first pass-11 run reported 'no findings' but 4/6 agents died on a spend limit; that verdict
+  was voided and the rerun found 10 real defects. A partial review never counts as clean.
 - iter 21: round-10 queue closed — required body marker (error + kept buffer), nonzero-exit buffer keep, single-writer data_version bookkeeping, id-keyed project filter. 397 tests green. QUEUE EMPTY (round 10).
 - iter 20: round-9 queue closed — connect-time wrapping, normalized project refs, case-exact tag filter (instr), Unicode casefold search, README keys, project-log read-back guard, shared domain tag/text helpers, dependent-scan skip (94a7813, +1). 391 tests green. QUEUE EMPTY (round 9).
 - iter 19: round-8 queue closed — tag-filter validation (blank/comma filters error), negative --since rejected, refresh keeps last good rows, detail pane clears on empty, guarded startup, buffer path reported, probe-based existence checks, single-altitude validation, adapter-complete wrapping incl. init-time corrupt-file (7ca9021, d08562a, 37186ed). 378 tests green. QUEUE EMPTY (round 8).
