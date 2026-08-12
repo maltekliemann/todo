@@ -11,6 +11,7 @@ from todo.adapters.sqlite_storage import SqliteStorage
 from todo.application.commands import add_todo
 from todo.domain.enums import Priority, Status
 from todo.tui.app import TodoApp
+from todo.tui.edit_session import EditorSession
 from todo.tui.list_view import TodoListView
 from todo.tui.table import is_separator
 
@@ -1479,7 +1480,7 @@ class TestEditorBufferReadFailure:
             missing = tmp_path / "vanished.todo.txt"
             notices: list[str] = []
             view.notify = lambda msg, **kw: notices.append(str(msg))  # type: ignore[method-assign]
-            content = view._read_edited_buffer(str(missing))
+            content = EditorSession(view, seeded_storage).read_buffer(str(missing))
             assert content is None
             assert notices
             assert str(missing) in notices[0]

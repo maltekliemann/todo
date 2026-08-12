@@ -10,6 +10,7 @@ from todo.adapters.sqlite_storage import SqliteStorage
 from todo.application.commands import add_todo, block_todo
 from todo.domain.enums import Priority, Status
 from todo.tui.app import TodoApp
+from todo.tui.edit_session import EditorSession
 from todo.tui.editor import apply_editor_edit, item_to_editor_text
 
 
@@ -170,7 +171,7 @@ class TestApplyEditedBuffer:
             buf = tmp_path / "buffer.todo.txt"
             buf.write_text(edited)
 
-            view._apply_edited_buffer(1, original, edited, str(buf))
+            EditorSession(view, storage).apply(1, original, edited, str(buf))
             await pilot.pause()
 
             assert app.is_running
@@ -194,7 +195,7 @@ class TestApplyEditedBuffer:
             buf.write_text(edited)
 
             storage.delete(1)  # deleted while "the editor was open"
-            view._apply_edited_buffer(1, original, edited, str(buf))
+            EditorSession(view, storage).apply(1, original, edited, str(buf))
             await pilot.pause()
             assert app.is_running
 
@@ -214,7 +215,7 @@ class TestApplyEditedBuffer:
             buf = tmp_path / "buffer.todo.txt"
             buf.write_text(edited)
 
-            view._apply_edited_buffer(1, original, edited, str(buf))
+            EditorSession(view, storage).apply(1, original, edited, str(buf))
             await pilot.pause()
             assert storage.get(1).title == "Renamed"
             assert not buf.exists()
@@ -326,7 +327,7 @@ class TestWhitespaceOnlyBodyEdit:
             buf = tmp_path / "buffer.todo.txt"
             buf.write_text(edited)
 
-            view._apply_edited_buffer(1, original, edited, str(buf))
+            EditorSession(view, storage).apply(1, original, edited, str(buf))
             await pilot.pause()
             assert storage.get(1).body == "print(x)\n"
 
@@ -347,7 +348,7 @@ class TestWhitespaceOnlyBodyEdit:
             buf = tmp_path / "buffer.todo.txt"
             buf.write_text(edited)
 
-            view._apply_edited_buffer(1, original, edited, str(buf))
+            EditorSession(view, storage).apply(1, original, edited, str(buf))
             await pilot.pause()
             after = storage.get(1)
             assert after.body == "print(x)"
@@ -389,7 +390,7 @@ class TestMissingBodyMarkerErrors:
             )
             buf = tmp_path / "buffer.todo.txt"
             buf.write_text(edited)
-            view._apply_edited_buffer(1, original, edited, str(buf))
+            EditorSession(view, storage).apply(1, original, edited, str(buf))
             await pilot.pause()
             assert app.is_running
             assert storage.get(1).body == "keep me"
@@ -464,7 +465,7 @@ class TestEditorEncodingRobustness:
             notices: list[str] = []
             view.notify = lambda msg, **kw: notices.append(str(msg))  # type: ignore[method-assign]
 
-            content = view._read_edited_buffer(str(buf))
+            content = EditorSession(view, storage).read_buffer(str(buf))
 
             assert app.is_running
             assert content is None
@@ -481,10 +482,12 @@ class TestEditorEncodingRobustness:
         async with app.run_test() as pilot:
             await pilot.pause()
             view = app.query_one(TodoListView)
-            path = view._write_editor_buffer(item_to_editor_text(storage.get(1)))
+            path = EditorSession(view, storage).write_buffer(
+                item_to_editor_text(storage.get(1))
+            )
             try:
                 assert "Ünïcode ✅ täsk" in Path(path).read_text(encoding="utf-8")
-                assert view._read_edited_buffer(path) is not None
+                assert EditorSession(view, storage).read_buffer(path) is not None
             finally:
                 Path(path).unlink(missing_ok=True)
 

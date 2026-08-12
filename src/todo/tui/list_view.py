@@ -1,12 +1,8 @@
 from __future__ import annotations
 
-import os
-import subprocess
-import tempfile
-
 from rich.text import Text
 from textual import on
-from textual.app import ComposeResult, SuspendNotSupported
+from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.widget import Widget
@@ -35,7 +31,7 @@ from todo.tui.dialogs import (
     NewItemDialog,
     SearchDialog,
 )
-from todo.tui.editor import apply_editor_edit, editor_command, item_to_editor_text
+from todo.tui.edit_session import EditorSession
 from todo.tui.filters import Filters
 from todo.tui.render import escape_markup, meta_lines
 from todo.tui.table import COLUMNS, TodoTable, is_separator
@@ -346,99 +342,9 @@ class TodoListView(Widget):
             self.notify(escape_markup(str(exc)), severity="error")
             return
 
-        editor = os.environ.get("EDITOR", "vi")
-        text = item_to_editor_text(item)
-
-        try:
-            tmp_path = self._write_editor_buffer(text)
-        except OSError as exc:
-            self.notify(f"Editor failed: {escape_markup(str(exc))}", severity="error")
+        result = EditorSession(self, self._storage).run(item)
+        if result is None:
             return
-
-        try:
-            with self.app.suspend():
-                subprocess.run(editor_command(editor, tmp_path), check=True)
-        except subprocess.CalledProcessError as exc:
-            # The editor RAN and exited nonzero — the user may already have
-            # saved their work into the buffer. Keep it and say where.
-            self.notify(
-                f"Editor failed: {escape_markup(str(exc))} — "
-                f"your buffer is kept at {escape_markup(tmp_path)}",
-                severity="error",
-                timeout=12,
-            )
-            return
-        except (
-            ValueError,  # empty/misquoted $EDITOR
-            OSError,  # missing binary, permission denied, ...
-            SuspendNotSupported,
-        ) as exc:
-            # The editor never ran; the buffer holds nothing of the user's.
-            self.notify(f"Editor failed: {escape_markup(str(exc))}", severity="error")
-            os.unlink(tmp_path)
-            return
-
-        edited = self._read_edited_buffer(tmp_path)
-        if edited is None:
-            return
-
-        self._apply_edited_buffer(item_id, text, edited, tmp_path)
-
-    def _write_editor_buffer(self, text: str) -> str:
-        """Write the buffer for $EDITOR, always as UTF-8.
-
-        Explicit encoding, not the locale's: item text is arbitrary Unicode
-        and a non-UTF-8 locale would fail to encode it.
-        """
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".todo.txt", delete=False, encoding="utf-8"
-        ) as f:
-            f.write(text)
-            return f.name
-
-    def _read_edited_buffer(self, tmp_path: str) -> str | None:
-        """Read the buffer back after the editor ran; on failure, report
-        where the (possibly recoverable) buffer lives — the flow must never
-        strand a file with the user's work silently.
-
-        UnicodeDecodeError (an editor that saved as latin-1/cp1252) is a
-        ValueError, not an OSError, and would otherwise kill the session.
-        """
-        try:
-            with open(tmp_path, encoding="utf-8") as f:
-                return f.read()
-        except (OSError, ValueError) as exc:
-            self.notify(
-                f"Editor failed: {escape_markup(str(exc))} — "
-                f"your buffer is kept at {escape_markup(tmp_path)}",
-                severity="error",
-                timeout=12,
-            )
-            return None
-
-    def _apply_edited_buffer(
-        self, item_id: int, original: str, edited: str, tmp_path: str
-    ) -> None:
-        """Apply an edited $EDITOR buffer. On rejection the buffer file is
-        kept and its path reported, so a field typo never destroys the
-        user's work."""
-        # Exact no-op check (plus the editor's final newline): anything
-        # else — including whitespace-only body edits — is a real edit.
-        if edited in (original, original + "\n"):
-            os.unlink(tmp_path)
-            return
-
-        try:
-            result = apply_editor_edit(self._storage, item_id, edited)
-        except (ValueError, TodoError) as exc:
-            self.notify(
-                f"Edit rejected: {escape_markup(str(exc))} — "
-                f"your buffer is kept at {escape_markup(tmp_path)}",
-                severity="error",
-                timeout=12,
-            )
-            return
-        os.unlink(tmp_path)
         self._notify_unblocked(result)
         self._refresh_list()
 
