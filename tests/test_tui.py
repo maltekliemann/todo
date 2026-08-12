@@ -519,9 +519,12 @@ class TestCursorMode:
             await pilot.pause()
             assert self._selected_id(app) == 3
 
-            await pilot.press("d")  # #3 done; only done section remains
+            await pilot.press("d")  # #3 done; only the done section remains
             await pilot.pause()
-            assert self._selected_id(app) in {1, 2, 3}
+            # Rows now: [done separator, #1, #2, #3]. The cursor was on
+            # visual row 1 (where #3 sat under the todo separator), so stay
+            # mode keeps row 1 -> item #1, the first done item.
+            assert self._selected_id(app) == 1
 
     async def test_toggle_back_restores_follow(
         self, three_todos: SqliteStorage
@@ -544,9 +547,12 @@ class TestCursorMode:
             await pilot.press("down", "down")  # move to #3 (last item)
             await pilot.pause()
             assert self._selected_id(app) == 3
-            await pilot.press("d")  # cursor clamps to a valid item row
+            await pilot.press("d")
             await pilot.pause()
-            assert self._selected_id(app) in {1, 2, 3}
+            # Rows now: [todo sep, #1, #2, done sep, #3]. The cursor was on
+            # visual row 3; that row is now the done separator, so the
+            # separator-skip moves it down to #3 — the item just completed.
+            assert self._selected_id(app) == 3
 
 
 class TestProjectFilter:
@@ -822,17 +828,56 @@ class TestExternalChangePolling:
             assert new_rows == initial_rows - 1
 
     async def test_no_refresh_when_unchanged(
-        self, seeded_storage: SqliteStorage
+        self, seeded_storage: SqliteStorage, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Polling should be a no-op when data hasn't changed."""
+        """Polling must not call _refresh_list when data hasn't changed."""
         app = TodoApp(storage=seeded_storage)
         async with app.run_test() as pilot:
             await pilot.pause()
             view = app.query_one(TodoListView)
-            v1 = view._last_data_version
+
+            calls: list[None] = []
+            original = view._refresh_list
+            monkeypatch.setattr(
+                view,
+                "_refresh_list",
+                lambda: (calls.append(None), original())[1],
+            )
+
             view._poll_for_external_changes()
             await pilot.pause()
-            assert view._last_data_version == v1
+            assert calls == []  # unchanged data: refresh must NOT run
+
+    async def test_refresh_on_external_change(
+        self,
+        seeded_storage: SqliteStorage,
+        db_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Polling must refresh when another process wrote to the database."""
+        app = TodoApp(storage=seeded_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            view = app.query_one(TodoListView)
+
+            calls: list[None] = []
+            original = view._refresh_list
+            monkeypatch.setattr(
+                view,
+                "_refresh_list",
+                lambda: (calls.append(None), original())[1],
+            )
+
+            # Simulate an external writer via a second connection.
+            other = SqliteStorage(db_path)
+            add_todo(other, "From outside")
+            other.close()
+
+            view._poll_for_external_changes()
+            await pilot.pause()
+            assert len(calls) == 1
+            table = app.query_one("#item-list", DataTable)
+            assert _item_rows(table) == 4
 
 
 class TestBlocking:

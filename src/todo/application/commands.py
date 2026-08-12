@@ -96,15 +96,14 @@ def _tracked_update(
         tags=tags,
         project_id=project_id,
     )
-    unblocked = (
-        [
-            storage.get(dep_id)
-            for dep_id in sorted(before.blocking)
-            if was_blocked[dep_id] and not storage.get(dep_id).is_blocked
-        ]
-        if completing
-        else []
-    )
+    unblocked: list[TodoItem] = []
+    if completing:
+        for dep_id in sorted(before.blocking):
+            if not was_blocked[dep_id]:
+                continue
+            after = storage.get(dep_id)
+            if not after.is_blocked:
+                unblocked.append(after)
     return CompletionResult(item=item, unblocked=unblocked)
 
 

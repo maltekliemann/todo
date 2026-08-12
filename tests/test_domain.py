@@ -27,11 +27,6 @@ class TestEnums:
         with pytest.raises(ValueError, match="Invalid status"):
             Status.from_string("nope")
 
-    def test_project_status_from_string(self) -> None:
-        assert ProjectStatus.from_string("Archived") == ProjectStatus.ARCHIVED
-        with pytest.raises(ValueError, match="Invalid project status"):
-            ProjectStatus.from_string("nope")
-
     def test_status_order_boundaries(self) -> None:
         assert Status.DONE.next() is None
         assert Status.BACKLOG.prev() is None

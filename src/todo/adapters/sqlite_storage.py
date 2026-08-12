@@ -5,7 +5,12 @@ from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from todo.application.contracts.storage import UNSET, Unset
+from todo.application.contracts.storage import (
+    UNSET,
+    ProjectList,
+    Unset,
+    UpdateList,
+)
 from todo.domain.enums import Priority, ProjectStatus, Status
 from todo.domain.models import Project, ProjectUpdate, TodoItem
 from todo.exceptions import (
@@ -125,12 +130,6 @@ def _row_to_update(row: sqlite3.Row) -> ProjectUpdate:
         body=row["body"],
         created_at=datetime.fromisoformat(row["created_at"]),
     )
-
-
-# Class-scope aliases: inside SqliteStorage the name `list` is the query
-# method, so `list[...]` would not resolve to the builtin there.
-ProjectList = list[Project]
-UpdateList = list[ProjectUpdate]
 
 
 class SqliteStorage:
@@ -255,7 +254,7 @@ class SqliteStorage:
         existing = self.get(item_id)
 
         sets: list[str] = []
-        params: list[str | None] = []
+        params: list[str | int | None] = []
 
         if title is not None:
             sets.append("title = ?")
@@ -283,14 +282,14 @@ class SqliteStorage:
             params.append(",".join(tags))
         if not isinstance(project_id, Unset):
             sets.append("project_id = ?")
-            params.append(str(project_id) if project_id is not None else None)
+            params.append(project_id)
 
         if not sets:
             return existing
 
         sets.append("updated_at = ?")
         params.append(_now().isoformat())
-        params.append(str(item_id))
+        params.append(item_id)
 
         try:
             self._conn.execute(
@@ -319,13 +318,28 @@ class SqliteStorage:
         """Build TodoItems with blocked_by/blocking/is_blocked populated.
 
         Every multi-item query must go through here so dependency data is
-        consistent across list, summary, and any future read path.
+        consistent across list, summary, and any future read path. Queries
+        are scoped to the selected rows so cost tracks the result size, not
+        total history.
         """
+        if not rows:
+            return []
+        ids = [r["id"] for r in rows]
+        ph = ",".join("?" for _ in ids)
         dep_rows = self._conn.execute(
-            "SELECT blocker_id, blocked_id FROM todo_dependencies"
+            "SELECT blocker_id, blocked_id FROM todo_dependencies "
+            f"WHERE blocked_id IN ({ph}) OR blocker_id IN ({ph})",
+            [*ids, *ids],
         ).fetchall()
-        status_rows = self._conn.execute("SELECT id, status FROM todos").fetchall()
-        status_by_id = {r["id"]: r["status"] for r in status_rows}
+        blocker_ids = sorted({d["blocker_id"] for d in dep_rows})
+        status_by_id: dict[int, str] = {}
+        if blocker_ids:
+            bph = ",".join("?" for _ in blocker_ids)
+            status_rows = self._conn.execute(
+                f"SELECT id, status FROM todos WHERE id IN ({bph})",
+                blocker_ids,
+            ).fetchall()
+            status_by_id = {r["id"]: r["status"] for r in status_rows}
         blocked_by_map: dict[int, list[int]] = {}
         blocking_map: dict[int, list[int]] = {}
         for dep in dep_rows:
@@ -482,7 +496,7 @@ class SqliteStorage:
         self.get_project(project_id)  # raises ProjectNotFoundError if missing
 
         sets: list[str] = []
-        params: list[str] = []
+        params: list[str | int] = []
         if name is not None:
             sets.append("name = ?")
             params.append(name)
@@ -497,7 +511,7 @@ class SqliteStorage:
 
         sets.append("updated_at = ?")
         params.append(_now().isoformat())
-        params.append(str(project_id))
+        params.append(project_id)
         try:
             self._conn.execute(
                 f"UPDATE projects SET {', '.join(sets)} WHERE id = ?",
