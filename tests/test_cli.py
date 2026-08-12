@@ -1074,3 +1074,24 @@ class TestFullWorkflow:
         r = cli.invoke(main, ["list", "--all", "--json"])
         ids = [i["id"] for i in json.loads(r.output)]
         assert 3 not in ids
+
+
+class TestOverdueSorting:
+    """README and the query's own comment promise overdue items sort to
+    the top; the ORDER BY had no deadline term at all."""
+
+    def test_overdue_items_sort_above_non_overdue(self, cli: CliRunner) -> None:
+        cli.invoke(main, ["add", "Renew SSL cert", "-p", "low", "-d", "2020-01-01"])
+        cli.invoke(main, ["add", "Ship feature", "-p", "urgent"])
+        cli.invoke(main, ["add", "Pay invoice", "-p", "medium", "-d", "2021-06-01"])
+        out = cli.invoke(main, ["list"]).output
+        # Both overdue items outrank the urgent item with no deadline, and
+        # the older deadline comes first.
+        assert out.index("Renew SSL cert") < out.index("Pay invoice")
+        assert out.index("Pay invoice") < out.index("Ship feature")
+
+    def test_priority_still_orders_within_non_overdue(self, cli: CliRunner) -> None:
+        cli.invoke(main, ["add", "low thing", "-p", "low"])
+        cli.invoke(main, ["add", "urgent thing", "-p", "urgent"])
+        result = cli.invoke(main, ["list"])
+        assert result.output.index("urgent thing") < result.output.index("low thing")

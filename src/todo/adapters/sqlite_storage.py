@@ -606,7 +606,22 @@ class SqliteStorage:
             params.append(project_id)
 
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-        # Sort: overdue first, then by priority weight, then by creation date
+        # Sort: within a status group, overdue first (soonest deadline
+        # first among them), then priority weight, then creation date.
+        # Today is bound rather than using SQLite's UTC date('now') so this
+        # matches TodoItem.is_overdue, which compares against the LOCAL
+        # date — otherwise a row could sort as overdue but render as not.
+        today = date.today().isoformat()
+        overdue_first = (
+            "CASE WHEN todos.deadline IS NOT NULL AND todos.status != 'done' "
+            "AND todos.deadline < ? THEN 0 ELSE 1 END"
+        )
+        # Deadline only orders inside the overdue group; everything else
+        # collapses to NULL and ties, falling through to priority.
+        overdue_deadline = (
+            "CASE WHEN todos.deadline IS NOT NULL AND todos.status != 'done' "
+            "AND todos.deadline < ? THEN todos.deadline ELSE NULL END"
+        )
         query = (
             f"{_TODO_SELECT}{where} "
             "ORDER BY "
@@ -616,6 +631,8 @@ class SqliteStorage:
             "  WHEN 'backlog' THEN 2 "
             "  WHEN 'done' THEN 3 "
             "END, "
+            f"{overdue_first}, "
+            f"{overdue_deadline} ASC, "
             "CASE todos.priority "
             "  WHEN 'urgent' THEN 0 "
             "  WHEN 'high' THEN 1 "
@@ -624,6 +641,7 @@ class SqliteStorage:
             "END, "
             "todos.created_at ASC"
         )
+        params.extend([today, today])
         with self._read_guard("list todos"):
             rows = self._conn.execute(query, params).fetchall()
             return self._hydrate_dependencies(rows)

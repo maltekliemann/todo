@@ -337,3 +337,42 @@ class TestSharedNormalizationHelpers:
         assert "def _single_line" not in src
         assert "from todo.domain.text import" in src
         assert "from todo.domain.tags import" in src
+
+
+class TestTagWritePathParity:
+    """The write path must apply the same rules the read path enforces —
+    the copy that loses data is the one that must not be lenient."""
+
+    def test_empty_tag_flag_rejected_not_silent_wipe(self, cli: CliRunner) -> None:
+        cli.invoke(main, ["add", "keep tags", "-t", "work", "-t", "urgent"])
+        result = cli.invoke(main, ["edit", "1", "-t", ""])
+        assert result.exit_code == 1
+        data = json.loads(cli.invoke(main, ["show", "1", "--json"]).output)
+        assert data["tags"] == ["work", "urgent"]  # nothing lost
+
+    def test_empty_tag_rejected_on_add(self, storage: SqliteStorage) -> None:
+        with pytest.raises(ValueError, match="[Tt]ag"):
+            add_todo(storage, "x", tags=["ok", "  "])
+
+    def test_clearing_tags_still_possible_with_empty_list(
+        self, storage: SqliteStorage
+    ) -> None:
+        """An explicit empty list still clears — only blank strings error."""
+        from todo.application.commands import edit_todo
+
+        add_todo(storage, "x", tags=["work"])
+        assert edit_todo(storage, 1, tags=[]).item.tags == []
+
+    def test_tag_with_newline_normalized_to_one_line(
+        self, storage: SqliteStorage
+    ) -> None:
+        """Tags share the single_line contract of every other field, or
+        plain output stops being one line per field."""
+        item = add_todo(storage, "x", tags=["urgent\nreview"])
+        assert item.tags == ["urgent review"]
+
+    def test_multiline_tag_keeps_plain_output_one_line(self, cli: CliRunner) -> None:
+        cli.invoke(main, ["add", "x", "-t", "urgent\nreview"])
+        result = cli.invoke(main, ["show", "1"])
+        tag_lines = [ln for ln in result.output.splitlines() if ln.startswith("Tags:")]
+        assert tag_lines == ["Tags: urgent review"]

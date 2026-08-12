@@ -20,20 +20,28 @@ def _normalize_title(title: str) -> str:
 
 
 def _normalize_tags(tags: list[str] | None) -> list[str] | None:
-    """Tags are stored comma-joined, so a comma inside a tag cannot
-    round-trip — reject it instead of silently splitting into phantoms."""
+    """Normalize tags for storage, rejecting anything unstorable.
+
+    Tags are stored comma-joined, so a comma inside a tag cannot
+    round-trip — reject it instead of silently splitting into phantoms.
+    A blank tag is rejected too, matching the filter path: `-t ""` from
+    an unset shell variable used to silently wipe every tag on the item.
+    Passing an empty list still clears them, which is explicit.
+    """
     if tags is None:
         return None
     cleaned: list[str] = []
     for tag in tags:
-        stripped = tag.strip()
-        if not stripped:
-            continue
-        if "," in stripped:
-            raise ValueError(f"Tag '{stripped}' contains a comma; use separate tags.")
-        if stripped not in cleaned:
+        # Same single-line contract as titles and project names, so plain
+        # output stays one line per field.
+        normalized = single_line(tag)
+        if not normalized:
+            raise ValueError("Tag cannot be empty.")
+        if "," in normalized:
+            raise ValueError(f"Tag '{normalized}' contains a comma; use separate tags.")
+        if normalized not in cleaned:
             # Dedupe here so tag counts count items, not occurrences.
-            cleaned.append(stripped)
+            cleaned.append(normalized)
     return cleaned
 
 
