@@ -26,13 +26,13 @@ the current code first, then the fix, then the class-sweep check (below).
       Scenario: A script that pipes `todo list` (non-TTY selects PlainOutput) and greps/parses the title column matches an item while it is unblocked but stops matching the moment another item is marked as its blocker, because the title text now carries an emoji prefix; downstream text processing built on the previously stable ASCII title column silently misses or mangles blocked items.
 - [ ] `src/todo/infra/cli/main.py:405` — project add/edit/archive/log redisplay the project via show_project(storage, str(id)), but resolve_project matches by NAME first, so a project whose name is the numeric string equal to the new project's id gets displayed instead.
       Scenario: Reproduced: with a project named "2" (id 1), `todo project add brand-new` creates project id 2 correctly but prints "#1  2  0/0 done" — the detail (and --json payload) of the wrong project. Same bug in project_edit (line 461), project_archive (line 477), and project_log (line 494); scripts consuming the --json output act on the wrong project's data.
-- [ ] `src/todo/tui/list_view.py:836` — The TUI editor cannot clear tags: action_edit maps an emptied 'tags:' line to tags=None (fields.get('tags') is falsy), and storage.update treats None as 'unchanged', so the user's deletion is silently ignored.
+- [x] (440fde1) `src/todo/tui/list_view.py:836` — The TUI editor cannot clear tags: action_edit maps an emptied 'tags:' line to tags=None (fields.get('tags') is falsy), and storage.update treats None as 'unchanged', so the user's deletion is silently ignored.
       Scenario: User presses 'e', deletes the tag list on the 'tags: a, b' line, saves — the edit appears to succeed but the item still has tags a and b; deadline on the same form CAN be cleared the same way (empty → None), making the tags behavior an inconsistent silent no-op the user only discovers later when tag filters still match the item.
 - [x] (859e83a) `src/todo/infra/cli/main.py:354` — `todo block` with multiple blocker ids applies each block_todo in a loop with per-call commits, so a failure partway leaves earlier blockers committed while the command reports failure.
       Scenario: Reproduced: `todo block 3 1 999` exits 1 with 'Todo item #999 not found', but item 3 is now blocked_by [1]. A user (or script) that retries or assumes the command was rejected atomically ends up with unintended dependency state; same pattern in `unblock` (line 375).
-- [ ] `src/todo/application/commands.py:46` — edit_todo passes status straight to storage.update, bypassing _update_status, so completing an item via `todo edit N -s done` (or the TUI editor's status field) never computes/reports newly unblocked dependents — the unblock-reporting feature is bolted onto only two of the three status-change paths.
+- [x] (440fde1) `src/todo/application/commands.py:46` — edit_todo passes status straight to storage.update, bypassing _update_status, so completing an item via `todo edit N -s done` (or the TUI editor's status field) never computes/reports newly unblocked dependents — the unblock-reporting feature is bolted onto only two of the three status-change paths.
       Scenario: Reproduced: with #2 blocked by #1, `todo edit 1 -s done` exits 0 with no '🔓 #2 ... is now unblocked' warning, while `todo done 1` and `todo mv 1 done` both warn. Users completing items via edit (or the TUI e-editor changing 'status: done') silently miss the notification the feature promises, and FINAL_REPORT claims completing a blocker reports unblocked dependents.
-- [ ] `src/todo/tui/list_view.py:815` — action_edit runs subprocess.run([editor, tmp_path], check=True) with no exception handling: a nonzero editor exit raises CalledProcessError and an unset/broken $EDITOR raises FileNotFoundError, both propagating out of the action.
+- [x] (440fde1) `src/todo/tui/list_view.py:815` — action_edit runs subprocess.run([editor, tmp_path], check=True) with no exception handling: a nonzero editor exit raises CalledProcessError and an unset/broken $EDITOR raises FileNotFoundError, both propagating out of the action.
       Scenario: User has EDITOR set to a missing binary or quits vim with :cq — pressing 'e' in the TUI raises an unhandled exception and Textual tears down the app with a crash screen, instead of showing an error and returning to the list.
 
 ## P2 — verified, lower severity
@@ -82,7 +82,7 @@ the current code first, then the fix, then the class-sweep check (below).
       ("[/]", "[bold", "]]", emoji) for each sink.
 - [x] (859e83a) **Atomicity**: audit every multi-step mutation (multi-blocker ops,
       migrations) for partial-application on failure.
-- [ ] **Path parity**: for every behavior promised on one mutation path
+- [x] (440fde1) **Path parity**: for every behavior promised on one mutation path
       (unblock warnings, done_at, dependency hydration), verify all paths
       that can perform the same mutation (done/mv/edit/TUI editor/TUI keys)
       share it — via a shared code path, not copies.
@@ -98,6 +98,7 @@ Anything without a failed reproduction attempt gets fixed, not triaged.)
 ## Status log
 
 - iter 1: markup class closed, 8 findings (3508897). 225 tests green.
+- iter 3: path parity — edit-to-done warnings, editor tag clearing, editor error handling (440fde1). 240 tests green.
 - iter 2: atomicity class closed — atomic migrations, batch blockers (859e83a). 230 tests green.
 
 (One line per iteration: which findings closed, commit hashes, gate status.)
