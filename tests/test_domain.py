@@ -101,6 +101,26 @@ class TestQueryHelpers:
         with pytest.raises(ProjectNotFoundError):
             resolve_project(storage, "ghost")
 
+    def test_resolve_project_superscript_digit_is_clean_not_found(
+        self, storage: SqliteStorage
+    ) -> None:
+        """'²'.isdigit() is True but int('²') raises — must not traceback."""
+        with pytest.raises(ProjectNotFoundError):
+            resolve_project(storage, "²")
+
+    def test_resolve_project_huge_numeric_ref_is_clean_not_found(
+        self, storage: SqliteStorage
+    ) -> None:
+        """Ids beyond SQLite's 64-bit range must not raise OverflowError."""
+        with pytest.raises(ProjectNotFoundError):
+            resolve_project(storage, "99999999999999999999")
+
+    def test_resolve_project_huge_numeric_name_still_found(
+        self, storage: SqliteStorage
+    ) -> None:
+        storage.add_project("99999999999999999999")
+        assert resolve_project(storage, "99999999999999999999").id == 1
+
     def test_parse_since_weeks_and_months(self) -> None:
         assert parse_since("2 weeks") < parse_since("1 week")
         assert parse_since("1 month") < parse_since("2 weeks")

@@ -524,6 +524,18 @@ class TestSearch:
         assert [i["title"] for i in data] == ["Auth-docs"]
 
 
+class TestDatabaseErrors:
+    def test_corrupt_database_reports_cleanly(self, tmp_path, monkeypatch) -> None:
+        """A broken database file must produce a clean error, not a traceback."""
+        bad = tmp_path / "corrupt.db"
+        bad.write_bytes(b"this is not a sqlite database at all --------")
+        runner = CliRunner(env={"TODO_DB": str(bad)})
+        result = runner.invoke(main, ["list"])
+        assert result.exit_code == 1
+        assert "Database error" in result.stderr
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
 class TestBadInput:
     def test_add_invalid_deadline_exits_cleanly(self, invoke) -> None:
         result = invoke("add Task -d garbage")

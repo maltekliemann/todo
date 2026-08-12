@@ -124,6 +124,100 @@ class TestEditorInvalidFields:
             apply_editor_edit(storage, 1, _edited(storage, 1, deadline="garbage"))
 
 
+class TestEditorCommand:
+    def test_editor_value_with_arguments_is_split(self) -> None:
+        from todo.tui.list_view import _editor_command
+
+        assert _editor_command("code --wait", "/tmp/x") == [
+            "code",
+            "--wait",
+            "/tmp/x",
+        ]
+
+    def test_plain_editor_value(self) -> None:
+        from todo.tui.list_view import _editor_command
+
+        assert _editor_command("vi", "/tmp/x") == ["vi", "/tmp/x"]
+
+    def test_quoted_editor_path(self) -> None:
+        from todo.tui.list_view import _editor_command
+
+        assert _editor_command("'/opt/My Editor/ed' -f", "/tmp/x") == [
+            "/opt/My Editor/ed",
+            "-f",
+            "/tmp/x",
+        ]
+
+
+class TestApplyEditedBuffer:
+    """The post-$EDITOR half of action_edit, testable without suspend()."""
+
+    async def test_rejected_edit_keeps_buffer_file(
+        self, db_path: Path, tmp_path: Path
+    ) -> None:
+        from todo.tui.list_view import TodoListView
+
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Task", body="keep me")
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            view = app.query_one(TodoListView)
+            original = _item_to_editor_text(storage.get(1))
+            edited = original.replace("deadline: ", "deadline: 2026/01/01")
+            buf = tmp_path / "buffer.todo.txt"
+            buf.write_text(edited)
+
+            view._apply_edited_buffer(1, original, edited, str(buf))
+            await pilot.pause()
+
+            assert app.is_running
+            assert storage.get(1).body == "keep me"  # nothing applied
+            assert buf.exists()  # user's work is recoverable
+
+    async def test_missing_item_is_reported_not_crash(
+        self, db_path: Path, tmp_path: Path
+    ) -> None:
+        from todo.tui.list_view import TodoListView
+
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Task")
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            view = app.query_one(TodoListView)
+            original = _item_to_editor_text(storage.get(1))
+            edited = original.replace("title: Task", "title: Renamed")
+            buf = tmp_path / "buffer.todo.txt"
+            buf.write_text(edited)
+
+            storage.delete(1)  # deleted while "the editor was open"
+            view._apply_edited_buffer(1, original, edited, str(buf))
+            await pilot.pause()
+            assert app.is_running
+
+    async def test_successful_edit_removes_buffer(
+        self, db_path: Path, tmp_path: Path
+    ) -> None:
+        from todo.tui.list_view import TodoListView
+
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Task")
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            view = app.query_one(TodoListView)
+            original = _item_to_editor_text(storage.get(1))
+            edited = original.replace("title: Task", "title: Renamed")
+            buf = tmp_path / "buffer.todo.txt"
+            buf.write_text(edited)
+
+            view._apply_edited_buffer(1, original, edited, str(buf))
+            await pilot.pause()
+            assert storage.get(1).title == "Renamed"
+            assert not buf.exists()
+
+
 class TestEditorFailureHandling:
     async def test_broken_editor_does_not_crash_tui(
         self, db_path: Path, monkeypatch

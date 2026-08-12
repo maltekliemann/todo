@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import tempfile
 from datetime import date, datetime
@@ -37,7 +38,7 @@ from todo.application.queries import (
 )
 from todo.domain.enums import Priority, Status
 from todo.domain.models import TodoItem
-from todo.exceptions import DependencyError, NotFoundError
+from todo.exceptions import DependencyError, NotFoundError, TodoError
 
 _SEPARATOR_PREFIX = "__sep_"
 
@@ -133,6 +134,11 @@ def _deadline_str(item: TodoItem) -> str:
     if item.deadline_urgent:
         return f"⚠ {item.deadline.strftime('%b %d')} ({days}d)"
     return item.deadline.strftime("%b %d")
+
+
+def _editor_command(editor_value: str, path: str) -> list[str]:
+    """Split $EDITOR like git does, so values such as 'code --wait' work."""
+    return [*shlex.split(editor_value), path]
 
 
 def _item_to_editor_text(item: TodoItem) -> str:
@@ -877,33 +883,45 @@ class TodoListView(Widget):
             tmp_path = f.name
 
         try:
-            try:
-                with self.app.suspend():
-                    subprocess.run([editor, tmp_path], check=True)
-            except (
-                FileNotFoundError,
-                subprocess.CalledProcessError,
-                SuspendNotSupported,
-            ) as exc:
-                self.notify(f"Editor failed: {escape(str(exc))}", severity="error")
-                return
-
-            with open(tmp_path) as f:
-                edited = f.read()
-
-            if edited.strip() == text.strip():
-                return
-
-            try:
-                result = apply_editor_edit(self._storage, item_id, edited)
-            except ValueError as exc:
-                # Mistyped priority/status/deadline: report, don't crash.
-                self.notify(f"Edit rejected: {escape(str(exc))}", severity="error")
-                return
-            self._notify_unblocked(result)
-            self._refresh_list()
-        finally:
+            with self.app.suspend():
+                subprocess.run(_editor_command(editor, tmp_path), check=True)
+        except (
+            FileNotFoundError,
+            subprocess.CalledProcessError,
+            SuspendNotSupported,
+        ) as exc:
+            self.notify(f"Editor failed: {escape(str(exc))}", severity="error")
             os.unlink(tmp_path)
+            return
+
+        with open(tmp_path) as f:
+            edited = f.read()
+
+        self._apply_edited_buffer(item_id, text, edited, tmp_path)
+
+    def _apply_edited_buffer(
+        self, item_id: int, original: str, edited: str, tmp_path: str
+    ) -> None:
+        """Apply an edited $EDITOR buffer. On rejection the buffer file is
+        kept and its path reported, so a field typo never destroys the
+        user's work."""
+        if edited.strip() == original.strip():
+            os.unlink(tmp_path)
+            return
+
+        try:
+            result = apply_editor_edit(self._storage, item_id, edited)
+        except (ValueError, TodoError) as exc:
+            self.notify(
+                f"Edit rejected: {escape(str(exc))} — "
+                f"your buffer is kept at {escape(tmp_path)}",
+                severity="error",
+                timeout=12,
+            )
+            return
+        os.unlink(tmp_path)
+        self._notify_unblocked(result)
+        self._refresh_list()
 
     def action_delete(self) -> None:
         item_id = self._selected_item_id()

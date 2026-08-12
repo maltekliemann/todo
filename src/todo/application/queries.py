@@ -54,7 +54,9 @@ def resolve_project(storage: StorageProtocol, ref: str) -> Project:
     numeric refs — name-first resolution let a numerically-named project
     shadow another project's id in every command, including `project rm`.
     """
-    if ref.isdigit():
+    # isdecimal (not isdigit: '²'.isdigit() is True but int('²') raises) and
+    # a length cap (SQLite binds 64-bit ints) decide what counts as an id.
+    if ref.isdecimal() and len(ref) <= 18:
         try:
             return storage.get_project(int(ref))
         except ProjectNotFoundError:

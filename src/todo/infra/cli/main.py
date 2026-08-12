@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import sys
 from datetime import date
 
@@ -40,6 +41,7 @@ from todo.exceptions import (
     DuplicateProjectError,
     NotFoundError,
     ProjectNotFoundError,
+    StorageError,
 )
 
 _PRIORITY_CHOICES = [p.value for p in Priority]
@@ -75,7 +77,18 @@ def _resolve_project_or_exit(storage: SqliteStorage, ref: str) -> int:
     return _resolve_project_obj_or_exit(storage, ref).id
 
 
-@click.group()
+class _SafeGroup(click.Group):
+    """Report database-level failures cleanly instead of tracebacks."""
+
+    def invoke(self, ctx: click.Context) -> object:
+        try:
+            return super().invoke(ctx)
+        except (StorageError, sqlite3.Error) as e:
+            click.echo(f"Database error: {e}", err=True)
+            sys.exit(1)
+
+
+@click.group(cls=_SafeGroup)
 def main() -> None:
     """A persistent, SQLite-backed todo app."""
 
