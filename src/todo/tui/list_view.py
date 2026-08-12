@@ -12,14 +12,6 @@ from textual.containers import Vertical
 from textual.widget import Widget
 from textual.widgets import DataTable, Footer, Static
 
-from todo.adapters.output import (
-    _deadline_str,
-    _deadline_style,
-    _pri_style,
-    _priority_label,
-    _relative_age,
-    _status_icon,
-)
 from todo.application.commands import (
     CompletionResult,
     complete_todo,
@@ -33,7 +25,7 @@ from todo.application.queries import (
     list_todos,
     show_todo,
 )
-from todo.domain.enums import Priority, Status
+from todo.domain.enums import Priority
 from todo.domain.models import TodoItem
 from todo.exceptions import NotFoundError, TodoError
 from todo.tui.dialogs import (
@@ -44,8 +36,8 @@ from todo.tui.dialogs import (
     SearchDialog,
 )
 from todo.tui.editor import apply_editor_edit, editor_command, item_to_editor_text
-from todo.tui.render import escape_markup, join_styles, meta_lines
-from todo.tui.table import SEPARATOR_PREFIX, TodoTable, is_separator
+from todo.tui.render import escape_markup, meta_lines
+from todo.tui.table import COLUMNS, TodoTable, is_separator
 
 
 class TodoListView(Widget):
@@ -104,7 +96,7 @@ class TodoListView(Widget):
 
     def on_mount(self) -> None:
         table = self.query_one("#item-list", DataTable)
-        table.add_columns("#", "Pri", "Status", "Title", "Deadline", "Age")
+        table.add_columns(*COLUMNS)
         table.focus()
         # _refresh_list_unguarded is the ONLY writer of _last_data_version:
         # recording a version without a successful refresh would make the
@@ -243,61 +235,7 @@ class TodoListView(Widget):
         # the same one that builds the cache, so they cannot disagree.
         self._item_by_id = {i.id: i for i in self._items}
 
-        table.clear()
-
-        # Group items by status, preserving the per-group ordering from the
-        # storage layer (priority, then created_at).
-        status_order = [
-            Status.IN_PROGRESS,
-            Status.TODO,
-            Status.BACKLOG,
-            Status.DONE,
-        ]
-        groups: dict[Status, list[TodoItem]] = {s: [] for s in status_order}
-        for item in self._items:
-            groups[item.status].append(item)
-
-        row_index_of: dict[int, int] = {}
-        index = 0
-        for status in status_order:
-            items = groups[status]
-            if not items:
-                continue
-            table.add_row(
-                "",
-                "",
-                f"── {status.value} ({len(items)}) ──",
-                "",
-                "",
-                "",
-                key=f"{SEPARATOR_PREFIX}{status.value}",
-            )
-            index += 1
-            for item in items:
-                deadline_text = _deadline_str(item) if status != Status.DONE else ""
-                cells = [
-                    str(item.id),
-                    _priority_label(item.priority),
-                    f"{_status_icon(item.status)} {item.status.value}",
-                    f"\U0001f6a7 {item.title}" if item.is_blocked else item.title,
-                    deadline_text,
-                    _relative_age(item.created_at),
-                ]
-                # Per-cell colour: priority and deadline proximity carry
-                # their own style, everything else inherits the row's.
-                row_style = "dim" if item.is_blocked else ""
-                styles = [row_style] * len(cells)
-                styles[1] = join_styles(row_style, _pri_style(item.priority))
-                if deadline_text:
-                    styles[4] = join_styles(row_style, _deadline_style(item))
-                # Always wrap in Text: DataTable parses plain strings as
-                # markup, and titles are user-controlled.
-                table.add_row(
-                    *(Text(c, style=s) for c, s in zip(cells, styles)),
-                    key=str(item.id),
-                )
-                row_index_of[item.id] = index
-                index += 1
+        row_index_of = table.populate(self._items)
 
         if table.row_count > 0:
             follow = self._cursor_follows_item

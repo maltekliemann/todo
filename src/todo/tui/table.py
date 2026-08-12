@@ -2,13 +2,31 @@
 
 from __future__ import annotations
 
-from rich.text import Text  # noqa: F401  (used in the DataTable type parameter)
+from rich.text import Text
 from textual.binding import Binding
 from textual.coordinate import Coordinate
 from textual.message import Message
 from textual.widgets import DataTable
 
+from todo.adapters.output import (
+    _deadline_str,
+    _deadline_style,
+    _pri_style,
+    _priority_label,
+    _relative_age,
+    _status_icon,
+)
+from todo.domain.enums import Status
+from todo.domain.models import TodoItem
+from todo.tui.render import join_styles
+
 SEPARATOR_PREFIX = "__sep_"
+
+COLUMNS = ("#", "Pri", "Status", "Title", "Deadline", "Age")
+
+# Groups in reading order: what you are doing, then what is next, then
+# what is parked, then what is finished.
+_STATUS_ORDER = (Status.IN_PROGRESS, Status.TODO, Status.BACKLOG, Status.DONE)
 
 
 def is_separator(value: object) -> bool:
@@ -91,3 +109,61 @@ class TodoTable(DataTable["str | Text"]):
 
     def action_cursor_left(self) -> None:
         self.post_message(self.StatusStep(self, -1))
+
+    def populate(self, items: list[TodoItem]) -> dict[int, int]:
+        """Rebuild every row, grouped by status under a separator.
+
+        Returns item id -> row index, which is what the caller needs to put
+        the cursor back where it was. Ordering inside a group is the
+        storage layer's (priority, then created_at) and is preserved.
+        """
+        self.clear()
+        groups: dict[Status, list[TodoItem]] = {s: [] for s in _STATUS_ORDER}
+        for item in items:
+            groups[item.status].append(item)
+
+        row_index_of: dict[int, int] = {}
+        index = 0
+        for status in _STATUS_ORDER:
+            group = groups[status]
+            if not group:
+                continue
+            self.add_row(
+                "",
+                "",
+                f"── {status.value} ({len(group)}) ──",
+                "",
+                "",
+                "",
+                key=f"{SEPARATOR_PREFIX}{status.value}",
+            )
+            index += 1
+            for item in group:
+                self.add_row(*_cells(item), key=str(item.id))
+                row_index_of[item.id] = index
+                index += 1
+        return row_index_of
+
+
+def _cells(item: TodoItem) -> list[Text]:
+    """One row's cells, styled.
+
+    Always Text, never str: DataTable parses plain strings as markup and
+    titles are user-controlled. Priority and deadline proximity carry their
+    own colour; everything else inherits the row's.
+    """
+    deadline_text = _deadline_str(item) if item.status != Status.DONE else ""
+    values = [
+        str(item.id),
+        _priority_label(item.priority),
+        f"{_status_icon(item.status)} {item.status.value}",
+        f"\U0001f6a7 {item.title}" if item.is_blocked else item.title,
+        deadline_text,
+        _relative_age(item.created_at),
+    ]
+    row_style = "dim" if item.is_blocked else ""
+    styles = [row_style] * len(values)
+    styles[1] = join_styles(row_style, _pri_style(item.priority))
+    if deadline_text:
+        styles[4] = join_styles(row_style, _deadline_style(item))
+    return [Text(v, style=s) for v, s in zip(values, styles)]
