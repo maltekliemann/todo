@@ -153,19 +153,44 @@ class TodoListView(Widget):
             return
         self.action_inspect()
 
-    def _refresh_list(self, *, from_poll: bool = False) -> None:
+    def _refresh_list(
+        self, *, from_poll: bool = False, select_id: int | None = None
+    ) -> None:
         """Refresh, degrading storage failures to a notification.
 
         Every action path (including the except-handlers of guarded
         mutations) ends in a refresh, so a raw StorageError here would
         crash the session no matter how well the action itself is guarded.
+
+        `select_id` asks for a specific item under the cursor afterwards;
+        it wins over both cursor modes, and is ignored if that item is not
+        in the refreshed list.
         """
         try:
-            self._refresh_list_unguarded()
+            self._refresh_list_unguarded(select_id=select_id)
         except TodoError as exc:
             self._report_read_failure(exc, from_poll=from_poll)
         else:
             self._read_error_reported = False
+
+    def _successor_id(self, item_id: int) -> int | None:
+        """The item listed after `item_id` right now.
+
+        Stay mode is "let me move a run of items without chasing the
+        cursor", and holding a row index does not deliver that: a status
+        step re-sorts the moved item to the top of its new group, which is
+        frequently the very row the cursor held. Naming the next item is
+        what the mode actually means.
+        """
+        ids = [i.id for i in self._items]
+        try:
+            index = ids.index(item_id)
+        except ValueError:
+            return None
+        return ids[index + 1] if index + 1 < len(ids) else None
+
+    def _successor_if_staying(self, item_id: int) -> int | None:
+        return None if self._cursor_follows_item else self._successor_id(item_id)
 
     def _rows_for_refresh(self) -> tuple[int, list[TodoItem]]:
         """Every storage read a refresh needs, plus the data_version read
@@ -210,7 +235,7 @@ class TodoListView(Widget):
             ),
         )
 
-    def _refresh_list_unguarded(self) -> None:
+    def _refresh_list_unguarded(self, *, select_id: int | None = None) -> None:
         table = self.query_one("#item-list", TodoTable)
         previous_id = self._selected_item_id()
         previous_cursor = table.cursor_row
@@ -230,7 +255,9 @@ class TodoListView(Widget):
 
         if table.row_count > 0:
             follow = self._cursor_follows_item
-            if follow and previous_id is not None and previous_id in row_index_of:
+            if select_id is not None and select_id in row_index_of:
+                table.move_cursor(row=row_index_of[select_id])
+            elif follow and previous_id is not None and previous_id in row_index_of:
                 table.move_cursor(row=row_index_of[previous_id])
             elif row_index_of:
                 # Stay at the same visual row (sticky mode / item vanished);
@@ -315,6 +342,7 @@ class TodoListView(Widget):
         item_id = self._selected_item_id()
         if item_id is None:
             return
+        successor = self._successor_if_staying(item_id)
         try:
             result = complete_todo(self._storage, item_id)
         except TodoError as exc:
@@ -323,7 +351,7 @@ class TodoListView(Widget):
             self._refresh_list()
             return
         self._notify_unblocked(result)
-        self._refresh_list()
+        self._refresh_list(select_id=successor)
 
     def _notify_unblocked(self, result: CompletionResult | list[TodoItem]) -> None:
         deps = result.unblocked if isinstance(result, CompletionResult) else result
@@ -455,6 +483,7 @@ class TodoListView(Widget):
             return
         next_status = item.status.next()
         if next_status is not None:
+            successor = self._successor_if_staying(item_id)
             try:
                 result = move_todo(self._storage, item_id, next_status)
             except TodoError as exc:
@@ -462,7 +491,7 @@ class TodoListView(Widget):
                 self._refresh_list()
                 return
             self._notify_unblocked(result)
-            self._refresh_list()
+            self._refresh_list(select_id=successor)
 
     def action_status_prev(self) -> None:
         item_id = self._selected_item_id()
@@ -477,8 +506,11 @@ class TodoListView(Widget):
             return
         prev_status = item.status.prev()
         if prev_status is not None:
+            successor = self._successor_if_staying(item_id)
             try:
                 move_todo(self._storage, item_id, prev_status)
             except TodoError as exc:
                 self.notify(escape_markup(str(exc)), severity="error")
-            self._refresh_list()
+                self._refresh_list()
+                return
+            self._refresh_list(select_id=successor)

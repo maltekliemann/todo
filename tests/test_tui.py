@@ -169,6 +169,76 @@ class TestPrdKeyBindings:
                 assert not is_separator(key)
 
 
+class TestStayCursorMode:
+    """Stay mode exists so a run of items can be moved without chasing the
+    cursor. Holding a visual row index is not enough: a status step re-sorts
+    the moved item to the top of its new group, which is often the row the
+    cursor is still sitting on."""
+
+    @pytest.fixture()
+    def five_items(self, db_path: Path) -> SqliteStorage:
+        storage = SqliteStorage(db_path)
+        for n in range(1, 6):
+            add_todo(storage, f"Task {n}")
+        return storage
+
+    async def test_status_steps_walk_down_the_list(
+        self, five_items: SqliteStorage
+    ) -> None:
+        app = TodoApp(storage=five_items)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("full_stop")  # stay on row
+            await pilot.pause()
+            for _ in range(3):
+                await pilot.press("greater_than_sign")
+                await pilot.pause()
+
+            moved = [i.id for i in five_items.list(include_done=True)]
+            in_progress = sorted(
+                i.id
+                for i in five_items.list(include_done=True)
+                if i.status == Status.IN_PROGRESS
+            )
+            assert in_progress == [1, 2, 3], moved
+
+    async def test_done_walks_down_the_list(self, five_items: SqliteStorage) -> None:
+        app = TodoApp(storage=five_items)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("full_stop")
+            await pilot.pause()
+            for _ in range(3):
+                await pilot.press("d")
+                await pilot.pause()
+
+            done = sorted(
+                i.id
+                for i in five_items.list(include_done=True)
+                if i.status == Status.DONE
+            )
+            assert done == [1, 2, 3]
+
+    async def test_follow_mode_keeps_the_cursor_on_the_moved_item(
+        self, five_items: SqliteStorage
+    ) -> None:
+        """The default mode must be untouched: the cursor tracks the item."""
+        app = TodoApp(storage=five_items)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            for _ in range(3):
+                await pilot.press("greater_than_sign")
+                await pilot.pause()
+
+            item = five_items.get(1)
+            assert item.status == Status.DONE  # todo -> in-progress -> done
+            assert all(
+                i.status == Status.TODO
+                for i in five_items.list(include_done=True)
+                if i.id != 1
+            )
+
+
 class TestFooterFits:
     """The footer is one row and does not wrap: anything past the right
     edge is invisible, and the tail is where the least-known keys live."""
