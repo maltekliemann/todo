@@ -214,6 +214,61 @@ def _make_v2_db_with_projects(path: Path, names: list[str]) -> None:
     conn.close()
 
 
+class TestV4TagNormalization:
+    def test_legacy_padded_tags_match_tag_filter_after_migration(
+        self, tmp_path: Path
+    ) -> None:
+        """Tags stored padded by the legacy write path are displayed
+        stripped, so the migration must strip them in place — otherwise the
+        advertised tag can never match the SQL tag filter."""
+        db = tmp_path / "db.db"
+        _make_legacy_db(db)
+        conn = sqlite3.connect(str(db))
+        conn.execute(
+            "INSERT INTO todos (title, body, created_at, updated_at, tags) "
+            "VALUES ('padded', '', '2026-01-01T00:00:00+00:00', "
+            "'2026-01-01T00:00:00+00:00', 'home ')"
+        )
+        conn.execute(
+            "INSERT INTO todos (title, body, created_at, updated_at, tags) "
+            "VALUES ('spaced pair', '', '2026-01-01T00:00:00+00:00', "
+            "'2026-01-01T00:00:00+00:00', 'web, api')"
+        )
+        conn.commit()
+        conn.close()
+
+        storage = SqliteStorage(db)
+        assert [i.title for i in storage.list(tags=["home"])] == ["padded"]
+        assert [i.title for i in storage.list(tags=["api"])] == ["spaced pair"]
+        assert [i.title for i in storage.list(tags=["web"])] == ["spaced pair"]
+        storage.close()
+
+    def test_legacy_duplicate_and_empty_tag_segments_cleaned(
+        self, tmp_path: Path
+    ) -> None:
+        db = tmp_path / "db.db"
+        _make_legacy_db(db)
+        conn = sqlite3.connect(str(db))
+        conn.execute(
+            "INSERT INTO todos (title, body, created_at, updated_at, tags) "
+            "VALUES ('dupes', '', '2026-01-01T00:00:00+00:00', "
+            "'2026-01-01T00:00:00+00:00', 'a, ,a,b')"
+        )
+        conn.commit()
+        conn.close()
+
+        storage = SqliteStorage(db)
+        (item,) = [i for i in storage.list() if i.title == "dupes"]
+        assert item.tags == ["a", "b"]
+        storage.close()
+
+        conn = sqlite3.connect(str(db))
+        raw = conn.execute("SELECT tags FROM todos WHERE title = 'dupes'").fetchone()[0]
+        conn.close()
+        # Stored form now equals the displayed form.
+        assert raw == "a,b"
+
+
 class TestV3MigrationCollisions:
     def test_colliding_project_names_do_not_brick_the_db(self, tmp_path: Path) -> None:
         """Two legacy names normalizing to the same string must not blow up

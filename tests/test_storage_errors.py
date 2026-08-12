@@ -1,0 +1,72 @@
+"""Every storage failure must surface as StorageError, never a raw
+sqlite3/OS exception: the CLI's _SafeGroup and the TUI's TodoError guards
+only catch the domain hierarchy."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from pathlib import Path
+
+import pytest
+from click.testing import CliRunner
+
+from todo.adapters.sqlite_storage import SqliteStorage
+from todo.exceptions import StorageError
+from todo.infra.cli.main import main
+
+
+def _broken_storage(tmp_path: Path) -> tuple[SqliteStorage, int, int]:
+    """A storage whose connection dies mid-session (simulates corruption)."""
+    storage = SqliteStorage(tmp_path / "db.db")
+    item = storage.add("x")
+    project = storage.add_project("p")
+    storage._conn.close()
+    return storage, item.id, project.id
+
+
+_READ_CALLS: dict[str, Callable[[SqliteStorage, int, int], object]] = {
+    "get": lambda s, i, p: s.get(i),
+    "list": lambda s, i, p: s.list(),
+    "done_since": lambda s, i, p: s.done_since(__import__("datetime").datetime.now()),
+    "data_version": lambda s, i, p: s.data_version(),
+    "get_project": lambda s, i, p: s.get_project(p),
+    "get_project_by_name": lambda s, i, p: s.get_project_by_name("p"),
+    "list_projects": lambda s, i, p: s.list_projects(),
+    "project_counts": lambda s, i, p: s.project_counts(),
+    "dependency_edges": lambda s, i, p: s.dependency_edges(),
+    "tag_strings": lambda s, i, p: s.tag_strings(),
+    "list_project_updates": lambda s, i, p: s.list_project_updates(p),
+}
+
+
+class TestReadPathErrorWrapping:
+    @pytest.mark.parametrize("name", sorted(_READ_CALLS))
+    def test_read_raises_storage_error_when_connection_breaks(
+        self, tmp_path: Path, name: str
+    ) -> None:
+        storage, item_id, project_id = _broken_storage(tmp_path)
+        with pytest.raises(StorageError):
+            _READ_CALLS[name](storage, item_id, project_id)
+
+
+class TestInitErrorWrapping:
+    def test_db_path_under_a_file_raises_storage_error(self, tmp_path: Path) -> None:
+        """mkdir failures (bad TODO_DB) must be StorageError so both
+        frontends show a clean message instead of a traceback."""
+        blocker = tmp_path / "blocker"
+        blocker.write_text("not a directory")
+        with pytest.raises(StorageError):
+            SqliteStorage(blocker / "sub" / "todos.db")
+
+    def test_cli_reports_bad_db_path_cleanly(self, tmp_path: Path) -> None:
+        blocker = tmp_path / "blocker"
+        blocker.write_text("not a directory")
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            ["list"],
+            env={"TODO_DB": str(blocker / "sub" / "todos.db")},
+        )
+        assert result.exit_code == 1
+        assert "Database error:" in result.stderr
+        assert "Traceback" not in result.stderr

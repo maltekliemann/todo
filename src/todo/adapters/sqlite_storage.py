@@ -78,6 +78,33 @@ def _migration_v3_normalize(conn: sqlite3.Connection) -> None:
         taken.add(normalized)
 
 
+def _normalize_tag_string(raw: str) -> str:
+    """The stored form every read path derives its display from: segments
+    stripped, empties dropped, duplicates removed (order-preserving)."""
+    cleaned: list[str] = []
+    for segment in raw.split(","):
+        tag = segment.strip()
+        if tag and tag not in cleaned:
+            cleaned.append(tag)
+    return ",".join(cleaned)
+
+
+def _migration_v4_normalize_tags(conn: sqlite3.Connection) -> None:
+    """Normalize tags written before tag normalization existed.
+
+    Legacy rows store tags verbatim (padding, empty segments, duplicates)
+    while every read path strips segments for display — so the tag a user
+    sees could never match the SQL tag filter, which compares against the
+    raw column. Rewriting to the displayed form makes filters work again.
+    """
+    for item_id, raw in conn.execute("SELECT id, tags FROM todos").fetchall():
+        normalized = _normalize_tag_string(raw)
+        if normalized != raw:
+            conn.execute(
+                "UPDATE todos SET tags = ? WHERE id = ?", (normalized, item_id)
+            )
+
+
 # Versioned migrations, gated by PRAGMA user_version. Index i migrates a
 # database at user_version i to i+1. A fresh database runs all of them, so
 # fresh and upgraded databases end up with the identical schema. SQL entries
@@ -105,6 +132,7 @@ CREATE TABLE project_updates (
 );
 """,
     _migration_v3_normalize,
+    _migration_v4_normalize_tags,
 ]
 
 
@@ -175,8 +203,14 @@ def _row_to_update(row: sqlite3.Row) -> ProjectUpdate:
 
 class SqliteStorage:
     def __init__(self, db_path: Path) -> None:
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(db_path))
+        try:
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            self._conn = sqlite3.connect(str(db_path))
+        except OSError as e:
+            # A bad db path (unwritable parent, file in the way) must be
+            # StorageError like every other failure, so both frontends
+            # report it cleanly instead of dumping a traceback.
+            raise StorageError(f"Cannot open database at {db_path}: {e}") from e
         self._in_txn = False
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
@@ -261,10 +295,25 @@ class SqliteStorage:
         if not self._in_txn:
             self._conn.commit()
 
+    @contextmanager
+    def _read_guard(self, action: str) -> Iterator[None]:
+        """Wrap sqlite errors on read paths into StorageError.
+
+        Same contract as the write methods: callers (CLI _SafeGroup, TUI
+        TodoError guards) only handle the domain hierarchy, so a raw
+        sqlite3.Error from a corrupted or vanished database would crash
+        them. Domain exceptions (NotFoundError etc.) pass through.
+        """
+        try:
+            yield
+        except sqlite3.Error as e:
+            raise StorageError(f"Failed to {action}: {e}") from e
+
     def data_version(self) -> int:
         """Return SQLite's data_version, which increments on any external write."""
-        row = self._conn.execute("PRAGMA data_version").fetchone()
-        return int(row[0])
+        with self._read_guard("read data version"):
+            row = self._conn.execute("PRAGMA data_version").fetchone()
+            return int(row[0])
 
     def add(
         self,
@@ -305,6 +354,10 @@ class SqliteStorage:
         return self.get(cur.lastrowid)  # type: ignore[arg-type]
 
     def get(self, item_id: int) -> TodoItem:
+        with self._read_guard(f"read todo #{item_id}"):
+            return self._get_unguarded(item_id)
+
+    def _get_unguarded(self, item_id: int) -> TodoItem:
         row = self._conn.execute(
             f"{_TODO_SELECT} WHERE todos.id = ?", (item_id,)
         ).fetchone()
@@ -409,12 +462,13 @@ class SqliteStorage:
             raise StorageError(f"Failed to delete todo #{item_id}: {e}") from e
 
     def done_since(self, since: datetime) -> list[TodoItem]:
-        rows = self._conn.execute(
-            f"{_TODO_SELECT} WHERE todos.status = ? AND todos.done_at >= ? "
-            "ORDER BY todos.done_at DESC",
-            (Status.DONE.value, since.isoformat()),
-        ).fetchall()
-        return self._hydrate_dependencies(rows)
+        with self._read_guard("read completed todos"):
+            rows = self._conn.execute(
+                f"{_TODO_SELECT} WHERE todos.status = ? AND todos.done_at >= ? "
+                "ORDER BY todos.done_at DESC",
+                (Status.DONE.value, since.isoformat()),
+            ).fetchall()
+            return self._hydrate_dependencies(rows)
 
     def _hydrate_dependencies(self, rows: list[sqlite3.Row]) -> list[TodoItem]:
         """Build TodoItems with blocked_by/blocking/is_blocked populated.
@@ -546,8 +600,9 @@ class SqliteStorage:
             "END, "
             "todos.created_at ASC"
         )
-        rows = self._conn.execute(query, params).fetchall()
-        return self._hydrate_dependencies(rows)
+        with self._read_guard("list todos"):
+            rows = self._conn.execute(query, params).fetchall()
+            return self._hydrate_dependencies(rows)
 
     def add_project(self, name: str, *, description: str = "") -> Project:
         now = _now().isoformat()
@@ -565,50 +620,56 @@ class SqliteStorage:
         return self.get_project(cur.lastrowid)  # type: ignore[arg-type]
 
     def get_project(self, project_id: int) -> Project:
-        row = self._conn.execute(
-            "SELECT * FROM projects WHERE id = ?", (project_id,)
-        ).fetchone()
+        with self._read_guard(f"read project #{project_id}"):
+            row = self._conn.execute(
+                "SELECT * FROM projects WHERE id = ?", (project_id,)
+            ).fetchone()
         if row is None:
             raise ProjectNotFoundError(project_id)
         return _row_to_project(row)
 
     def get_project_by_name(self, name: str) -> Project:
-        row = self._conn.execute(
-            "SELECT * FROM projects WHERE name = ?", (name,)
-        ).fetchone()
+        with self._read_guard("read project"):
+            row = self._conn.execute(
+                "SELECT * FROM projects WHERE name = ?", (name,)
+            ).fetchone()
         if row is None:
             raise ProjectNotFoundError(name)
         return _row_to_project(row)
 
     def dependency_edges(self) -> EdgeList:
         """All (blocker_id, blocked_id) edges — one query for graph walks."""
-        rows = self._conn.execute(
-            "SELECT blocker_id, blocked_id FROM todo_dependencies"
-        ).fetchall()
+        with self._read_guard("read dependencies"):
+            rows = self._conn.execute(
+                "SELECT blocker_id, blocked_id FROM todo_dependencies"
+            ).fetchall()
         return [(r["blocker_id"], r["blocked_id"]) for r in rows]
 
     def tag_strings(self) -> TagStringList:
         """Raw tags column for every todo — one column scan for counting."""
-        rows = self._conn.execute("SELECT tags FROM todos").fetchall()
+        with self._read_guard("read tags"):
+            rows = self._conn.execute("SELECT tags FROM todos").fetchall()
         return [r["tags"] for r in rows]
 
     def project_counts(self) -> dict[int, tuple[int, int]]:
         """project_id -> (open, done) item counts, computed in SQL."""
-        rows = self._conn.execute(
-            "SELECT project_id, "
-            "SUM(CASE WHEN status != 'done' THEN 1 ELSE 0 END) AS open_count, "
-            "SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS done_count "
-            "FROM todos WHERE project_id IS NOT NULL GROUP BY project_id"
-        ).fetchall()
+        with self._read_guard("count project items"):
+            rows = self._conn.execute(
+                "SELECT project_id, "
+                "SUM(CASE WHEN status != 'done' THEN 1 ELSE 0 END) AS open_count, "
+                "SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS done_count "
+                "FROM todos WHERE project_id IS NOT NULL GROUP BY project_id"
+            ).fetchall()
         return {
             r["project_id"]: (int(r["open_count"]), int(r["done_count"])) for r in rows
         }
 
     def list_projects(self, *, include_archived: bool = False) -> "ProjectList":
         where = "" if include_archived else " WHERE status = 'active'"
-        rows = self._conn.execute(
-            f"SELECT * FROM projects{where} ORDER BY name ASC"
-        ).fetchall()
+        with self._read_guard("list projects"):
+            rows = self._conn.execute(
+                f"SELECT * FROM projects{where} ORDER BY name ASC"
+            ).fetchall()
         return [_row_to_project(r) for r in rows]
 
     def update_project(
@@ -676,9 +737,10 @@ class SqliteStorage:
         return _row_to_update(row)
 
     def list_project_updates(self, project_id: int) -> "UpdateList":
-        rows = self._conn.execute(
-            "SELECT * FROM project_updates WHERE project_id = ? "
-            "ORDER BY created_at DESC, id DESC",
-            (project_id,),
-        ).fetchall()
+        with self._read_guard("read project log"):
+            rows = self._conn.execute(
+                "SELECT * FROM project_updates WHERE project_id = ? "
+                "ORDER BY created_at DESC, id DESC",
+                (project_id,),
+            ).fetchall()
         return [_row_to_update(r) for r in rows]
