@@ -68,7 +68,31 @@ def _escape_markup(text: str) -> str:
 
 
 class TodoTable(DataTable["str | Text"]):
-    """DataTable that skips over separator rows when navigating with up/down."""
+    """DataTable that skips over separator rows when navigating with up/down.
+
+    Also carries the PRD's navigation keys: j/k alongside the arrows, and
+    the horizontal keys repurposed from column movement (meaningless under
+    a row cursor) to stepping the selected item's status.
+    """
+
+    BINDINGS = [
+        Binding("j", "cursor_down", "Down", show=False),
+        Binding("k", "cursor_up", "Up", show=False),
+        Binding("l", "cursor_right", "Status >", show=False),
+        Binding("h", "cursor_left", "Status <", show=False),
+    ]
+
+    class StatusStep(Message):
+        """Request from the table to move the selected item's status."""
+
+        def __init__(self, table: TodoTable, delta: int) -> None:
+            super().__init__()
+            self.table = table
+            self.delta = delta
+
+        @property
+        def control(self) -> TodoTable:
+            return self.table
 
     def _current_row_key(self) -> object:
         if self.row_count == 0:
@@ -113,6 +137,12 @@ class TodoTable(DataTable["str | Text"]):
     def action_cursor_up(self) -> None:
         super().action_cursor_up()
         self._skip_separators(-1)
+
+    def action_cursor_right(self) -> None:
+        self.post_message(self.StatusStep(self, 1))
+
+    def action_cursor_left(self) -> None:
+        self.post_message(self.StatusStep(self, -1))
 
 
 def _editor_command(editor_value: str, path: str) -> list[str]:
@@ -706,6 +736,13 @@ class TodoListView(Widget):
     def on_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         if event.row_key is not None:
             self._update_detail(event.row_key.value)
+
+    @on(TodoTable.StatusStep, "#item-list")
+    def on_status_step(self, event: TodoTable.StatusStep) -> None:
+        if event.delta > 0:
+            self.action_status_next()
+        else:
+            self.action_status_prev()
 
     @on(DataTable.RowSelected, "#item-list")
     def on_row_selected(self, event: DataTable.RowSelected) -> None:

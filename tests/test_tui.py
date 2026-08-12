@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from textual.coordinate import Coordinate
 from textual.widgets import DataTable, Label, Static
 
 from todo.adapters.sqlite_storage import SqliteStorage
@@ -82,6 +83,61 @@ class TestStatusNavigation:
             item = seeded_storage.get(1)
             assert item.status == Status.DONE
             assert item.done_at is not None
+
+
+class TestPrdKeyBindings:
+    """The PRD's key table: arrows and hjkl, alongside the < > pair."""
+
+    @pytest.mark.parametrize("key", ["l", "right"])
+    async def test_advances_status(
+        self, seeded_storage: SqliteStorage, key: str
+    ) -> None:
+        app = TodoApp(storage=seeded_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press(key)
+            await pilot.pause()
+            assert seeded_storage.get(1).status == Status.IN_PROGRESS
+
+    @pytest.mark.parametrize("key", ["h", "left"])
+    async def test_reverses_status(
+        self, seeded_storage: SqliteStorage, key: str
+    ) -> None:
+        app = TodoApp(storage=seeded_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press(key)
+            await pilot.pause()
+            assert seeded_storage.get(1).status == Status.BACKLOG
+
+    async def test_j_and_k_move_the_selection(
+        self, seeded_storage: SqliteStorage
+    ) -> None:
+        app = TodoApp(storage=seeded_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            table = app.query_one("#item-list", DataTable)
+            start = table.cursor_row
+            await pilot.press("j")
+            await pilot.pause()
+            assert table.cursor_row > start
+            await pilot.press("k")
+            await pilot.pause()
+            assert table.cursor_row == start
+
+    async def test_j_skips_separator_rows(self, seeded_storage: SqliteStorage) -> None:
+        """j must behave exactly like down, separators included."""
+        app = TodoApp(storage=seeded_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            table = app.query_one("#item-list", DataTable)
+            for _ in range(table.row_count):
+                await pilot.press("j")
+                await pilot.pause()
+                key = table.coordinate_to_cell_key(
+                    Coordinate(table.cursor_row, 0)
+                ).row_key.value
+                assert not _is_separator(key)
 
 
 class TestDoneAction:
