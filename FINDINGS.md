@@ -233,13 +233,13 @@ real transaction. Treat 'my own fix' as untrusted input to this round.
 
 ## Round 8 — exit-gate review wf_27e5479d-f1d (2026-08-12), 10 distinct
 
-- [ ] `src/todo/application/queries.py:30` [correctness] — Whitespace-only/empty --tag filter silently dropped by round-7 normalization, so the query runs unfiltered instead of matching nothing (`--tag "$TAG"` with empty var returns EVERYTHING)
-- [ ] `src/todo/application/queries.py:30b` [correctness] — Comma-containing tag filters pass through to the LIKE pattern with adjacency semantics (or no match) though the write path guarantees no tag contains a comma; should error like add does
-- [ ] `src/todo/tui/list_view.py:681` [correctness] — _refresh_list_unguarded clears the table before querying, so a degraded read failure wipes every row and the poll never repopulates (own writes don't bump data_version); query first, clear only on success
-- [ ] `src/todo/tui/list_view.py:774` [correctness] — When a refresh leaves the table empty, the detail pane keeps rendering the deleted/filtered-out item indefinitely (no RowHighlighted fires on an empty table)
-- [ ] `src/todo/tui/list_view.py:636` [correctness] — on_mount's data_version() call is outside any TodoError guard: a StorageError there crashes startup while the same failure in the poll degrades
-- [ ] `src/todo/application/queries.py:157` [correctness] — parse_since accepts negative amounts, silently producing an inverted future window ("No items completed") instead of rejecting the input
-- [ ] `src/todo/tui/list_view.py:934` [correctness] — Buffer-read OSError branch strands the tmp file silently: no unlink, no "buffer kept at <path>" notice, unlike the rejection branch
+- [x] (7ca9021) `src/todo/application/queries.py:30` [correctness] — Whitespace-only/empty --tag filter silently dropped by round-7 normalization, so the query runs unfiltered instead of matching nothing (`--tag "$TAG"` with empty var returns EVERYTHING)
+- [x] (7ca9021) `src/todo/application/queries.py:30b` [correctness] — Comma-containing tag filters pass through to the LIKE pattern with adjacency semantics (or no match) though the write path guarantees no tag contains a comma; should error like add does
+- [x] (d08562a) `src/todo/tui/list_view.py:681` [correctness] — _refresh_list_unguarded clears the table before querying, so a degraded read failure wipes every row and the poll never repopulates (own writes don't bump data_version); query first, clear only on success
+- [x] (d08562a) `src/todo/tui/list_view.py:774` [correctness] — When a refresh leaves the table empty, the detail pane keeps rendering the deleted/filtered-out item indefinitely (no RowHighlighted fires on an empty table)
+- [x] (d08562a) `src/todo/tui/list_view.py:636` [correctness] — on_mount's data_version() call is outside any TodoError guard: a StorageError there crashes startup while the same failure in the poll degrades
+- [x] (7ca9021) `src/todo/application/queries.py:157` [correctness] — parse_since accepts negative amounts, silently producing an inverted future window ("No items completed") instead of rejecting the input
+- [x] (d08562a) `src/todo/tui/list_view.py:934` [correctness] — Buffer-read OSError branch strands the tmp file silently: no unlink, no "buffer kept at <path>" notice, unlike the rejection branch
 - [ ] `src/todo/adapters/sqlite_storage.py:406` [cleanup] — update()/delete() run full dependency-hydrating get() purely as existence checks though _assert_exists exists; one edit = 15 SQL statements, 3 full hydrations
 - [ ] `src/todo/application/commands.py:242` [cleanup] — block_todo_batch validates blocker existence at two altitudes (full-hydration get per blocker + add_blocker's own probes); ~6 queries per edge where 2 do
 - [ ] `src/todo/infra/cli/main.py:86` [cleanup] — _SafeGroup catches raw sqlite3.Error, papering over adapter wrapping-contract gaps the TUI would still crash on; rely on StorageError only
