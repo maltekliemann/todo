@@ -302,10 +302,14 @@ class SqliteStorage:
         TodoError guards) only handle the domain hierarchy, so a raw
         sqlite3.Error from a corrupted or vanished database would crash
         them. Domain exceptions (NotFoundError etc.) pass through.
+
+        ValueError is included because row decoding lives on these paths:
+        a bad enum value or malformed timestamp in the file is a storage
+        failure, not something a frontend can be expected to catch.
         """
         try:
             yield
-        except (sqlite3.Error, OverflowError) as e:
+        except (sqlite3.Error, OverflowError, ValueError) as e:
             raise StorageError(f"Failed to {action}: {e}") from e
 
     def data_version(self) -> int:
@@ -644,18 +648,18 @@ class SqliteStorage:
             row = self._conn.execute(
                 "SELECT * FROM projects WHERE id = ?", (project_id,)
             ).fetchone()
-        if row is None:
-            raise ProjectNotFoundError(project_id)
-        return _row_to_project(row)
+            if row is None:
+                raise ProjectNotFoundError(project_id)
+            return _row_to_project(row)
 
     def get_project_by_name(self, name: str) -> Project:
         with self._read_guard("read project"):
             row = self._conn.execute(
                 "SELECT * FROM projects WHERE name = ?", (name,)
             ).fetchone()
-        if row is None:
-            raise ProjectNotFoundError(name)
-        return _row_to_project(row)
+            if row is None:
+                raise ProjectNotFoundError(name)
+            return _row_to_project(row)
 
     def blocked_ids(self) -> set[int]:
         """Ids of non-done items with at least one non-done blocker.
@@ -705,7 +709,7 @@ class SqliteStorage:
             rows = self._conn.execute(
                 f"SELECT * FROM projects{where} ORDER BY name ASC"
             ).fetchall()
-        return [_row_to_project(r) for r in rows]
+            return [_row_to_project(r) for r in rows]
 
     def update_project(
         self,
@@ -770,7 +774,7 @@ class SqliteStorage:
             row = self._conn.execute(
                 "SELECT * FROM project_updates WHERE id = ?", (cur.lastrowid,)
             ).fetchone()
-        return _row_to_update(row)
+            return _row_to_update(row)
 
     def list_project_updates(self, project_id: int) -> "UpdateList":
         with self._read_guard("read project log"):
@@ -779,4 +783,4 @@ class SqliteStorage:
                 "ORDER BY created_at DESC, id DESC",
                 (project_id,),
             ).fetchall()
-        return [_row_to_update(r) for r in rows]
+            return [_row_to_update(r) for r in rows]

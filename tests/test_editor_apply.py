@@ -442,3 +442,48 @@ class TestEditorNonzeroExitKeepsBuffer:
             match = re.search(r"kept at (\S+)", notices[0])
             assert match is not None
             assert Path(match.group(1)).exists()
+
+
+class TestEditorEncodingRobustness:
+    async def test_non_utf8_buffer_reports_instead_of_crashing(
+        self, db_path: Path, tmp_path: Path
+    ) -> None:
+        """An editor that saves in latin-1 must not kill the session, and
+        must be told where its buffer is (UnicodeDecodeError is a
+        ValueError, so an OSError-only handler misses it)."""
+        from todo.tui.list_view import TodoListView
+
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Task")
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            view = app.query_one(TodoListView)
+            buf = tmp_path / "latin1.todo.txt"
+            buf.write_bytes("title: caf\xe9".encode("latin-1"))
+            notices: list[str] = []
+            view.notify = lambda msg, **kw: notices.append(str(msg))  # type: ignore[method-assign]
+
+            content = view._read_edited_buffer(str(buf))
+
+            assert app.is_running
+            assert content is None
+            assert notices and str(buf) in notices[0]
+
+    async def test_unencodable_item_text_does_not_crash(self, db_path: Path) -> None:
+        """Buffer writing must use an explicit encoding, so item text is
+        never at the mercy of the locale."""
+        from todo.tui.list_view import TodoListView
+
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Ünïcode ✅ täsk", body="emoji 🎉 body")
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            view = app.query_one(TodoListView)
+            path = view._write_editor_buffer(_item_to_editor_text(storage.get(1)))
+            try:
+                assert "Ünïcode ✅ täsk" in Path(path).read_text(encoding="utf-8")
+                assert view._read_edited_buffer(path) is not None
+            finally:
+                Path(path).unlink(missing_ok=True)

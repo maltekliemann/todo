@@ -169,3 +169,54 @@ class TestConnectErrorWrapping:
         storage._conn = _Proxy()  # type: ignore[assignment]
         with pytest.raises(StorageError):
             storage.add_project_update(project.id, "hello")
+
+
+class TestUndecodableRowWrapping:
+    """A row the adapter cannot decode is a storage failure like any
+    other: it must surface as StorageError, not a raw ValueError that
+    both frontends' guards miss."""
+
+    def _poison(self, tmp_path: Path, column: str, value: str) -> SqliteStorage:
+        storage = SqliteStorage(tmp_path / "db.db")
+        storage.add("x")
+        storage._conn.execute(f"UPDATE todos SET {column} = ?", (value,))
+        storage._conn.commit()
+        return storage
+
+    def test_bad_priority_enum_raises_storage_error(self, tmp_path: Path) -> None:
+        storage = self._poison(tmp_path, "priority", "p1")
+        with pytest.raises(StorageError):
+            storage.get(1)
+        with pytest.raises(StorageError):
+            storage.list()
+        storage.close()
+
+    def test_bad_timestamp_raises_storage_error(self, tmp_path: Path) -> None:
+        storage = self._poison(tmp_path, "created_at", "not-a-timestamp")
+        with pytest.raises(StorageError):
+            storage.get(1)
+        storage.close()
+
+    def test_bad_project_row_raises_storage_error(self, tmp_path: Path) -> None:
+        storage = SqliteStorage(tmp_path / "db.db")
+        project = storage.add_project("p")
+        storage._conn.execute("UPDATE projects SET status = 'bogus'")
+        storage._conn.commit()
+        with pytest.raises(StorageError):
+            storage.get_project(project.id)
+        with pytest.raises(StorageError):
+            storage.list_projects(include_archived=True)
+        storage.close()
+
+    def test_cli_reports_undecodable_row_cleanly(self, tmp_path: Path) -> None:
+        db = tmp_path / "t.db"
+        storage = SqliteStorage(db)
+        storage.add("x")
+        storage._conn.execute("UPDATE todos SET priority = 'p1'")
+        storage._conn.commit()
+        storage.close()
+        runner = CliRunner()
+        result = runner.invoke(main, ["show", "1"], env={"TODO_DB": str(db)})
+        assert result.exit_code == 1
+        assert "Database error" in result.stderr
+        assert "Traceback" not in result.stderr

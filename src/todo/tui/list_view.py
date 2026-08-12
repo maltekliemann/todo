@@ -935,11 +935,11 @@ class TodoListView(Widget):
         editor = os.environ.get("EDITOR", "vi")
         text = _item_to_editor_text(item)
 
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".todo.txt", delete=False
-        ) as f:
-            f.write(text)
-            tmp_path = f.name
+        try:
+            tmp_path = self._write_editor_buffer(text)
+        except OSError as exc:
+            self.notify(f"Editor failed: {escape(str(exc))}", severity="error")
+            return
 
         try:
             with self.app.suspend():
@@ -970,14 +970,30 @@ class TodoListView(Widget):
 
         self._apply_edited_buffer(item_id, text, edited, tmp_path)
 
+    def _write_editor_buffer(self, text: str) -> str:
+        """Write the buffer for $EDITOR, always as UTF-8.
+
+        Explicit encoding, not the locale's: item text is arbitrary Unicode
+        and a non-UTF-8 locale would fail to encode it.
+        """
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".todo.txt", delete=False, encoding="utf-8"
+        ) as f:
+            f.write(text)
+            return f.name
+
     def _read_edited_buffer(self, tmp_path: str) -> str | None:
         """Read the buffer back after the editor ran; on failure, report
         where the (possibly recoverable) buffer lives — the flow must never
-        strand a file with the user's work silently."""
+        strand a file with the user's work silently.
+
+        UnicodeDecodeError (an editor that saved as latin-1/cp1252) is a
+        ValueError, not an OSError, and would otherwise kill the session.
+        """
         try:
-            with open(tmp_path) as f:
+            with open(tmp_path, encoding="utf-8") as f:
                 return f.read()
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             self.notify(
                 f"Editor failed: {escape(str(exc))} — "
                 f"your buffer is kept at {escape(tmp_path)}",
