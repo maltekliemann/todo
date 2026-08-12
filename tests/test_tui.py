@@ -169,6 +169,40 @@ class TestPrdKeyBindings:
                 assert not is_separator(key)
 
 
+class TestFooterFits:
+    """The footer is one row and does not wrap: anything past the right
+    edge is invisible, and the tail is where the least-known keys live."""
+
+    @pytest.mark.parametrize("width", [80, 100, 120])
+    async def test_footer_fits_the_terminal(
+        self, seeded_storage: SqliteStorage, width: int
+    ) -> None:
+        from textual.widgets import Footer
+
+        app = TodoApp(storage=seeded_storage)
+        async with app.run_test(size=(width, 24)) as pilot:
+            await pilot.pause()
+            footer = app.query_one(Footer)
+            assert footer.virtual_size.width <= width, (
+                f"{footer.virtual_size.width} columns of footer in {width}"
+            )
+
+    async def test_special_keys_show_their_symbol(
+        self, seeded_storage: SqliteStorage
+    ) -> None:
+        """'greater_than_sign' is a key name, not something to show a user."""
+        from textual.widgets._footer import FooterKey
+
+        app = TodoApp(storage=seeded_storage)
+        async with app.run_test(size=(120, 24)) as pilot:
+            await pilot.pause()
+            displays = {k.key: k.key_display for k in app.query(FooterKey)}
+            assert displays.get("greater_than_sign") == ">"
+            assert displays.get("less_than_sign") == "<"
+            assert displays.get("full_stop") == "."
+            assert displays.get("slash") == "/"
+
+
 class TestPriorityAndDeadlineStyling:
     """PRD § Priority Color Coding and § Deadline Warnings: the TUI table
     must flag priority and deadline proximity, not render everything flat."""

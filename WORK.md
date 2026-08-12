@@ -1,69 +1,39 @@
 # WORK
 
-PRD audit run 2026-08-12 against commit 9edf848. Every item below was
-reproduced against the running code before being listed.
+Round 2, opened 2026-08-13 from your list. Every item reproduced against the
+running program before being listed.
 
 ## todo
 
-_(none)_
-
-**Done.** No `todo` items remain and both review passes are used.
-
-## review pass 2 (9edf848..HEAD, final)
-
-No findings. Four finders returned empty; nothing reached verification.
-
-## review pass 1 (9edf848..HEAD)
-
-Two findings, both verified by hand.
-
-- **Accepted:** binding `←`/`→` to the status step took over DataTable's
-  incremental horizontal scroll, so a title wider than the terminal became
-  unreachable from the keyboard. Reproduced at HEAD and at `29ad72a`
-  (`scroll_x` 0 → 1 before, 0 after). The PRD binding stays; `shift+left`
-  / `shift+right` restore the lost scrolling. `79d68d9`.
-- **Declined:** "non-urgent deadlines render dim where the PRD says shown
-  normally". Tagged cleanup, self-described as lower confidence, and it
-  matches what `todo list` has always done — an existing test asserts it.
-  Changing it would be encoding the reviewer's taste.
+1. **The footer is cut off.** 16 bindings render 187 columns into a
+   single-row footer; at width 80, 100 and 120 the tail is invisible —
+   which includes `.` (cursor mode). The special keys also render under
+   their raw names (`greater_than_sign`, `less_than_sign`, `full_stop`,
+   `slash`) instead of `>`, `<`, `.`, `/`.
+2. **Setting a blocker requires remembering an id.** `BlockDialog` is a
+   bare `Input`: you type `3` to add and `-3` to remove. Wanted: pick from
+   a searchable list.
+3. **The `$EDITOR` buffer shows neither the project nor the blockers.**
+   `item_to_editor_text` emits title/priority/status/deadline/tags/body
+   only. (The inspect modal — `i` / `Enter` — does show both; verified.)
+4. **Stay mode doesn't let you walk the list with `>`/`<`.** Repro: five
+   items, press `.` for stay, then `>` three times. The cursor sits on row
+   1 the whole time, but the item that lands on row 1 is the one just
+   moved (in-progress sorts above todo), so the same item is advanced
+   again and again. With `d` it happens to work, because done sorts to the
+   bottom.
+5. **The table shows no dependency information.** Which items block a row,
+   and how many items it blocks, appear only in the detail pane for the
+   selected item.
 
 ## declined
 
-- **`Enter` should edit in `$EDITOR`** (PRD § Key Bindings). Declined: the
-  hand-written commit 658ec6b ("add view modal") deliberately bound `Enter`
-  to the inspect modal. `e` edits. Later intent beats the PRD line.
-- **`Esc` should quit** (PRD § Key Bindings). Declined: 6b0f47f deliberately
-  bound `Esc` to clearing the filter. `q` quits.
-- **`🚧` prefix missing from piped `todo list`** (PRD:221). Declined: the
-  Rich TTY list — the human CLI list — carries it; plain output is the
-  machine format and is deliberately undecorated.
-- **Overdue "sorted to top"** (PRD § Deadline Warnings). Declined: overdue
-  already sorts first inside its status group, which is what the PRD's own
-  example list shows.
+_(nothing yet this round)_
 
 ## done
 
-1. **`todo project rm --json`** — PRD:80. Emits the deleted project's
-   record. `29ad72a`.
-2. **TUI `j`/`k` navigation** — PRD § Key Bindings. `18f0f29`.
-3. **TUI `h`/`l`/`←`/`→` status stepping** — PRD § Key Bindings. `<`/`>`
-   kept. `18f0f29`.
-4. **TUI priority colour coding** — PRD § Priority Color Coding. `c7d61bc`.
-5. **TUI deadline highlighting** — PRD § Deadline Warnings. The deadline
-   cell carries the colour, as in the CLI, rather than painting the whole
-   row. `c7d61bc`.
-6. **`tui/list_view.py` split** — 1259 lines and 8 classes became seven
-   modules: `table`, `dialogs`, `render`, `editor`, `edit_session`,
-   `filters`, `detail`, leaving a 459-line view.
-   `40ba293 011a39b 6d5660f 7b86902 e8ac5d2 ac6f96d`.
-7. **Coverage** — `pytest --cov=todo` reports 95% overall, every module
-   above 88%. The gaps that were real behaviour (filter cycling when the
-   filtered tag or project has been deleted) now have direct tests.
-   `363ecb4`.
-8. **`adapters/sqlite_storage.py`** — the schema and its four versioned
-   migrations moved to `sqlite_migrations.py` (`7186670`); they change for
-   their own reason and are append-only. The remaining 702 lines are one
-   class implementing one Protocol over one connection. Splitting it
-   further (todos vs projects) would mean mixins sharing the connection,
-   the transaction and the read guard through a base class's private
-   state — worse code than the line count it would fix. Stopping here.
+_(nothing yet this round)_
+
+---
+
+Round 1 (PRD audit + the TUI split) is in git history: `9edf848..3663d44`.

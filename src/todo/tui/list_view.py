@@ -35,28 +35,53 @@ from todo.tui.filters import Filters
 from todo.tui.render import escape_markup
 from todo.tui.table import COLUMNS, TodoTable, is_separator
 
+_STATUS_GROUP = Binding.Group("Status", compact=True)
+_FILTER_GROUP = Binding.Group("Filter", compact=True)
+
 
 class TodoListView(Widget):
+    # The footer is a single non-wrapping row: every description here is
+    # paying for itself in columns, and related keys are grouped under one
+    # label rather than repeating a word each.
     BINDINGS = [
-        Binding("q", "quit_app", "Quit", show=True),
         Binding("n", "new", "New", show=True),
-        Binding("i", "inspect", "Inspect", show=True),
-        Binding("d", "done", "Done", show=True),
+        Binding("i", "inspect", "View", show=True),
         Binding("e", "edit", "Edit", show=True),
-        Binding("x,delete", "delete", "Delete", show=True),
+        Binding("d", "done", "Done", show=True),
+        Binding("x,delete", "delete", "Del", show=True),
         Binding("b", "block", "Block", show=True),
-        Binding("greater_than_sign", "status_next", "Status >", show=True),
-        Binding("less_than_sign", "status_prev", "Status <", show=True),
-        Binding("slash", "search", "Search", show=True),
-        Binding("t", "cycle_tag", "Tag filter", show=True),
-        Binding("p", "cycle_project", "Project filter", show=True),
+        Binding(
+            "less_than_sign",
+            "status_prev",
+            "Status <",
+            key_display="<",
+            group=_STATUS_GROUP,
+        ),
+        Binding(
+            "greater_than_sign",
+            "status_next",
+            "Status >",
+            key_display=">",
+            group=_STATUS_GROUP,
+        ),
+        # 1-4 stay out of the footer: four more keys plus their group
+        # label is 17 columns, and the priority digits are the easiest
+        # bindings to guess.
         Binding("1", "filter_priority('urgent')", "Urgent", show=False),
         Binding("2", "filter_priority('high')", "High", show=False),
         Binding("3", "filter_priority('medium')", "Medium", show=False),
         Binding("4", "filter_priority('low')", "Low", show=False),
-        Binding("0", "clear_filters", "Clear filters", show=True),
-        Binding("escape", "clear_search", "Clear filter", show=True),
-        Binding("full_stop", "toggle_cursor_mode", "Cursor mode", show=True),
+        Binding("slash", "search", "Search", key_display="/", group=_FILTER_GROUP),
+        Binding("t", "cycle_tag", "Tag filter", group=_FILTER_GROUP),
+        Binding("p", "cycle_project", "Project filter", group=_FILTER_GROUP),
+        Binding("0", "clear_filters", "Clear filters", group=_FILTER_GROUP),
+        Binding(
+            "full_stop", "toggle_cursor_mode", "Cursor", key_display=".", show=True
+        ),
+        Binding("q", "quit_app", "Quit", show=True),
+        # Not in the footer: escape duplicates what 0 does, and the footer
+        # row is the scarce resource.
+        Binding("escape", "clear_search", "Clear filter", show=False),
     ]
 
     POLL_INTERVAL_SECONDS = 2.0
@@ -77,7 +102,7 @@ class TodoListView(Widget):
         yield TodoTable(id="item-list", cursor_type="row", zebra_stripes=True)
         yield DetailPane(id="detail-panel")
         yield Static("", id="search-status")
-        yield Footer()
+        yield Footer(compact=True, show_command_palette=False)
 
     def on_mount(self) -> None:
         table = self.query_one("#item-list", DataTable)
