@@ -100,8 +100,9 @@ is done.
 - [x] Migration smoke: DB built from the actual 658ec6b schema (todos only,
       no deps/projects/user_version) opens with current code — data intact,
       blockers/projects/log all work, user_version lands at 2. (iter 16)
-- [ ] Full-diff review pass vs `658ec6b`; then write `FINAL_REPORT.md` and stop
-      the loop.
+- [x] Full-diff review pass vs `658ec6b`: no bugs; removed dead
+      assign_project, fixed PRD search wording (4baa38d). FINAL_REPORT.md
+      written. Loop complete.
 
 ## Decisions
 
@@ -150,3 +151,6 @@ is done.
 - 2026-08-12 iter 16: Phase 6 verification complete — clean-state gates, e2e
   CLI smoke, migration smoke from true pre-loop schema. Only the full-diff
   review pass + FINAL_REPORT.md remain.
+- 2026-08-12 iter 17: full-diff review clean (two cosmetic fixes, 4baa38d),
+  FINAL_REPORT.md written. All phases complete — loop stopped. Final state:
+  208 tests passed, mypy strict clean, ruff clean, format clean.
