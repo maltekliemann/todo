@@ -8,10 +8,6 @@ reproduced against the running code before being listed.
 6. **`adapters/sqlite_storage.py` is 809 lines.** LOOP3 § Maintain clean
    architecture — "one reason to change per module, no file over ~400
    lines". Not yet examined for whether it holds more than one concern.
-7. **Coverage check not yet run.** LOOP3 § Bring test coverage to a
-   reasonable amount. `pytest --cov=todo` has not been run against the new
-   module split; `filters.py` and `table.populate` have no direct unit
-   tests.
 
 ## declined
 
@@ -42,3 +38,7 @@ reproduced against the running code before being listed.
    modules: `table`, `dialogs`, `render`, `editor`, `edit_session`,
    `filters`, `detail`, leaving a 459-line view.
    `40ba293 011a39b 6d5660f 7b86902 e8ac5d2 ac6f96d`.
+7. **Coverage** — `pytest --cov=todo` reports 95% overall, every module
+   above 88%. The gaps that were real behaviour (filter cycling when the
+   filtered tag or project has been deleted) now have direct tests.
+   `363ecb4`.
