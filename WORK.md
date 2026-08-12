@@ -7,6 +7,12 @@ reproduced against the running code before being listed.
 
 _(none)_
 
+**Done.** No `todo` items remain and both review passes are used.
+
+## review pass 2 (9edf848..HEAD, final)
+
+No findings. Four finders returned empty; nothing reached verification.
+
 ## review pass 1 (9edf848..HEAD)
 
 Two findings, both verified by hand.
