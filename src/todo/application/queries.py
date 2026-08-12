@@ -132,9 +132,10 @@ def show_project(
 def count_tags(storage: StorageProtocol) -> list[tuple[str, int]]:
     """All tags with usage counts (done items included), most used first."""
     counts: dict[str, int] = {}
-    for item in storage.list(include_done=True):
-        for tag in item.tags:
-            counts[tag] = counts.get(tag, 0) + 1
+    for raw in storage.tag_strings():
+        for tag in (t.strip() for t in raw.split(",")):
+            if tag:
+                counts[tag] = counts.get(tag, 0) + 1
     return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
 
 

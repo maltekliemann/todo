@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
@@ -9,7 +9,9 @@ from zoneinfo import ZoneInfo
 
 from todo.application.contracts.storage import (
     UNSET,
+    EdgeList,
     ProjectList,
+    TagStringList,
     Unset,
     UpdateList,
 )
@@ -42,10 +44,46 @@ CREATE TABLE IF NOT EXISTS todo_dependencies (
 );
 """
 
+
+def _single_line(value: str) -> str:
+    return " ".join(value.split())
+
+
+def _migration_v3_normalize(conn: sqlite3.Connection) -> None:
+    """Normalize rows written before single-line normalization existed.
+
+    Runs in Python so it matches _normalize_title's exact semantics (all
+    whitespace runs collapse) and so project-name collisions get a unique
+    ' #id' suffix instead of blowing up the UNIQUE constraint and locking
+    the user out of the database.
+    """
+    for item_id, title in conn.execute("SELECT id, title FROM todos").fetchall():
+        normalized = _single_line(title) or f"Untitled #{item_id}"
+        if normalized != title:
+            conn.execute(
+                "UPDATE todos SET title = ? WHERE id = ?", (normalized, item_id)
+            )
+
+    projects = conn.execute("SELECT id, name FROM projects ORDER BY id").fetchall()
+    taken = {name for _, name in projects if _single_line(name) == name}
+    for project_id, name in projects:
+        normalized = _single_line(name) or f"project #{project_id}"
+        if normalized == name:
+            continue
+        while normalized in taken:
+            normalized = f"{normalized} #{project_id}"
+        conn.execute(
+            "UPDATE projects SET name = ? WHERE id = ?", (normalized, project_id)
+        )
+        taken.add(normalized)
+
+
 # Versioned migrations, gated by PRAGMA user_version. Index i migrates a
 # database at user_version i to i+1. A fresh database runs all of them, so
-# fresh and upgraded databases end up with the identical schema.
-_MIGRATIONS: list[str] = [
+# fresh and upgraded databases end up with the identical schema. SQL entries
+# are split on ';' — statements must not contain literal semicolons; use a
+# callable for anything data-dependent.
+_MIGRATIONS: list[str | Callable[[sqlite3.Connection], None]] = [
     """\
 CREATE TABLE projects (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -66,16 +104,7 @@ CREATE TABLE project_updates (
     created_at TEXT    NOT NULL
 );
 """,
-    # v3: rows written before single-line normalization existed would be
-    # silently truncated by the editor round-trip — clean them in place.
-    """\
-UPDATE todos SET title = TRIM(REPLACE(
-    REPLACE(REPLACE(title, char(13), ' '), char(10), ' '), '  ', ' '))
-WHERE title LIKE '%' || char(10) || '%' OR title LIKE '%' || char(13) || '%';
-UPDATE projects SET name = TRIM(REPLACE(
-    REPLACE(REPLACE(name, char(13), ' '), char(10), ' '), '  ', ' '))
-WHERE name LIKE '%' || char(10) || '%' OR name LIKE '%' || char(13) || '%';
-""",
+    _migration_v3_normalize,
 ]
 
 
@@ -168,15 +197,25 @@ class SqliteStorage:
         for target, script in enumerate(_MIGRATIONS[version:], start=version + 1):
             self._apply_migration(target, script)
 
-    def _apply_migration(self, target: int, script: str) -> None:
+    def _apply_migration(
+        self,
+        target: int,
+        migration: str | Callable[[sqlite3.Connection], None],
+    ) -> None:
         # Each migration and its version bump run in ONE IMMEDIATE
         # transaction: a crash partway can never strand a half-applied
         # schema, and concurrent openers serialize on the write lock.
         try:
-            self._conn.executescript(
-                f"BEGIN IMMEDIATE;\n{script}\nPRAGMA user_version = {target};\nCOMMIT;"
-            )
-        except sqlite3.OperationalError:
+            self._conn.execute("BEGIN IMMEDIATE")
+            if callable(migration):
+                migration(self._conn)
+            else:
+                for statement in migration.split(";"):
+                    if statement.strip():
+                        self._conn.execute(statement)
+            self._conn.execute(f"PRAGMA user_version = {target}")
+            self._conn.commit()
+        except sqlite3.Error:
             self._conn.rollback()
             current = int(self._conn.execute("PRAGMA user_version").fetchone()[0])
             if current >= target:
@@ -363,8 +402,11 @@ class SqliteStorage:
 
     def delete(self, item_id: int) -> None:
         self.get(item_id)  # raises NotFoundError if missing
-        self._conn.execute("DELETE FROM todos WHERE id = ?", (item_id,))
-        self._commit()
+        try:
+            self._conn.execute("DELETE FROM todos WHERE id = ?", (item_id,))
+            self._commit()
+        except sqlite3.Error as e:
+            raise StorageError(f"Failed to delete todo #{item_id}: {e}") from e
 
     def done_since(self, since: datetime) -> list[TodoItem]:
         rows = self._conn.execute(
@@ -538,6 +580,18 @@ class SqliteStorage:
             raise ProjectNotFoundError(name)
         return _row_to_project(row)
 
+    def dependency_edges(self) -> EdgeList:
+        """All (blocker_id, blocked_id) edges — one query for graph walks."""
+        rows = self._conn.execute(
+            "SELECT blocker_id, blocked_id FROM todo_dependencies"
+        ).fetchall()
+        return [(r["blocker_id"], r["blocked_id"]) for r in rows]
+
+    def tag_strings(self) -> TagStringList:
+        """Raw tags column for every todo — one column scan for counting."""
+        rows = self._conn.execute("SELECT tags FROM todos").fetchall()
+        return [r["tags"] for r in rows]
+
     def project_counts(self) -> dict[int, tuple[int, int]]:
         """project_id -> (open, done) item counts, computed in SQL."""
         rows = self._conn.execute(
@@ -598,8 +652,11 @@ class SqliteStorage:
 
     def delete_project(self, project_id: int) -> None:
         self.get_project(project_id)  # raises ProjectNotFoundError if missing
-        self._conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
-        self._commit()
+        try:
+            self._conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+            self._commit()
+        except sqlite3.Error as e:
+            raise StorageError(f"Failed to delete project #{project_id}: {e}") from e
 
     def add_project_update(self, project_id: int, body: str) -> ProjectUpdate:
         self.get_project(project_id)  # raises ProjectNotFoundError if missing

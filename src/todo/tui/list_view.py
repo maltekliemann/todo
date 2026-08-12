@@ -44,7 +44,7 @@ from todo.application.queries import (
 )
 from todo.domain.enums import Priority, Status
 from todo.domain.models import TodoItem
-from todo.exceptions import DependencyError, NotFoundError, TodoError
+from todo.exceptions import NotFoundError, TodoError
 
 _SEPARATOR_PREFIX = "__sep_"
 
@@ -407,13 +407,21 @@ class NewItemDialog(ModalScreen[TodoItem | None]):
             [t.strip() for t in tags_str.split(",") if t.strip()] if tags_str else None
         )
 
-        item = add_todo(
-            self._storage,
-            title,
-            priority=priority,
-            deadline=deadline,
-            tags=tags,
-        )
+        try:
+            item = add_todo(
+                self._storage,
+                title,
+                priority=priority,
+                deadline=deadline,
+                tags=tags,
+            )
+        except (TodoError, ValueError) as exc:
+            # E.g. a locked database or a rejected tag: report inline and
+            # keep the dialog (and the user's typed input) alive.
+            self.query_one("#dialog-error", Label).update(
+                Text(str(exc) if str(exc) else "Could not save item")
+            )
+            return
         self.dismiss(item)
 
 
@@ -472,7 +480,9 @@ class BlockDialog(ModalScreen[str | None]):
                 unblock_todo(self._storage, self._blocked_id, -blocker_id)
             else:
                 block_todo(self._storage, self._blocked_id, blocker_id)
-        except (NotFoundError, DependencyError, ValueError) as exc:
+        except (TodoError, ValueError) as exc:
+            # Covers bad ids, cycles, AND storage-level failures (e.g. a
+            # locked database) — the dialog reports inline, never crashes.
             # Error text can echo raw user input; never render it as markup.
             error_w.update(Text(str(exc) if str(exc) else "Invalid blocker id"))
             return
@@ -868,8 +878,13 @@ class TodoListView(Widget):
             os.unlink(tmp_path)
             return
 
-        with open(tmp_path) as f:
-            edited = f.read()
+        try:
+            with open(tmp_path) as f:
+                edited = f.read()
+        except OSError as exc:
+            # An editor wrapper that moved/deleted its buffer file.
+            self.notify(f"Editor failed: {escape(str(exc))}", severity="error")
+            return
 
         self._apply_edited_buffer(item_id, text, edited, tmp_path)
 

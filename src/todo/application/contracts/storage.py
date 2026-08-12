@@ -21,6 +21,8 @@ UNSET = Unset.UNSET
 # method, so `list[...]` would not resolve to the builtin there.
 ProjectList = list[Project]
 UpdateList = list[ProjectUpdate]
+EdgeList = list[tuple[int, int]]
+TagStringList = list[str]
 
 
 @runtime_checkable
@@ -82,6 +84,10 @@ class StorageProtocol(Protocol):
     def list_projects(self, *, include_archived: bool = False) -> ProjectList: ...
 
     def project_counts(self) -> dict[int, tuple[int, int]]: ...
+
+    def dependency_edges(self) -> EdgeList: ...
+
+    def tag_strings(self) -> TagStringList: ...
 
     def update_project(
         self,

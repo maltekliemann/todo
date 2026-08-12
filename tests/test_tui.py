@@ -1072,3 +1072,57 @@ class TestConcurrentDeletionGuards:
             await pilot.press("greater_than_sign")
             await pilot.pause()
             assert app.is_running
+
+
+class _LockedStorage(SqliteStorage):
+    """Simulates a database whose write lock another process holds."""
+
+    from todo.exceptions import StorageError as _SE
+
+    def add_blocker(self, blocked_id: int, blocker_id: int) -> None:
+        raise self._SE("Failed to add blocker: database is locked")
+
+    def add(self, title: str, **kwargs):  # type: ignore[override]
+        raise self._SE("Failed to add todo: database is locked")
+
+
+class TestLockedDatabaseDialogs:
+    async def test_block_dialog_shows_storage_error_inline(self, db_path: Path) -> None:
+        storage = _LockedStorage(db_path)
+        SqliteStorage.add(storage.__class__.__bases__[0], "seed") if False else None
+        # Seed via a plain connection so add() override doesn't block us.
+        plain = SqliteStorage(db_path)
+        add_todo(plain, "One")
+        add_todo(plain, "Two")
+        plain.close()
+
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("b")
+            await pilot.pause()
+            await pilot.press("2")
+            await pilot.press("enter")
+            await pilot.pause()
+            from todo.tui.list_view import BlockDialog
+
+            assert app.is_running
+            assert isinstance(app.screen, BlockDialog)  # stays open with error
+
+    async def test_new_item_save_shows_storage_error(self, db_path: Path) -> None:
+        plain = SqliteStorage(db_path)
+        add_todo(plain, "Existing")
+        plain.close()
+        storage = _LockedStorage(db_path)
+
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("n")
+            await pilot.pause()
+            for ch in "New":
+                await pilot.press(ch)
+            for _ in range(4):
+                await pilot.press("enter")
+                await pilot.pause()
+            assert app.is_running

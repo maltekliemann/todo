@@ -192,3 +192,56 @@ class TestLegacyDataNormalization:
         assert "part one part two" in titles
         assert all("\n" not in t for t in titles)
         storage.close()
+
+
+def _make_v2_db_with_projects(path: Path, names: list[str]) -> None:
+    """A database exactly as v2 code left it: projects exist, no v3 cleanup."""
+    from todo.adapters.sqlite_storage import _MIGRATIONS
+
+    _make_legacy_db(path)
+    conn = sqlite3.connect(str(path))
+    for script in _MIGRATIONS[:2]:
+        conn.executescript(script)
+    for name in names:
+        conn.execute(
+            "INSERT INTO projects (name, description, status, created_at, "
+            "updated_at) VALUES (?, '', 'active', '2026-01-01T00:00:00+00:00', "
+            "'2026-01-01T00:00:00+00:00')",
+            (name,),
+        )
+    conn.execute("PRAGMA user_version = 2")
+    conn.commit()
+    conn.close()
+
+
+class TestV3MigrationCollisions:
+    def test_colliding_project_names_do_not_brick_the_db(self, tmp_path: Path) -> None:
+        """Two legacy names normalizing to the same string must not blow up
+        the UNIQUE constraint and lock the user out of their data."""
+        db = tmp_path / "db.db"
+        _make_v2_db_with_projects(db, ["alpha\nbeta", "alpha beta"])
+
+        storage = SqliteStorage(db)  # must not raise
+        names = [p.name for p in storage.list_projects(include_archived=True)]
+        assert len(names) == len(set(names))  # unique
+        assert all("\n" not in n for n in names)
+        assert "alpha beta" in names
+        storage.close()
+
+    def test_whitespace_runs_fully_collapsed(self, tmp_path: Path) -> None:
+        db = tmp_path / "db.db"
+        _make_legacy_db(db)
+        conn = sqlite3.connect(str(db))
+        conn.execute(
+            "INSERT INTO todos (title, body, created_at, updated_at, tags) "
+            "VALUES ('part one' || char(10) || char(10) || char(10) || "
+            "'part two', '', '2026-01-01T00:00:00+00:00', "
+            "'2026-01-01T00:00:00+00:00', '')"
+        )
+        conn.commit()
+        conn.close()
+
+        storage = SqliteStorage(db)
+        titles = [i.title for i in storage.list(include_done=True)]
+        assert "part one part two" in titles  # no double spaces
+        storage.close()

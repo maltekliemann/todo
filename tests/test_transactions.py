@@ -81,3 +81,34 @@ class TestStorageErrorWrapping:
         with pytest.raises(StorageError):
             with storage.transaction():
                 pass  # BEGIN on a closed connection fails at sqlite level
+
+
+class _NoGetStorage(SqliteStorage):
+    """Bypasses the existence check so delete hits SQL on a closed conn."""
+
+    def get(self, item_id: int):  # type: ignore[override]
+        class _Stub:
+            blocking: list[int] = []
+
+        return _Stub()
+
+    def get_project(self, project_id: int):  # type: ignore[override]
+        return None
+
+
+class TestDeleteErrorWrapping:
+    def test_delete_wraps_sqlite_errors(self, db_path) -> None:
+        from todo.exceptions import StorageError
+
+        storage = _NoGetStorage(db_path)
+        storage._conn.close()
+        with pytest.raises(StorageError):
+            storage.delete(1)
+
+    def test_delete_project_wraps_sqlite_errors(self, db_path) -> None:
+        from todo.exceptions import StorageError
+
+        storage = _NoGetStorage(db_path)
+        storage._conn.close()
+        with pytest.raises(StorageError):
+            storage.delete_project(1)
