@@ -189,7 +189,10 @@ class SqliteStorage:
         if self._in_txn:
             yield
             return
-        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+        except sqlite3.Error as e:
+            raise StorageError(f"Failed to start transaction: {e}") from e
         self._in_txn = True
         try:
             yield
@@ -199,7 +202,10 @@ class SqliteStorage:
             raise
         else:
             self._in_txn = False
-            self._conn.commit()
+            try:
+                self._conn.commit()
+            except sqlite3.Error as e:
+                raise StorageError(f"Failed to commit transaction: {e}") from e
 
     def _commit(self) -> None:
         """Commit unless inside an explicit transaction (which owns it)."""

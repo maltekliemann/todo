@@ -1035,3 +1035,40 @@ class TestKeyBindingsDontHang:
             await pilot.pause()
             # If we got here without hanging, we're good
             assert app.is_running
+
+
+class TestConcurrentDeletionGuards:
+    async def test_done_on_vanished_item_does_not_crash(
+        self, seeded_storage: SqliteStorage
+    ) -> None:
+        app = TodoApp(storage=seeded_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            seeded_storage.delete(1)  # vanishes between poll refreshes
+            await pilot.press("d")
+            await pilot.pause()
+            assert app.is_running
+
+    async def test_confirmed_delete_of_vanished_item_does_not_crash(
+        self, seeded_storage: SqliteStorage
+    ) -> None:
+        app = TodoApp(storage=seeded_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("x")
+            await pilot.pause()
+            seeded_storage.delete(1)  # deleted while the dialog was open
+            await pilot.press("y")
+            await pilot.pause()
+            assert app.is_running
+
+    async def test_status_move_on_vanished_item_does_not_crash(
+        self, seeded_storage: SqliteStorage
+    ) -> None:
+        app = TodoApp(storage=seeded_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            seeded_storage.delete(1)
+            await pilot.press("greater_than_sign")
+            await pilot.pause()
+            assert app.is_running

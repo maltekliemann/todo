@@ -68,3 +68,16 @@ class TestCompletionInvariant:
         result = complete_todo(storage, 1)
         assert result.item.is_done
         assert result.unblocked == []  # vanished dep simply omitted
+
+
+class TestStorageErrorWrapping:
+    def test_transaction_failure_is_a_todo_error(self, db_path) -> None:
+        """sqlite-level failures surface as StorageError (a TodoError), so
+        the TUI's single error guard can catch them like the CLI does."""
+        from todo.exceptions import StorageError
+
+        storage = SqliteStorage(db_path)
+        storage.close()
+        with pytest.raises(StorageError):
+            with storage.transaction():
+                pass  # BEGIN on a closed connection fails at sqlite level

@@ -235,3 +235,31 @@ class TestEditorFailureHandling:
             assert app.is_running
             # Item unchanged.
             assert storage.get(1).title == "Task"
+
+
+class TestEditorCommandValidation:
+    def test_empty_editor_value_raises(self) -> None:
+        from todo.tui.list_view import _editor_command
+
+        with pytest.raises(ValueError, match="EDITOR"):
+            _editor_command("", "/tmp/x")
+
+    def test_unbalanced_quote_raises_value_error(self) -> None:
+        from todo.tui.list_view import _editor_command
+
+        with pytest.raises(ValueError):
+            _editor_command('code "', "/tmp/x")
+
+
+class TestEditorEmptyTitle:
+    def test_blanked_title_line_rejects_whole_edit(
+        self, storage: SqliteStorage
+    ) -> None:
+        """'title:' blanked must error, not partially apply the edit."""
+        add_todo(storage, "Keep me")
+        buffer = _edited(storage, 1, title="", status="in-progress")
+        with pytest.raises(ValueError, match="[Tt]itle"):
+            apply_editor_edit(storage, 1, buffer)
+        # Nothing applied: status unchanged too.
+        assert storage.get(1).status.value == "todo"
+        assert storage.get(1).title == "Keep me"

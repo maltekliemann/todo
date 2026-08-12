@@ -137,8 +137,15 @@ def _deadline_str(item: TodoItem) -> str:
 
 
 def _editor_command(editor_value: str, path: str) -> list[str]:
-    """Split $EDITOR like git does, so values such as 'code --wait' work."""
-    return [*shlex.split(editor_value), path]
+    """Split $EDITOR like git does, so values such as 'code --wait' work.
+
+    Raises ValueError for an empty value or unbalanced quoting rather than
+    letting subprocess execute something nonsensical.
+    """
+    parts = shlex.split(editor_value)  # raises ValueError on bad quoting
+    if not parts:
+        raise ValueError("EDITOR is empty.")
+    return [*parts, path]
 
 
 def _item_to_editor_text(item: TodoItem) -> str:
@@ -182,6 +189,10 @@ def apply_editor_edit(
     tags: list[str] | None = None
     if "tags" in fields:
         tags = [t.strip() for t in fields["tags"].split(",") if t.strip()]
+
+    if "title" in fields and not fields["title"].strip():
+        # Same contract as deadline: bad input errors, never a partial apply.
+        raise ValueError("Title cannot be empty.")
 
     return edit_todo(
         storage,
@@ -845,7 +856,13 @@ class TodoListView(Widget):
         item_id = self._selected_item_id()
         if item_id is None:
             return
-        result = complete_todo(self._storage, item_id)
+        try:
+            result = complete_todo(self._storage, item_id)
+        except TodoError as exc:
+            # E.g. deleted by another process, or the database is locked.
+            self.notify(escape(str(exc)), severity="error")
+            self._refresh_list()
+            return
         self._notify_unblocked(result)
         self._refresh_list()
 
@@ -886,7 +903,8 @@ class TodoListView(Widget):
             with self.app.suspend():
                 subprocess.run(_editor_command(editor, tmp_path), check=True)
         except (
-            FileNotFoundError,
+            ValueError,  # empty/misquoted $EDITOR
+            OSError,  # missing binary, permission denied, ...
             subprocess.CalledProcessError,
             SuspendNotSupported,
         ) as exc:
@@ -930,7 +948,11 @@ class TodoListView(Widget):
 
         def after(confirmed: bool | None) -> None:
             if confirmed:
-                delete_todo(self._storage, item_id)
+                try:
+                    delete_todo(self._storage, item_id)
+                except TodoError as exc:
+                    # E.g. deleted by another process while the dialog was open.
+                    self.notify(escape(str(exc)), severity="error")
                 self._refresh_list()
 
         self.app.push_screen(ConfirmDialog(f"Delete #{item_id}?"), after)
@@ -1031,7 +1053,12 @@ class TodoListView(Widget):
             return
         next_status = item.status.next()
         if next_status is not None:
-            result = move_todo(self._storage, item_id, next_status)
+            try:
+                result = move_todo(self._storage, item_id, next_status)
+            except TodoError as exc:
+                self.notify(escape(str(exc)), severity="error")
+                self._refresh_list()
+                return
             self._notify_unblocked(result)
             self._refresh_list()
 
@@ -1045,5 +1072,8 @@ class TodoListView(Widget):
             return
         prev_status = item.status.prev()
         if prev_status is not None:
-            move_todo(self._storage, item_id, prev_status)
+            try:
+                move_todo(self._storage, item_id, prev_status)
+            except TodoError as exc:
+                self.notify(escape(str(exc)), severity="error")
             self._refresh_list()
