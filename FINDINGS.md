@@ -246,15 +246,15 @@ real transaction. Treat 'my own fix' as untrusted input to this round.
 
 ## Round 9 — exit-gate review wf_80147dfd-f09 (2026-08-12), 9 distinct
 
-- [ ] `src/todo/adapters/sqlite_storage.py:208` [correctness] — sqlite3.connect failures (path is a directory, chmod-0 file) raise raw sqlite3.OperationalError; init's first try wraps only OSError
-- [ ] `src/todo/application/queries.py:79` [correctness] — Project names are whitespace-normalized on write but refs are looked up raw, so the exact creation string ("my  project") fails to resolve in every command
-- [ ] `src/todo/adapters/sqlite_storage.py:590` [correctness] — Tag filter uses ASCII-case-insensitive LIKE while tag identity is case-sensitive, so `-t Work` returns the union of 'Work' and 'work' contradicting `todo tags`
-- [ ] `src/todo/adapters/sqlite_storage.py:594` [correctness] — --search relies on LIKE's ASCII-only case folding, so 'über' misses 'Über' in the CLI while the TUI's Python search finds it — two frontends, same query, different results
-- [ ] `README.md:134` [correctness] — Key table claims Enter = 'Edit in $EDITOR' but Enter opens the read-only Inspect modal; 'i' is undocumented
-- [ ] `src/todo/adapters/sqlite_storage.py:769` [cleanup] — add_project_update's post-commit read-back is the only storage read outside _read_guard
-- [ ] `src/todo/application/commands.py:21` [cleanup] — Comma-tag parsing re-implemented in five places with diverged behavior; one shared domain helper should own the rule
-- [ ] `src/todo/application/commands.py:115` [cleanup] — Status changes run blocked_ids() scans even when the item blocks nothing; skip the diff when there are no dependents
-- [ ] `src/todo/adapters/sqlite_storage.py:48` [cleanup] — _single_line duplicates the write path's whitespace normalization with a docstring admitting manual sync; share one domain helper
+- [x] (94a7813) `src/todo/adapters/sqlite_storage.py:208` [correctness] — sqlite3.connect failures (path is a directory, chmod-0 file) raise raw sqlite3.OperationalError; init's first try wraps only OSError
+- [x] (94a7813) `src/todo/application/queries.py:79` [correctness] — Project names are whitespace-normalized on write but refs are looked up raw, so the exact creation string ("my  project") fails to resolve in every command
+- [x] (94a7813) `src/todo/adapters/sqlite_storage.py:590` [correctness] — Tag filter uses ASCII-case-insensitive LIKE while tag identity is case-sensitive, so `-t Work` returns the union of 'Work' and 'work' contradicting `todo tags`
+- [x] (94a7813) `src/todo/adapters/sqlite_storage.py:594` [correctness] — --search relies on LIKE's ASCII-only case folding, so 'über' misses 'Über' in the CLI while the TUI's Python search finds it — two frontends, same query, different results
+- [x] (round-9 final commit) `README.md:134` [correctness] — Key table claims Enter = 'Edit in $EDITOR' but Enter opens the read-only Inspect modal; 'i' is undocumented
+- [x] (94a7813) `src/todo/adapters/sqlite_storage.py:769` [cleanup] — add_project_update's post-commit read-back is the only storage read outside _read_guard
+- [x] (round-9 final commit) `src/todo/application/commands.py:21` [cleanup] — Comma-tag parsing re-implemented in five places with diverged behavior; one shared domain helper should own the rule
+- [x] (round-9 final commit) `src/todo/application/commands.py:115` [cleanup] — Status changes run blocked_ids() scans even when the item blocks nothing; skip the diff when there are no dependents
+- [x] (round-9 final commit) `src/todo/adapters/sqlite_storage.py:48` [cleanup] — _single_line duplicates the write path's whitespace normalization with a docstring admitting manual sync; share one domain helper
 
 ## Triage log
 
@@ -272,6 +272,7 @@ Anything without a failed reproduction attempt gets fixed, not triaged.)
 
 ## Status log
 
+- iter 20: round-9 queue closed — connect-time wrapping, normalized project refs, case-exact tag filter (instr), Unicode casefold search, README keys, project-log read-back guard, shared domain tag/text helpers, dependent-scan skip (94a7813, +1). 391 tests green. QUEUE EMPTY (round 9).
 - iter 19: round-8 queue closed — tag-filter validation (blank/comma filters error), negative --since rejected, refresh keeps last good rows, detail pane clears on empty, guarded startup, buffer path reported, probe-based existence checks, single-altitude validation, adapter-complete wrapping incl. init-time corrupt-file (7ca9021, d08562a, 37186ed). 378 tests green. QUEUE EMPTY (round 8).
 - iter 17: round-7 queue closed — TUI storage-failure guards, OverflowError class, parse_since overflow, exact editor no-op, tag-filter normalization, blocked-ids completion diff, add_blocker probes, StorageProtocol port completeness, separator-scan refactor (10a735d, a439c59, +1). 362 tests green. QUEUE EMPTY (round 7).
 - iter 15: round-6 queue closed — v4 tag migration, read-path/init StorageError wrapping, tag dedupe, description/log normalization, spaced $EDITOR fallback, verbatim body round-trip, age buckets, detail-pane cache, batch graph load, meta/JSON dedup (295b0f0, 3f6395d, 7a057ab, +1). 341 tests green. QUEUE EMPTY (round 6).
