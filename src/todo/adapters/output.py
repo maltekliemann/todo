@@ -126,7 +126,54 @@ def _item_to_dict(item: TodoItem) -> dict[str, object]:
     }
 
 
-class RichOutput:
+class _JsonOutput:
+    """The --json methods, shared by both frontends.
+
+    JSON output is frontend-independent by definition: one implementation
+    so the rich and plain variants cannot drift apart.
+    """
+
+    def print_json_list(self, items: list[TodoItem]) -> None:
+        print(json.dumps([_item_to_dict(i) for i in items], indent=2))
+
+    def print_json_item(self, item: TodoItem) -> None:
+        print(json.dumps(_item_to_dict(item), indent=2))
+
+    def print_json_summary(self, since: datetime, items: list[TodoItem]) -> None:
+        print(
+            json.dumps(
+                {
+                    "since": since.isoformat(),
+                    "items": [_item_to_dict(i) for i in items],
+                    "count": len(items),
+                },
+                indent=2,
+            )
+        )
+
+    def print_json_tags(self, counts: list[tuple[str, int]]) -> None:
+        print(json.dumps([{"tag": t, "count": c} for t, c in counts], indent=2))
+
+    def print_json_projects(self, summaries: list[ProjectSummary]) -> None:
+        print(
+            json.dumps(
+                [
+                    {
+                        **_project_to_dict(s.project),
+                        "open_count": s.open_count,
+                        "done_count": s.done_count,
+                    }
+                    for s in summaries
+                ],
+                indent=2,
+            )
+        )
+
+    def print_json_project(self, detail: ProjectDetail) -> None:
+        print(json.dumps(_detail_to_dict(detail), indent=2))
+
+
+class RichOutput(_JsonOutput):
     def __init__(self) -> None:
         from rich.console import Console
 
@@ -244,24 +291,6 @@ class RichOutput:
     def print_deleted(self, item_id: int) -> None:
         self._console.print(f"[dim]Deleted #{item_id}.[/dim]")
 
-    def print_json_list(self, items: list[TodoItem]) -> None:
-        print(json.dumps([_item_to_dict(i) for i in items], indent=2))
-
-    def print_json_item(self, item: TodoItem) -> None:
-        print(json.dumps(_item_to_dict(item), indent=2))
-
-    def print_json_summary(self, since: datetime, items: list[TodoItem]) -> None:
-        print(
-            json.dumps(
-                {
-                    "since": since.isoformat(),
-                    "items": [_item_to_dict(i) for i in items],
-                    "count": len(items),
-                },
-                indent=2,
-            )
-        )
-
     def print_tags(self, counts: list[tuple[str, int]]) -> None:
         from rich.table import Table
 
@@ -276,9 +305,6 @@ class RichOutput:
         for tag, count in counts:
             table.add_row(Text(tag), str(count))  # user text
         self._console.print(table)
-
-    def print_json_tags(self, counts: list[tuple[str, int]]) -> None:
-        print(json.dumps([{"tag": t, "count": c} for t, c in counts], indent=2))
 
     def print_projects(self, summaries: list[ProjectSummary]) -> None:
         from rich.table import Table
@@ -333,26 +359,8 @@ class RichOutput:
             self._console.print()
             self.print_list(items)
 
-    def print_json_projects(self, summaries: list[ProjectSummary]) -> None:
-        print(
-            json.dumps(
-                [
-                    {
-                        **_project_to_dict(s.project),
-                        "open_count": s.open_count,
-                        "done_count": s.done_count,
-                    }
-                    for s in summaries
-                ],
-                indent=2,
-            )
-        )
 
-    def print_json_project(self, detail: ProjectDetail) -> None:
-        print(json.dumps(_detail_to_dict(detail), indent=2))
-
-
-class PlainOutput:
+class PlainOutput(_JsonOutput):
     def print_list(self, items: list[TodoItem]) -> None:
         if not items:
             print("No items.")
@@ -407,33 +415,12 @@ class PlainOutput:
     def print_deleted(self, item_id: int) -> None:
         print(f"Deleted #{item_id}.")
 
-    def print_json_list(self, items: list[TodoItem]) -> None:
-        print(json.dumps([_item_to_dict(i) for i in items], indent=2))
-
-    def print_json_item(self, item: TodoItem) -> None:
-        print(json.dumps(_item_to_dict(item), indent=2))
-
-    def print_json_summary(self, since: datetime, items: list[TodoItem]) -> None:
-        print(
-            json.dumps(
-                {
-                    "since": since.isoformat(),
-                    "items": [_item_to_dict(i) for i in items],
-                    "count": len(items),
-                },
-                indent=2,
-            )
-        )
-
     def print_tags(self, counts: list[tuple[str, int]]) -> None:
         if not counts:
             print("No tags.")
             return
         for tag, count in counts:
             print(f"  {tag}  {count}")
-
-    def print_json_tags(self, counts: list[tuple[str, int]]) -> None:
-        print(json.dumps([{"tag": t, "count": c} for t, c in counts], indent=2))
 
     def print_projects(self, summaries: list[ProjectSummary]) -> None:
         if not summaries:
@@ -462,24 +449,6 @@ class PlainOutput:
         if items:
             print()
             self.print_list(items)
-
-    def print_json_projects(self, summaries: list[ProjectSummary]) -> None:
-        print(
-            json.dumps(
-                [
-                    {
-                        **_project_to_dict(s.project),
-                        "open_count": s.open_count,
-                        "done_count": s.done_count,
-                    }
-                    for s in summaries
-                ],
-                indent=2,
-            )
-        )
-
-    def print_json_project(self, detail: ProjectDetail) -> None:
-        print(json.dumps(_detail_to_dict(detail), indent=2))
 
 
 def _pri_style(p: Priority) -> str:

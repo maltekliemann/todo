@@ -1126,3 +1126,71 @@ class TestLockedDatabaseDialogs:
                 await pilot.press("enter")
                 await pilot.pause()
             assert app.is_running
+
+
+class TestDetailPaneCache:
+    async def test_row_highlight_does_not_requery_storage(
+        self, seeded_storage: SqliteStorage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """_refresh_list already holds fully hydrated items; moving the
+        cursor must render the detail pane from them, not re-run four SQL
+        queries per keystroke."""
+        app = TodoApp(storage=seeded_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            calls = 0
+            original_get = SqliteStorage.get
+
+            def counting_get(self: SqliteStorage, item_id: int):  # type: ignore[no-untyped-def]
+                nonlocal calls
+                calls += 1
+                return original_get(self, item_id)
+
+            monkeypatch.setattr(SqliteStorage, "get", counting_get)
+            await pilot.press("down")
+            await pilot.pause()
+            await pilot.press("down")
+            await pilot.pause()
+            assert calls == 0
+
+            # The pane did render from the cache.
+            meta = str(app.query_one("#detail-meta", Static).render())
+            assert "Priority:" in meta
+
+
+class TestSharedMetaPresenter:
+    def test_inspect_and_detail_share_one_meta_source(self) -> None:
+        """The metadata block was written out three times and had already
+        drifted; a single presenter is the class fix."""
+        from datetime import date, datetime, timezone
+
+        from todo.domain.models import TodoItem
+        from todo.tui.list_view import _meta_lines
+
+        item = TodoItem(
+            id=7,
+            title="t",
+            body="",
+            priority=Priority.HIGH,
+            status=Status.TODO,
+            created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            updated_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+            done_at=None,
+            deadline=date(2099, 1, 1),
+            tags=["a[red]b"],
+            blocked_by=[1],
+            blocking=[2, 3],
+            is_blocked=True,
+            project_id=1,
+            project_name="proj [/]",
+        )
+        lines = _meta_lines(item)
+        joined = "\n".join(lines)
+        assert "Priority: high" in joined
+        assert "Deadline:" in joined
+        assert "Blocked by: #1" in joined
+        assert "Blocking: #2, #3" in joined
+        # User text is escaped for markup-parsing widgets.
+        assert "proj [/]" not in joined
+        assert "a[red]b" not in joined

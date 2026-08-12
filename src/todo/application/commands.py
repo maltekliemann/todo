@@ -184,38 +184,32 @@ def delete_todo(
         return unblocked
 
 
+def _assert_no_cycle(
+    blocking_map: dict[int, list[int]],
+    blocked_id: int,
+    blocker_id: int,
+) -> None:
+    """Adding "blocker_id blocks blocked_id" forms a cycle iff blocked_id
+    already transitively blocks blocker_id — walk the in-memory edge map."""
+    seen: set[int] = set()
+    stack: list[int] = [blocked_id]
+    while stack:
+        current = stack.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        for nxt in blocking_map.get(current, []):
+            if nxt == blocker_id:
+                raise DependencyError("Adding this blocker would create a cycle.")
+            stack.append(nxt)
+
+
 def block_todo(
     storage: StorageProtocol,
     blocked_id: int,
     blocker_id: int,
 ) -> TodoItem:
-    if blocked_id == blocker_id:
-        raise DependencyError("An item cannot block itself.")
-    # Cycle check and insert run in ONE transaction: without it, two
-    # concurrent processes can each pass the check and commit edges that
-    # together form a cycle.
-    with storage.transaction():
-        storage.get(blocked_id)
-        storage.get(blocker_id)
-        # Adding "blocker_id blocks blocked_id" forms a cycle iff blocked_id
-        # already transitively blocks blocker_id. Load the edge set once and
-        # walk in memory instead of hydrating an item per node.
-        blocking_map: dict[int, list[int]] = {}
-        for edge_blocker, edge_blocked in storage.dependency_edges():
-            blocking_map.setdefault(edge_blocker, []).append(edge_blocked)
-        seen: set[int] = set()
-        stack: list[int] = [blocked_id]
-        while stack:
-            current = stack.pop()
-            if current in seen:
-                continue
-            seen.add(current)
-            for nxt in blocking_map.get(current, []):
-                if nxt == blocker_id:
-                    raise DependencyError("Adding this blocker would create a cycle.")
-                stack.append(nxt)
-        storage.add_blocker(blocked_id, blocker_id)
-        return storage.get(blocked_id)
+    return block_todo_batch(storage, blocked_id, [blocker_id])
 
 
 def unblock_todo(
@@ -236,11 +230,23 @@ def block_todo_batch(
     The whole batch runs in one transaction: any failure (missing item,
     self-block, cycle) rolls back only this batch's writes, so pre-existing
     edges are untouched by construction — no compensation logic that could
-    misidentify what to undo (round-2 finding).
+    misidentify what to undo (round-2 finding). The edge table is loaded
+    once for the batch and updated in memory per insert, so an in-batch
+    cycle is still caught without rescanning per blocker.
     """
+    for blocker_id in blocker_ids:
+        if blocked_id == blocker_id:
+            raise DependencyError("An item cannot block itself.")
     with storage.transaction():
+        storage.get(blocked_id)
+        blocking_map: dict[int, list[int]] = {}
+        for edge_blocker, edge_blocked in storage.dependency_edges():
+            blocking_map.setdefault(edge_blocker, []).append(edge_blocked)
         for blocker_id in blocker_ids:
-            block_todo(storage, blocked_id, blocker_id)
+            storage.get(blocker_id)
+            _assert_no_cycle(blocking_map, blocked_id, blocker_id)
+            storage.add_blocker(blocked_id, blocker_id)
+            blocking_map.setdefault(blocker_id, []).append(blocked_id)
         return storage.get(blocked_id)
 
 

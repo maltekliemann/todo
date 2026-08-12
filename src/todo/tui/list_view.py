@@ -115,6 +115,33 @@ def _editor_command(editor_value: str, path: str) -> list[str]:
     return [*parts, path]
 
 
+def _meta_lines(item: TodoItem) -> list[str]:
+    """The metadata block shared by the detail pane and the inspect modal.
+
+    One source of truth so the two renderings can never drift. User text
+    (project name, tags) is escaped — both widgets parse markup.
+    """
+    first = f"Priority: {item.priority.value}    Status: {item.status.value}"
+    if item.deadline:
+        first += f"    Deadline: {_deadline_str(item)}"
+    second = (
+        f"Created: {item.created_at.strftime('%b %d, %Y %H:%M')}    "
+        f"Updated: {item.updated_at.strftime('%b %d, %Y %H:%M')}"
+    )
+    if item.done_at:
+        second += f"    Done: {item.done_at.strftime('%b %d, %Y %H:%M')}"
+    lines = [first, second]
+    if item.project_name:
+        lines.append(f"Project: {escape(item.project_name)}")
+    if item.tags:
+        lines.append(f"Tags: {escape(', '.join(item.tags))}")
+    if item.blocked_by:
+        lines.append(f"Blocked by: {', '.join(f'#{i}' for i in item.blocked_by)}")
+    if item.blocking:
+        lines.append(f"Blocking: {', '.join(f'#{i}' for i in item.blocking)}")
+    return lines
+
+
 def _item_to_editor_text(item: TodoItem) -> str:
     return (
         f"title: {item.title}\n"
@@ -533,30 +560,7 @@ class InspectDialog(ModalScreen[None]):
         item = self._item
         with Vertical(id="inspect-container"):
             yield Static(f"[b]#{item.id}  {escape(item.title)}[/b]", id="inspect-title")
-            meta_lines = [
-                f"Priority: {item.priority.value}    Status: {item.status.value}",
-            ]
-            if item.deadline:
-                meta_lines.append(f"Deadline: {_deadline_str(item)}")
-            meta_lines.append(
-                f"Created: {item.created_at.strftime('%b %d, %Y %H:%M')}    "
-                f"Updated: {item.updated_at.strftime('%b %d, %Y %H:%M')}"
-            )
-            if item.done_at:
-                meta_lines.append(f"Done: {item.done_at.strftime('%b %d, %Y %H:%M')}")
-            if item.project_name:
-                meta_lines.append(f"Project: {escape(item.project_name)}")
-            if item.tags:
-                meta_lines.append(f"Tags: {escape(', '.join(item.tags))}")
-            if item.blocked_by:
-                meta_lines.append(
-                    f"Blocked by: {', '.join(f'#{i}' for i in item.blocked_by)}"
-                )
-            if item.blocking:
-                meta_lines.append(
-                    f"Blocking: {', '.join(f'#{i}' for i in item.blocking)}"
-                )
-            yield Static("\n".join(meta_lines), id="inspect-meta")
+            yield Static("\n".join(_meta_lines(item)), id="inspect-meta")
             with VerticalScroll(id="inspect-body-scroll"):
                 yield Static(
                     Text(item.body) if item.body else "[dim](no description)[/dim]",
@@ -597,6 +601,7 @@ class TodoListView(Widget):
         super().__init__()
         self._storage = storage
         self._items: list[TodoItem] = []
+        self._item_by_id: dict[int, TodoItem] = {}
         self._search_query: str = ""
         self._tag_filter: str | None = None
         self._project_filter: str | None = None
@@ -681,6 +686,11 @@ class TodoListView(Widget):
                 or q in i.body.lower()
                 or any(q in t.lower() for t in i.tags)
             ]
+
+        # The detail pane renders from this cache instead of re-querying
+        # storage on every cursor move; the refresh that builds the rows is
+        # the same one that builds the cache, so they cannot disagree.
+        self._item_by_id = {i.id: i for i in self._items}
 
         # Group items by status, preserving the per-group ordering from the
         # storage layer (priority, then created_at).
@@ -773,47 +783,26 @@ class TodoListView(Widget):
             return
 
         try:
-            item = show_todo(self._storage, int(str(item_id)))
-        except (NotFoundError, ValueError):
+            key = int(str(item_id))
+        except (TypeError, ValueError):
             return
+        # _refresh_list already hydrated this item; render from the cache
+        # instead of re-running four SQL queries per cursor move. The row
+        # keys and the cache come from the same refresh, so a miss only
+        # means a stale event — fall back to a guarded query.
+        item = self._item_by_id.get(key)
+        if item is None:
+            try:
+                item = show_todo(self._storage, key)
+            except TodoError:
+                return
 
         title_w = self.query_one("#detail-title", Static)
         meta_w = self.query_one("#detail-meta", Static)
         body_w = self.query_one("#detail-body", Static)
 
-        dl_str = f"  Deadline: {_deadline_str(item)}" if item.deadline else ""
-        done_str = (
-            f"   Done: {item.done_at.strftime('%b %d, %Y %H:%M')}"
-            if item.done_at
-            else ""
-        )
-        project_str = (
-            f"\nProject: {escape(item.project_name)}" if item.project_name else ""
-        )
-        tags_str = f"\nTags: {escape(', '.join(item.tags))}" if item.tags else ""
-        blocked_by_str = (
-            f"\nBlocked by: {', '.join(f'#{i}' for i in item.blocked_by)}"
-            if item.blocked_by
-            else ""
-        )
-        blocking_str = (
-            f"\nBlocking: {', '.join(f'#{i}' for i in item.blocking)}"
-            if item.blocking
-            else ""
-        )
-
         title_w.update(f"[b]#{item.id}  {escape(item.title)}[/b]")
-        meta_w.update(
-            f"Priority: {item.priority.value}  Status: {item.status.value}"
-            f"{dl_str}\n"
-            f"Created: {item.created_at.strftime('%b %d, %Y %H:%M')}   "
-            f"Updated: {item.updated_at.strftime('%b %d, %Y %H:%M')}"
-            f"{done_str}"
-            f"{project_str}"
-            f"{tags_str}"
-            f"{blocked_by_str}"
-            f"{blocking_str}"
-        )
+        meta_w.update("\n".join(_meta_lines(item)))
         body_w.update(Text(item.body) if item.body else "")
 
     def _selected_item_id(self) -> int | None:

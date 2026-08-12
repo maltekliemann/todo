@@ -217,3 +217,20 @@ class TestRelativeAgeBuckets:
 
     def test_30_days_is_1mo(self) -> None:
         assert self._age_for(30) == "1mo"
+
+
+class TestJsonOutputShared:
+    def test_json_methods_are_one_implementation(self) -> None:
+        """--json output is frontend-independent by definition: both output
+        classes must share one implementation so the copies cannot drift."""
+        from todo.adapters.output import PlainOutput, RichOutput
+
+        for name in (
+            "print_json_list",
+            "print_json_item",
+            "print_json_summary",
+            "print_json_tags",
+            "print_json_projects",
+            "print_json_project",
+        ):
+            assert getattr(RichOutput, name) is getattr(PlainOutput, name), name
