@@ -608,6 +608,7 @@ class TodoListView(Widget):
         self._priority_filter: Priority | None = None
         self._cursor_follows_item: bool = True
         self._last_data_version: int = 0
+        self._poll_error_reported: bool = False
 
     def compose(self) -> ComposeResult:
         yield TodoTable(id="item-list", cursor_type="row", zebra_stripes=True)
@@ -627,7 +628,16 @@ class TodoListView(Widget):
         self.set_interval(self.POLL_INTERVAL_SECONDS, self._poll_for_external_changes)
 
     def _poll_for_external_changes(self) -> None:
-        version = self._storage.data_version()
+        try:
+            version = self._storage.data_version()
+        except TodoError as exc:
+            # A broken database must not let the 2s timer kill the session.
+            # Report once per error streak, not once per tick.
+            if not self._poll_error_reported:
+                self._poll_error_reported = True
+                self.notify(escape(str(exc)), severity="error")
+            return
+        self._poll_error_reported = False
         if version != self._last_data_version:
             self._last_data_version = version
             self._refresh_list()
@@ -644,6 +654,18 @@ class TodoListView(Widget):
         self.action_inspect()
 
     def _refresh_list(self) -> None:
+        """Refresh, degrading storage failures to a notification.
+
+        Every action path (including the except-handlers of guarded
+        mutations) ends in a refresh, so a raw StorageError here would
+        crash the session no matter how well the action itself is guarded.
+        """
+        try:
+            self._refresh_list_unguarded()
+        except TodoError as exc:
+            self.notify(escape(str(exc)), severity="error")
+
+    def _refresh_list_unguarded(self) -> None:
         table = self.query_one("#item-list", TodoTable)
         previous_id = self._selected_item_id()
         previous_cursor = table.cursor_row
@@ -857,6 +879,9 @@ class TodoListView(Widget):
             item = show_todo(self._storage, item_id)
         except NotFoundError:
             return
+        except TodoError as exc:
+            self.notify(escape(str(exc)), severity="error")
+            return
         self.app.push_screen(InspectDialog(item))
 
     def action_edit(self) -> None:
@@ -867,6 +892,9 @@ class TodoListView(Widget):
         try:
             item = show_todo(self._storage, item_id)
         except NotFoundError:
+            return
+        except TodoError as exc:
+            self.notify(escape(str(exc)), severity="error")
             return
 
         editor = os.environ.get("EDITOR", "vi")
@@ -969,7 +997,11 @@ class TodoListView(Widget):
 
     def action_cycle_tag(self) -> None:
         """Cycle the tag filter: no filter -> each known tag -> no filter."""
-        tags = [t for t, _ in count_tags(self._storage)]
+        try:
+            tags = [t for t, _ in count_tags(self._storage)]
+        except TodoError as exc:
+            self.notify(escape(str(exc)), severity="error")
+            return
         if not tags:
             return
         if self._tag_filter is None:
@@ -984,9 +1016,13 @@ class TodoListView(Widget):
 
     def action_cycle_project(self) -> None:
         """Cycle the project filter: no filter -> each project -> no filter."""
-        names = [
-            p.name for p in list_all_projects(self._storage, include_archived=True)
-        ]
+        try:
+            names = [
+                p.name for p in list_all_projects(self._storage, include_archived=True)
+            ]
+        except TodoError as exc:
+            self.notify(escape(str(exc)), severity="error")
+            return
         if not names:
             return
         if self._project_filter is None:
@@ -1037,6 +1073,9 @@ class TodoListView(Widget):
             item = show_todo(self._storage, item_id)
         except NotFoundError:
             return
+        except TodoError as exc:
+            self.notify(escape(str(exc)), severity="error")
+            return
         next_status = item.status.next()
         if next_status is not None:
             try:
@@ -1055,6 +1094,9 @@ class TodoListView(Widget):
         try:
             item = show_todo(self._storage, item_id)
         except NotFoundError:
+            return
+        except TodoError as exc:
+            self.notify(escape(str(exc)), severity="error")
             return
         prev_status = item.status.prev()
         if prev_status is not None:

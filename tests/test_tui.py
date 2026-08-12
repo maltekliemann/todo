@@ -1194,3 +1194,80 @@ class TestSharedMetaPresenter:
         # User text is escaped for markup-parsing widgets.
         assert "proj [/]" not in joined
         assert "a[red]b" not in joined
+
+
+class TestStorageFailureDoesNotCrashTui:
+    """A database-level read failure must degrade to a notification on
+    every keypress path, like the CLI's one-line 'Database error'."""
+
+    @staticmethod
+    def _boom(*args: object, **kwargs: object) -> object:
+        from todo.exceptions import StorageError
+
+        raise StorageError("database disk image is malformed")
+
+    async def test_cycle_tag_survives_read_failure(
+        self, seeded_storage: SqliteStorage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        app = TodoApp(storage=seeded_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            monkeypatch.setattr(SqliteStorage, "tag_strings", self._boom)
+            await pilot.press("t")
+            await pilot.pause()
+            assert app.is_running
+
+    async def test_cycle_project_survives_read_failure(
+        self, seeded_storage: SqliteStorage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        app = TodoApp(storage=seeded_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            monkeypatch.setattr(SqliteStorage, "list_projects", self._boom)
+            await pilot.press("p")
+            await pilot.pause()
+            assert app.is_running
+
+    async def test_refresh_after_action_survives_read_failure(
+        self, seeded_storage: SqliteStorage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """action_done's own error handler calls _refresh_list; a failure
+        there must not escape the handler and kill the session."""
+        app = TodoApp(storage=seeded_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            monkeypatch.setattr(SqliteStorage, "list", self._boom)
+            await pilot.press("d")
+            await pilot.pause()
+            assert app.is_running
+
+    async def test_poll_timer_survives_read_failure(
+        self, seeded_storage: SqliteStorage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from todo.tui.list_view import TodoListView
+
+        app = TodoApp(storage=seeded_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            monkeypatch.setattr(SqliteStorage, "data_version", self._boom)
+            view = app.query_one(TodoListView)
+            view._poll_for_external_changes()
+            await pilot.pause()
+            assert app.is_running
+
+    async def test_edit_and_inspect_survive_read_failure(
+        self, seeded_storage: SqliteStorage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        app = TodoApp(storage=seeded_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            monkeypatch.setattr(SqliteStorage, "get", self._boom)
+            await pilot.press("e")
+            await pilot.pause()
+            assert app.is_running
+            await pilot.press("i")
+            await pilot.pause()
+            assert app.is_running
+            await pilot.press("greater_than_sign")
+            await pilot.pause()
+            assert app.is_running
