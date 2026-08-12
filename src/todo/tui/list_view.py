@@ -7,7 +7,6 @@ import subprocess
 import tempfile
 from datetime import date
 
-from rich.markup import escape
 from rich.text import Text
 from textual import on
 from textual.app import ComposeResult, SuspendNotSupported
@@ -52,6 +51,18 @@ _SEPARATOR_PREFIX = "__sep_"
 
 def _is_separator(value: object) -> bool:
     return isinstance(value, str) and value.startswith(_SEPARATOR_PREFIX)
+
+
+def _escape_markup(text: str) -> str:
+    """Escape user text for a markup-parsing sink.
+
+    rich.markup.escape only escapes "[" before [a-z#/@], but Textual's
+    Content.from_markup also parses [WIP], [Red] and [$VAR] — so a title
+    like "[WIP] refactor" was silently swallowed. Escaping every bracket
+    (and pre-doubling backslashes so an existing escape is preserved) is
+    the only rule that covers both parsers.
+    """
+    return text.replace("\\", "\\\\").replace("[", "\\[")
 
 
 class TodoTable(DataTable["str | Text"]):
@@ -142,9 +153,9 @@ def _meta_lines(item: TodoItem) -> list[str]:
         second += f"    Done: {item.done_at.strftime('%b %d, %Y %H:%M')}"
     lines = [first, second]
     if item.project_name:
-        lines.append(f"Project: {escape(item.project_name)}")
+        lines.append(f"Project: {_escape_markup(item.project_name)}")
     if item.tags:
-        lines.append(f"Tags: {escape(', '.join(item.tags))}")
+        lines.append(f"Tags: {_escape_markup(', '.join(item.tags))}")
     if item.blocked_by:
         lines.append(f"Blocked by: {', '.join(f'#{i}' for i in item.blocked_by)}")
     if item.blocking:
@@ -198,6 +209,16 @@ def apply_editor_edit(
     if "title" in fields and not fields["title"].strip():
         # Same contract as deadline: bad input errors, never a partial apply.
         raise ValueError("Title cannot be empty.")
+
+    # A blanked enum line is bad input, not an absent field. Deleting the
+    # whole line still means "leave unchanged"; blanking the value used to
+    # be a silent no-op that deleted the user's buffer.
+    for name in ("priority", "status"):
+        if name in fields and not fields[name].strip():
+            raise ValueError(
+                f"{name.capitalize()} cannot be empty — delete the whole "
+                f"'{name}:' line to leave it unchanged."
+            )
 
     # The body is compared against the stored one so an untouched body is
     # never rewritten (editors append a final newline on save; that alone
@@ -572,7 +593,9 @@ class InspectDialog(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         item = self._item
         with Vertical(id="inspect-container"):
-            yield Static(f"[b]#{item.id}  {escape(item.title)}[/b]", id="inspect-title")
+            yield Static(
+                f"[b]#{item.id}  {_escape_markup(item.title)}[/b]", id="inspect-title"
+            )
             yield Static("\n".join(_meta_lines(item)), id="inspect-meta")
             with VerticalScroll(id="inspect-body-scroll"):
                 yield Static(
@@ -668,7 +691,7 @@ class TodoListView(Widget):
         if from_poll and self._read_error_reported:
             return
         self._read_error_reported = True
-        self.notify(escape(str(exc)), severity="error")
+        self.notify(_escape_markup(str(exc)), severity="error")
 
     @on(DataTable.RowHighlighted, "#item-list")
     def on_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
@@ -849,13 +872,14 @@ class TodoListView(Widget):
         search_status = self.query_one("#search-status", Static)
         parts: list[str] = []
         if self._search_query:
-            parts.append(f"[dim]Search:[/dim] [b]{escape(self._search_query)}[/b]")
-        if self._tag_filter is not None:
-            parts.append(f"[dim]Tag:[/dim] [b]{escape(self._tag_filter)}[/b]")
-        if self._project_filter is not None:
             parts.append(
-                f"[dim]Project:[/dim] [b]{escape(project_filter_label or '?')}[/b]"
+                f"[dim]Search:[/dim] [b]{_escape_markup(self._search_query)}[/b]"
             )
+        if self._tag_filter is not None:
+            parts.append(f"[dim]Tag:[/dim] [b]{_escape_markup(self._tag_filter)}[/b]")
+        if self._project_filter is not None:
+            label = _escape_markup(project_filter_label or "?")
+            parts.append(f"[dim]Project:[/dim] [b]{label}[/b]")
         if self._priority_filter is not None:
             parts.append(f"[dim]Priority:[/dim] [b]{self._priority_filter.value}[/b]")
         hint = "  [dim]([0] clears)[/dim]" if parts else ""
@@ -892,7 +916,7 @@ class TodoListView(Widget):
         meta_w = self.query_one("#detail-meta", Static)
         body_w = self.query_one("#detail-body", Static)
 
-        title_w.update(f"[b]#{item.id}  {escape(item.title)}[/b]")
+        title_w.update(f"[b]#{item.id}  {_escape_markup(item.title)}[/b]")
         meta_w.update("\n".join(_meta_lines(item)))
         body_w.update(Text(item.body) if item.body else "")
 
@@ -929,7 +953,7 @@ class TodoListView(Widget):
             result = complete_todo(self._storage, item_id)
         except TodoError as exc:
             # E.g. deleted by another process, or the database is locked.
-            self.notify(escape(str(exc)), severity="error")
+            self.notify(_escape_markup(str(exc)), severity="error")
             self._refresh_list()
             return
         self._notify_unblocked(result)
@@ -938,7 +962,7 @@ class TodoListView(Widget):
     def _notify_unblocked(self, result: CompletionResult | list[TodoItem]) -> None:
         deps = result.unblocked if isinstance(result, CompletionResult) else result
         for dep in deps:
-            self.notify(f"🔓 #{dep.id} {escape(dep.title)} is now unblocked")
+            self.notify(f"🔓 #{dep.id} {_escape_markup(dep.title)} is now unblocked")
 
     def action_inspect(self) -> None:
         item_id = self._selected_item_id()
@@ -949,7 +973,7 @@ class TodoListView(Widget):
         except NotFoundError:
             return
         except TodoError as exc:
-            self.notify(escape(str(exc)), severity="error")
+            self.notify(_escape_markup(str(exc)), severity="error")
             return
         self.app.push_screen(InspectDialog(item))
 
@@ -963,7 +987,7 @@ class TodoListView(Widget):
         except NotFoundError:
             return
         except TodoError as exc:
-            self.notify(escape(str(exc)), severity="error")
+            self.notify(_escape_markup(str(exc)), severity="error")
             return
 
         editor = os.environ.get("EDITOR", "vi")
@@ -972,7 +996,7 @@ class TodoListView(Widget):
         try:
             tmp_path = self._write_editor_buffer(text)
         except OSError as exc:
-            self.notify(f"Editor failed: {escape(str(exc))}", severity="error")
+            self.notify(f"Editor failed: {_escape_markup(str(exc))}", severity="error")
             return
 
         try:
@@ -982,8 +1006,8 @@ class TodoListView(Widget):
             # The editor RAN and exited nonzero — the user may already have
             # saved their work into the buffer. Keep it and say where.
             self.notify(
-                f"Editor failed: {escape(str(exc))} — "
-                f"your buffer is kept at {escape(tmp_path)}",
+                f"Editor failed: {_escape_markup(str(exc))} — "
+                f"your buffer is kept at {_escape_markup(tmp_path)}",
                 severity="error",
                 timeout=12,
             )
@@ -994,7 +1018,7 @@ class TodoListView(Widget):
             SuspendNotSupported,
         ) as exc:
             # The editor never ran; the buffer holds nothing of the user's.
-            self.notify(f"Editor failed: {escape(str(exc))}", severity="error")
+            self.notify(f"Editor failed: {_escape_markup(str(exc))}", severity="error")
             os.unlink(tmp_path)
             return
 
@@ -1029,8 +1053,8 @@ class TodoListView(Widget):
                 return f.read()
         except (OSError, ValueError) as exc:
             self.notify(
-                f"Editor failed: {escape(str(exc))} — "
-                f"your buffer is kept at {escape(tmp_path)}",
+                f"Editor failed: {_escape_markup(str(exc))} — "
+                f"your buffer is kept at {_escape_markup(tmp_path)}",
                 severity="error",
                 timeout=12,
             )
@@ -1052,8 +1076,8 @@ class TodoListView(Widget):
             result = apply_editor_edit(self._storage, item_id, edited)
         except (ValueError, TodoError) as exc:
             self.notify(
-                f"Edit rejected: {escape(str(exc))} — "
-                f"your buffer is kept at {escape(tmp_path)}",
+                f"Edit rejected: {_escape_markup(str(exc))} — "
+                f"your buffer is kept at {_escape_markup(tmp_path)}",
                 severity="error",
                 timeout=12,
             )
@@ -1073,7 +1097,7 @@ class TodoListView(Widget):
                     unblocked = delete_todo(self._storage, item_id)
                 except TodoError as exc:
                     # E.g. deleted by another process while the dialog was open.
-                    self.notify(escape(str(exc)), severity="error")
+                    self.notify(_escape_markup(str(exc)), severity="error")
                 else:
                     self._notify_unblocked(unblocked)
                 self._refresh_list()
@@ -1109,7 +1133,7 @@ class TodoListView(Widget):
         try:
             tags = [t for t, _ in count_tags(self._storage)]
         except TodoError as exc:
-            self.notify(escape(str(exc)), severity="error")
+            self.notify(_escape_markup(str(exc)), severity="error")
             return
         if not tags:
             return
@@ -1128,7 +1152,7 @@ class TodoListView(Widget):
         try:
             projects = list_all_projects(self._storage, include_archived=True)
         except TodoError as exc:
-            self.notify(escape(str(exc)), severity="error")
+            self.notify(_escape_markup(str(exc)), severity="error")
             return
         if not projects:
             return
@@ -1191,14 +1215,14 @@ class TodoListView(Widget):
         except NotFoundError:
             return
         except TodoError as exc:
-            self.notify(escape(str(exc)), severity="error")
+            self.notify(_escape_markup(str(exc)), severity="error")
             return
         next_status = item.status.next()
         if next_status is not None:
             try:
                 result = move_todo(self._storage, item_id, next_status)
             except TodoError as exc:
-                self.notify(escape(str(exc)), severity="error")
+                self.notify(_escape_markup(str(exc)), severity="error")
                 self._refresh_list()
                 return
             self._notify_unblocked(result)
@@ -1213,12 +1237,12 @@ class TodoListView(Widget):
         except NotFoundError:
             return
         except TodoError as exc:
-            self.notify(escape(str(exc)), severity="error")
+            self.notify(_escape_markup(str(exc)), severity="error")
             return
         prev_status = item.status.prev()
         if prev_status is not None:
             try:
                 move_todo(self._storage, item_id, prev_status)
             except TodoError as exc:
-                self.notify(escape(str(exc)), severity="error")
+                self.notify(_escape_markup(str(exc)), severity="error")
             self._refresh_list()

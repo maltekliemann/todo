@@ -487,3 +487,41 @@ class TestEditorEncodingRobustness:
                 assert view._read_edited_buffer(path) is not None
             finally:
                 Path(path).unlink(missing_ok=True)
+
+
+class TestBlankEnumFieldsError:
+    """A blanked priority/status line is bad input, not an absent field:
+    the title branch errors and the deadline branch clears, so silently
+    ignoring these two (and deleting the buffer) is the odd one out."""
+
+    def test_blank_priority_line_rejects_edit(self, storage: SqliteStorage) -> None:
+        add_todo(storage, "Task")
+        with pytest.raises(ValueError, match="[Pp]riority"):
+            apply_editor_edit(storage, 1, _edited(storage, 1, priority=""))
+        assert storage.get(1).priority.value == "medium"
+
+    def test_blank_status_line_rejects_edit(self, storage: SqliteStorage) -> None:
+        add_todo(storage, "Task")
+        with pytest.raises(ValueError, match="[Ss]tatus"):
+            apply_editor_edit(storage, 1, _edited(storage, 1, status=""))
+        assert storage.get(1).status.value == "todo"
+
+    def test_blank_status_does_not_partially_apply(
+        self, storage: SqliteStorage
+    ) -> None:
+        add_todo(storage, "Task")
+        buffer = _edited(storage, 1, status="", title="Renamed")
+        with pytest.raises(ValueError):
+            apply_editor_edit(storage, 1, buffer)
+        assert storage.get(1).title == "Task"
+
+    def test_deleted_priority_line_still_leaves_field_unchanged(
+        self, storage: SqliteStorage
+    ) -> None:
+        add_todo(storage, "Task", priority=Priority.HIGH)
+        text = "\n".join(
+            line
+            for line in _item_to_editor_text(storage.get(1)).split("\n")
+            if not line.startswith("priority:")
+        )
+        assert apply_editor_edit(storage, 1, text).item.priority == Priority.HIGH

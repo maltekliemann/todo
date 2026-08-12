@@ -230,3 +230,65 @@ class TestShowProjectHostileEndToEnd:
         storage.add_project_update(project.id, "u [/] v")
         detail = show_project(storage, "p [/] q")
         assert detail.updates[0].body == "u [/] v"
+
+
+class TestTextualMarkupEscaping:
+    """rich.markup.escape only escapes lowercase-initial tags, but Textual
+    also parses [WIP], [Red] and [$VAR] — user text must survive all of
+    them intact in every markup-rendering sink."""
+
+    def test_escaper_covers_textual_tag_shapes(self) -> None:
+        from textual.content import Content
+
+        from todo.tui.list_view import _escape_markup
+
+        for hostile in ("[WIP] refactor", "[Red]x", "[$VAR] y", "[/] z", "[b]lower"):
+            assert Content.from_markup(_escape_markup(hostile)).plain == hostile
+
+    async def test_detail_pane_keeps_bracketed_title(self, db_path: Path) -> None:
+        from todo.adapters.sqlite_storage import SqliteStorage
+        from todo.application.commands import add_todo
+        from todo.tui.app import TodoApp
+
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "[WIP] refactor auth", tags=["[Red]tag"])
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            title = str(app.query_one("#detail-title", Static).render())
+            meta = str(app.query_one("#detail-meta", Static).render())
+            assert "[WIP] refactor auth" in title
+            assert "[Red]tag" in meta
+
+    async def test_inspect_modal_keeps_bracketed_title(self, db_path: Path) -> None:
+        from todo.adapters.sqlite_storage import SqliteStorage
+        from todo.application.commands import add_todo
+        from todo.tui.app import TodoApp
+
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "[WIP] refactor auth")
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("i")
+            await pilot.pause()
+            title = str(app.screen.query_one("#inspect-title", Static).render())
+            assert "[WIP] refactor auth" in title
+
+    async def test_filter_bar_keeps_bracketed_search(self, db_path: Path) -> None:
+        from todo.adapters.sqlite_storage import SqliteStorage
+        from todo.application.commands import add_todo
+        from todo.tui.app import TodoApp
+        from todo.tui.list_view import TodoListView
+
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "plain")
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            view = app.query_one(TodoListView)
+            view._search_query = "[WIP]"
+            view._refresh_list()
+            await pilot.pause()
+            status = str(app.query_one("#search-status", Static).render())
+            assert "[WIP]" in status
