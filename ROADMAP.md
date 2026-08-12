@@ -63,8 +63,8 @@ is done.
       `0` clears. (ad3947b)
 - [x] PRD.md: Projects section with label-vs-project rationale and CLI
       examples. (965d19e) "Out of scope" bullets reviewed in iter 14: accurate.
-- [ ] Stretch: `todo project log NAME "update text"` + updates shown in
-      `project show`.
+- [x] Stretch: `todo project log NAME "text"` + log in `project show` (plain,
+      Rich, JSON), migration v2, cascade delete. (34320d4)
 
 ## Phase 4 — TUI: sticky-cursor mode
 
@@ -142,3 +142,6 @@ is done.
 - 2026-08-12 iter 14: README refresh, Phase 5 closed (3c58c12). Gates green:
   205 passed. Remaining: Phase 3 stretch (project log), Phase 6 final
   verification.
+- 2026-08-12 iter 15: project update log, all feature phases now complete
+  (34320d4). Gates green: 208 passed, all clean. Next: Phase 6 final
+  verification, then the closing review pass.
