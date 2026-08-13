@@ -12,8 +12,10 @@ from textual.widgets import DataTable, Input, Label, OptionList, Static
 
 from todo.adapters.sqlite_storage import SqliteStorage
 from todo.application.commands import add_todo, block_todo
-from todo.domain.enums import Priority, Status
-from todo.domain.models import TodoItem
+from todo.domain.deadline import Deadline
+from todo.domain.priority import Priority
+from todo.domain.status import Status
+from todo.domain.todo_item import TodoItem
 from todo.tui.app import TodoApp
 from todo.tui.edit_session import EditorSession
 from todo.tui.list_view import TodoListView
@@ -1865,9 +1867,9 @@ class TestSharedMetaPresenter:
     def test_inspect_and_detail_share_one_meta_source(self) -> None:
         """The metadata block was written out three times and had already
         drifted; a single presenter is the class fix."""
-        from datetime import date, datetime, timezone
+        from datetime import datetime, timezone
 
-        from todo.domain.models import TodoItem
+        from todo.domain.todo_item import TodoItem
         from todo.tui.render import meta_lines
 
         item = TodoItem(
@@ -1879,7 +1881,7 @@ class TestSharedMetaPresenter:
             created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
             updated_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
             done_at=None,
-            deadline=date(2099, 1, 1),
+            deadline=Deadline(2099, 1, 1),
             tags=["a[red]b"],
             blocked_by=[1],
             blocking=[2, 3],

@@ -16,9 +16,15 @@ from todo.application.contracts.storage import (
     Unset,
     UpdateList,
 )
-from todo.domain.enums import Priority, ProjectStatus, Status
-from todo.domain.models import Project, ProjectUpdate, TodoItem
-from todo.domain.tags import split_tags
+from todo.domain.deadline import Deadline
+from todo.domain.priority import Priority
+from todo.domain.project import Project
+from todo.domain.project_status import ProjectStatus
+from todo.domain.project_update import ProjectUpdate
+from todo.domain.status import Status
+from todo.domain.tag import Tag, split_tags
+from todo.domain.title import Title
+from todo.domain.todo_item import TodoItem
 from todo.exceptions import (
     DuplicateProjectError,
     NotFoundError,
@@ -43,19 +49,21 @@ def _row_to_item(
     is_blocked: bool = False,
 ) -> TodoItem:
     tags_raw: str = row["tags"]
-    tags = split_tags(tags_raw) if tags_raw else []
+    # Constructing the value objects is the read-side check that what was
+    # stored is still something the domain calls valid.
+    tags = [Tag(t) for t in split_tags(tags_raw)] if tags_raw else []
     done_at_raw: str | None = row["done_at"]
     deadline_raw: str | None = row["deadline"]
     return TodoItem(
         id=row["id"],
-        title=row["title"],
+        title=Title(row["title"]),
         body=row["body"],
         priority=Priority(row["priority"]),
         status=Status(row["status"]),
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
         done_at=datetime.fromisoformat(done_at_raw) if done_at_raw else None,
-        deadline=date.fromisoformat(deadline_raw) if deadline_raw else None,
+        deadline=Deadline.fromisoformat(deadline_raw) if deadline_raw else None,
         tags=tags,
         blocked_by=blocked_by if blocked_by is not None else [],
         blocking=blocking if blocking is not None else [],
@@ -218,13 +226,13 @@ class SqliteStorage:
 
     def add(
         self,
-        title: str,
+        title: Title,
         *,
         body: str = "",
         priority: Priority = Priority.MEDIUM,
         status: Status = Status.TODO,
-        deadline: date | None = None,
-        tags: list[str] | None = None,
+        deadline: Deadline | None = None,
+        tags: list[Tag] | None = None,
         project_id: int | None = None,
     ) -> TodoItem:
         now = _now().isoformat()
@@ -295,12 +303,12 @@ class SqliteStorage:
         self,
         item_id: int,
         *,
-        title: str | None = None,
+        title: Title | None = None,
         body: str | None = None,
         priority: Priority | None = None,
         status: Status | None = None,
-        deadline: date | None | Unset = UNSET,
-        tags: list[str] | None = None,
+        deadline: Deadline | None | Unset = UNSET,
+        tags: list[Tag] | None = None,
         project_id: int | None | Unset = UNSET,
     ) -> TodoItem:
         # Existence + the one field the done_at transition needs — not a

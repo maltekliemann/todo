@@ -15,9 +15,9 @@ from textual.widgets import Input, Label, Select
 
 from todo.application.commands import add_todo
 from todo.application.contracts.storage import StorageProtocol
-from todo.domain.enums import Priority
-from todo.domain.models import TodoItem
-from todo.domain.tags import split_tags
+from todo.domain.priority import Priority
+from todo.domain.tag import split_tags
+from todo.domain.todo_item import TodoItem
 from todo.exceptions import TodoError
 
 

@@ -1,4 +1,4 @@
-"""Unit tests for domain enums/models and application query helpers."""
+"""Unit tests for the domain models and application query helpers."""
 
 from __future__ import annotations
 
@@ -8,11 +8,33 @@ import pytest
 
 from todo.adapters.sqlite_storage import SqliteStorage
 from todo.application.queries import list_todos, parse_since, resolve_project
-from todo.domain.enums import Priority, ProjectStatus, Status
-from todo.domain.models import Project, TodoItem
+from todo.domain.deadline import Deadline
+from todo.domain.priority import Priority
+from todo.domain.project import Project
+from todo.domain.project_status import ProjectStatus
+from todo.domain.status import Status
+from todo.domain.tag import Tag
+from todo.domain.title import Title
+from todo.domain.todo_item import TodoItem
 from todo.exceptions import ProjectNotFoundError
 
 _NOW = datetime.now(tz=timezone.utc)
+
+
+def _item_with(*, deadline: Deadline, status: Status) -> TodoItem:
+    now = datetime.now()
+    return TodoItem(
+        id=1,
+        title=Title("t"),
+        body="",
+        priority=Priority.MEDIUM,
+        status=status,
+        created_at=now,
+        updated_at=now,
+        done_at=None,
+        deadline=deadline,
+        tags=[],
+    )
 
 
 class TestEnums:
@@ -59,7 +81,7 @@ class TestModels:
             created_at=_NOW,
             updated_at=_NOW,
             done_at=_NOW,
-            deadline=date.today() - timedelta(days=5),
+            deadline=Deadline.from_date(date.today() - timedelta(days=5)),
             tags=[],
         )
         assert item.is_overdue is False
@@ -128,3 +150,58 @@ class TestQueryHelpers:
     def test_parse_since_unknown_unit(self) -> None:
         with pytest.raises(ValueError, match="Unknown time unit"):
             parse_since("3 fortnights")
+
+
+class TestTitle:
+    def test_whitespace_is_collapsed_not_rejected(self) -> None:
+        assert Title("  a\n\n b\tc ") == "a b c"
+
+    def test_it_is_a_string(self) -> None:
+        """Everything that formats or compares a title keeps working."""
+        assert f"#{1} {Title('Task')}" == "#1 Task"
+        assert Title("Task").startswith("Ta")
+
+    @pytest.mark.parametrize("value", ["", "   ", "\n\t"])
+    def test_an_empty_title_cannot_be_constructed(self, value: str) -> None:
+        with pytest.raises(ValueError, match="[Tt]itle cannot be empty"):
+            Title(value)
+
+
+class TestTag:
+    def test_whitespace_is_collapsed(self) -> None:
+        assert Tag(" two  words ") == "two words"
+
+    def test_an_empty_tag_cannot_be_constructed(self) -> None:
+        with pytest.raises(ValueError, match="[Tt]ag cannot be empty"):
+            Tag("  ")
+
+    def test_a_comma_cannot_be_constructed(self) -> None:
+        """Tags are stored comma-joined, so one containing a comma would
+        come back as two phantom tags."""
+        with pytest.raises(ValueError, match="comma"):
+            Tag("a,b")
+
+
+class TestDeadline:
+    def test_has_passed(self) -> None:
+        assert Deadline.from_date(date.today() - timedelta(days=1)).has_passed
+        assert not Deadline.from_date(date.today() + timedelta(days=1)).has_passed
+
+    def test_today_has_not_passed(self) -> None:
+        assert not Deadline.from_date(date.today()).has_passed
+
+    def test_days_until(self) -> None:
+        assert Deadline.from_date(date.today() + timedelta(days=3)).days_until == 3
+        assert Deadline.from_date(date.today() - timedelta(days=2)).days_until == -2
+
+    def test_it_is_a_date(self) -> None:
+        assert Deadline(2099, 1, 1) == date(2099, 1, 1)
+        assert Deadline.fromisoformat("2099-01-01").isoformat() == "2099-01-01"
+
+    def test_overdue_needs_the_item_not_only_the_date(self) -> None:
+        """The date knows it has passed; only the item knows if that still
+        matters."""
+        past = Deadline.from_date(date.today() - timedelta(days=1))
+        assert past.has_passed
+        assert _item_with(deadline=past, status=Status.TODO).is_overdue
+        assert not _item_with(deadline=past, status=Status.DONE).is_overdue

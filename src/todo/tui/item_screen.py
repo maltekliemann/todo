@@ -26,9 +26,10 @@ from textual.widgets.option_list import Option
 from todo.application.commands import CompletionResult, edit_todo
 from todo.application.contracts.storage import StorageProtocol
 from todo.application.queries import list_all_projects, show_todo
-from todo.domain.enums import Priority, Status
-from todo.domain.models import TodoItem
-from todo.domain.tags import split_tags
+from todo.domain.priority import Priority
+from todo.domain.status import Status
+from todo.domain.tag import split_tags
+from todo.domain.todo_item import TodoItem
 from todo.exceptions import NotFoundError, TodoError
 from todo.tui.blockers import BlockDialog, Relation
 from todo.tui.edit_session import EditorSession

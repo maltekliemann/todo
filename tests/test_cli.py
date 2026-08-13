@@ -7,7 +7,7 @@ from click.testing import CliRunner
 
 from todo.adapters.sqlite_storage import SqliteStorage
 from todo.application.commands import block_todo, unblock_todo
-from todo.domain.enums import Status
+from todo.domain.status import Status
 from todo.exceptions import DependencyError, NotFoundError
 from todo.infra.cli.main import main
 

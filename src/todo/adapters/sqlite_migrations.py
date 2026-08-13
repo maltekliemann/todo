@@ -10,7 +10,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Callable
 
-from todo.domain.tags import dedupe_tags, split_tags
+from todo.domain.tag import dedupe_tags, split_tags
 from todo.domain.text import single_line
 
 SCHEMA = """\

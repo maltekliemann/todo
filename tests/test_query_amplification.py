@@ -185,7 +185,7 @@ class TestWritePathExistenceChecks:
     ) -> None:
         from datetime import datetime
 
-        from todo.domain.enums import Status
+        from todo.domain.status import Status
 
         with pytest.raises(NotFoundError):
             storage.update(999, title="x")

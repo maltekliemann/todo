@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from todo.adapters.output import _deadline_str
 from todo.application.commands import CompletionResult
-from todo.domain.models import TodoItem
+from todo.domain.todo_item import TodoItem
 
 
 def join_styles(*styles: str) -> str:

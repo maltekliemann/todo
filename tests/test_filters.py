@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from todo.domain.enums import Priority, ProjectStatus, Status
-from todo.domain.models import Project, TodoItem
+from todo.domain.priority import Priority
+from todo.domain.project import Project
+from todo.domain.project_status import ProjectStatus
+from todo.domain.status import Status
+from todo.domain.todo_item import TodoItem
 from todo.tui.filters import Filters
 
 _NOW = datetime.now(tz=timezone.utc)

@@ -8,8 +8,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from todo.domain.enums import Priority
-from todo.domain.models import Project, TodoItem
+from todo.domain.priority import Priority
+from todo.domain.project import Project
+from todo.domain.todo_item import TodoItem
 from todo.tui.render import escape_markup
 
 

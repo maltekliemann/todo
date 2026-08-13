@@ -4,49 +4,50 @@ from dataclasses import dataclass
 from datetime import date
 
 from todo.application.contracts.storage import StorageProtocol, Unset
-from todo.domain.enums import Priority, ProjectStatus, Status
-from todo.domain.models import Project, ProjectUpdate, TodoItem
+from todo.domain.deadline import Deadline
+from todo.domain.dependency_graph import DependencyGraph
+from todo.domain.priority import Priority
+from todo.domain.project import Project
+from todo.domain.project_status import ProjectStatus
+from todo.domain.project_update import ProjectUpdate
+from todo.domain.status import Status
+from todo.domain.tag import Tag
 from todo.domain.text import single_line
+from todo.domain.title import Title
+from todo.domain.todo_item import TodoItem
 from todo.exceptions import DependencyError, NotFoundError
 
 
-def _normalize_title(title: str) -> str:
-    """Titles are single-line: every storage and render format (editor
-    round-trip, plain output, table rows) relies on it."""
-    normalized = single_line(title)
-    if not normalized:
-        raise ValueError("Title cannot be empty.")
-    return normalized
+def _to_tags(tags: list[str] | None) -> list[Tag] | None:
+    """Raw strings become Tags; None means "leave them alone".
 
-
-def _normalize_tags(tags: list[str] | None) -> list[str] | None:
-    """Normalize tags for storage, rejecting anything unstorable.
-
-    Tags are stored comma-joined, so a comma inside a tag cannot
-    round-trip — reject it instead of silently splitting into phantoms.
-    A blank tag is rejected too, matching the filter path: `-t ""` from
-    an unset shell variable used to silently wipe every tag on the item.
-    Passing an empty list still clears them, which is explicit.
+    Passing an empty list still clears them, which is explicit. Tag itself
+    rejects what cannot be stored (empty, comma, multi-line); the two rules
+    here are not about a tag being valid — deduping is about the set, and
+    'none' is the CLI's clear-sentinel for --tag, so a tag by that name
+    would be unreachable, exactly as for --project.
     """
     if tags is None:
         return None
-    cleaned: list[str] = []
-    for tag in tags:
-        # Same single-line contract as titles and project names, so plain
-        # output stays one line per field.
-        normalized = single_line(tag)
-        if not normalized:
-            raise ValueError("Tag cannot be empty.")
-        if normalized.lower() == "none":
-            # 'none' is the CLI's clear-sentinel for --tag; a tag by that
-            # name would be unreachable, exactly as for --project.
+    cleaned: list[Tag] = []
+    for raw in tags:
+        tag = Tag(raw)
+        if tag.lower() == "none":
             raise ValueError("'none' is a reserved tag name.")
-        if "," in normalized:
-            raise ValueError(f"Tag '{normalized}' contains a comma; use separate tags.")
-        if normalized not in cleaned:
+        if tag not in cleaned:
             # Dedupe here so tag counts count items, not occurrences.
-            cleaned.append(normalized)
+            cleaned.append(tag)
     return cleaned
+
+
+def _to_deadline(value: date | None) -> Deadline | None:
+    """A plain date from the CLI or the TUI becomes the domain's Deadline.
+
+    None passes through: it means "no deadline".
+    """
+    if value is None:
+        return None
+    return Deadline.from_date(value)
 
 
 def add_todo(
@@ -61,12 +62,12 @@ def add_todo(
     project_id: int | None = None,
 ) -> TodoItem:
     return storage.add(
-        _normalize_title(title),
+        Title(title),
         body=body,
         priority=priority,
         status=status,
-        deadline=deadline,
-        tags=_normalize_tags(tags),
+        deadline=_to_deadline(deadline),
+        tags=_to_tags(tags),
         project_id=project_id,
     )
 
@@ -134,12 +135,15 @@ def _tracked_update(
         blocked_before = storage.blocked_ids() if completing else set()
         item = storage.update(
             item_id,
-            title=_normalize_title(title) if title is not None else None,
+            title=Title(title) if title is not None else None,
             body=body,
             priority=priority,
             status=status,
-            deadline=deadline,
-            tags=_normalize_tags(tags),
+            deadline=(
+                # UNSET means "leave it alone" and is not a date to convert.
+                deadline if isinstance(deadline, Unset) else _to_deadline(deadline)
+            ),
+            tags=_to_tags(tags),
             project_id=project_id,
         )
         unblocked: list[TodoItem] = []
@@ -200,26 +204,6 @@ def delete_todo(
         return _newly_unblocked(storage, victim.blocking, blocked_before)
 
 
-def _assert_no_cycle(
-    blocking_map: dict[int, list[int]],
-    blocked_id: int,
-    blocker_id: int,
-) -> None:
-    """Adding "blocker_id blocks blocked_id" forms a cycle iff blocked_id
-    already transitively blocks blocker_id — walk the in-memory edge map."""
-    seen: set[int] = set()
-    stack: list[int] = [blocked_id]
-    while stack:
-        current = stack.pop()
-        if current in seen:
-            continue
-        seen.add(current)
-        for nxt in blocking_map.get(current, []):
-            if nxt == blocker_id:
-                raise DependencyError("Adding this blocker would create a cycle.")
-            stack.append(nxt)
-
-
 def block_todo(
     storage: StorageProtocol,
     blocked_id: int,
@@ -246,24 +230,22 @@ def block_todo_batch(
     The whole batch runs in one transaction: any failure (missing item,
     self-block, cycle) rolls back only this batch's writes, so pre-existing
     edges are untouched by construction — no compensation logic that could
-    misidentify what to undo (round-2 finding). The edge table is loaded
-    once for the batch and updated in memory per insert, so an in-batch
-    cycle is still caught without rescanning per blocker.
+    misidentify what to undo (round-2 finding).
+
+    What may be added is the graph's rule, not this function's: the edge
+    set is loaded once, and each addition goes through it. An edge that
+    only forms a cycle together with an earlier edge in the same batch is
+    refused by the same code as any other, because the graph being folded
+    over already contains that earlier edge.
     """
-    for blocker_id in blocker_ids:
-        if blocked_id == blocker_id:
-            raise DependencyError("An item cannot block itself.")
     with storage.transaction():
         storage.get(blocked_id)  # raises NotFoundError before any graph work
-        blocking_map: dict[int, list[int]] = {}
-        for edge_blocker, edge_blocked in storage.dependency_edges():
-            blocking_map.setdefault(edge_blocker, []).append(edge_blocked)
+        graph = DependencyGraph(frozenset(storage.dependency_edges()))
         # Blocker existence is enforced once, by add_blocker's probes —
         # not duplicated here with a full hydration per blocker.
         for blocker_id in blocker_ids:
-            _assert_no_cycle(blocking_map, blocked_id, blocker_id)
+            graph = graph.with_edge(blocker_id, blocked_id)
             storage.add_blocker(blocked_id, blocker_id)
-            blocking_map.setdefault(blocker_id, []).append(blocked_id)
         return storage.get(blocked_id)
 
 

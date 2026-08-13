@@ -16,8 +16,8 @@ from todo.adapters.output import (
     _relative_age,
     _status_icon,
 )
-from todo.domain.enums import Status
-from todo.domain.models import TodoItem
+from todo.domain.status import Status
+from todo.domain.todo_item import TodoItem
 from todo.tui.render import join_styles
 
 SEPARATOR_PREFIX = "__sep_"

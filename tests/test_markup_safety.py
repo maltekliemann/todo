@@ -17,8 +17,12 @@ from todo.adapters.output import RichOutput
 from todo.adapters.sqlite_storage import SqliteStorage
 from todo.application.commands import add_todo, block_todo
 from todo.application.queries import ProjectDetail, ProjectSummary, show_project
-from todo.domain.enums import Priority, ProjectStatus, Status
-from todo.domain.models import Project, ProjectUpdate, TodoItem
+from todo.domain.priority import Priority
+from todo.domain.project import Project
+from todo.domain.project_status import ProjectStatus
+from todo.domain.project_update import ProjectUpdate
+from todo.domain.status import Status
+from todo.domain.todo_item import TodoItem
 from todo.tui.app import TodoApp
 
 HOSTILE = "Fix [/] thing"

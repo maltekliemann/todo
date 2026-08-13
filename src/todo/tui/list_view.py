@@ -19,8 +19,8 @@ from todo.application.queries import (
     list_todos,
     show_todo,
 )
-from todo.domain.enums import Priority
-from todo.domain.models import TodoItem
+from todo.domain.priority import Priority
+from todo.domain.todo_item import TodoItem
 from todo.exceptions import NotFoundError, TodoError
 from todo.tui.blockers import BlockDialog
 from todo.tui.detail import DetailPane

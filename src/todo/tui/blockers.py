@@ -22,7 +22,7 @@ from textual.widgets.option_list import Option
 from todo.application.commands import block_todo, unblock_todo
 from todo.application.contracts.storage import StorageProtocol
 from todo.application.queries import list_todos, show_todo
-from todo.domain.models import TodoItem
+from todo.domain.todo_item import TodoItem
 from todo.exceptions import TodoError
 
 

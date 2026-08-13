@@ -318,7 +318,7 @@ class TestSharedNormalizationHelpers:
     — the five hand-copies had already diverged."""
 
     def test_shared_tag_splitting(self) -> None:
-        from todo.domain.tags import split_tags
+        from todo.domain.tag import split_tags
 
         assert split_tags(" a , ,b, a ") == ["a", "b", "a"]
         assert split_tags("") == []
@@ -341,7 +341,7 @@ class TestSharedNormalizationHelpers:
             path.relative_to(root)
             for path in root.rglob("*.py")
             for name in ("def _single_line", "def _split_tags", "def _dedupe_tags")
-            if name in path.read_text() and path.name not in ("text.py", "tags.py")
+            if name in path.read_text() and path.name not in ("text.py", "tag.py")
         ]
         assert offenders == []
 

@@ -17,7 +17,7 @@ from textual.widget import Widget
 
 from todo.application.commands import CompletionResult
 from todo.application.contracts.storage import StorageProtocol
-from todo.domain.models import TodoItem
+from todo.domain.todo_item import TodoItem
 from todo.exceptions import TodoError
 from todo.tui.editor import apply_body_edit, editor_command
 from todo.tui.render import escape_markup

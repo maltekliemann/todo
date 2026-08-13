@@ -6,7 +6,7 @@ import pytest
 
 from todo.adapters.sqlite_storage import SqliteStorage
 from todo.application.commands import add_todo
-from todo.domain.enums import ProjectStatus
+from todo.domain.project_status import ProjectStatus
 from todo.exceptions import DuplicateProjectError, ProjectNotFoundError
 
 

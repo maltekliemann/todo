@@ -10,8 +10,13 @@ import pytest
 
 from todo.adapters.output import RichOutput
 from todo.application.queries import ProjectDetail, ProjectSummary
-from todo.domain.enums import Priority, ProjectStatus, Status
-from todo.domain.models import Project, ProjectUpdate, TodoItem
+from todo.domain.deadline import Deadline
+from todo.domain.priority import Priority
+from todo.domain.project import Project
+from todo.domain.project_status import ProjectStatus
+from todo.domain.project_update import ProjectUpdate
+from todo.domain.status import Status
+from todo.domain.todo_item import TodoItem
 
 _NOW = datetime.now(tz=timezone.utc)
 
@@ -59,12 +64,16 @@ class TestRichLists:
 
     def test_list_variants(self, rich_out: RichOutput, capsys) -> None:
         items = [
-            _item(id=1, title="Overdue", deadline=date.today() - timedelta(days=2)),
+            _item(
+                id=1,
+                title="Overdue",
+                deadline=Deadline.from_date(date.today() - timedelta(days=2)),
+            ),
             _item(
                 id=2,
                 title="Urgent soon",
                 priority=Priority.URGENT,
-                deadline=date.today() + timedelta(days=1),
+                deadline=Deadline.from_date(date.today() + timedelta(days=1)),
             ),
             _item(id=3, title="Blocked one", blocked_by=[1], is_blocked=True),
             _item(
@@ -86,7 +95,7 @@ class TestRichLists:
         item = _item(
             title="Everything",
             body="A body",
-            deadline=date.today() + timedelta(days=10),
+            deadline=Deadline.from_date(date.today() + timedelta(days=10)),
             tags=["a", "b"],
             blocked_by=[7],
             blocking=[9],
@@ -241,7 +250,7 @@ class TestColumnAlignment:
         """PlainOutput is the machine-parseable format: a 7-char HIGH label
         against 6-char others shifts every high-priority row's columns."""
         from todo.adapters.output import _priority_label
-        from todo.domain.enums import Priority
+        from todo.domain.priority import Priority
 
         widths = {len(_priority_label(p)) for p in Priority}
         assert len(widths) == 1, {p.value: _priority_label(p) for p in Priority}
@@ -270,7 +279,11 @@ class TestColumnAlignment:
         from todo.adapters.output import _DEADLINE_COL_WIDTH, _deadline_str
 
         longest = max(
-            len(_deadline_str(_item(deadline=date.today() - timedelta(days=d))))
+            len(
+                _deadline_str(
+                    _item(deadline=Deadline.from_date(date.today() - timedelta(days=d)))
+                )
+            )
             for d in (1, 12, 340, 3400)
         )
         # The 🔴 prefix is a double-width cell, so it costs one more column.

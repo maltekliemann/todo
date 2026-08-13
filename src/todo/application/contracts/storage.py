@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 from contextlib import AbstractContextManager
-from datetime import date, datetime
+from datetime import datetime
 from enum import Enum, auto
 from typing import Protocol, runtime_checkable
 
-from todo.domain.enums import Priority, ProjectStatus, Status
-from todo.domain.models import Project, ProjectUpdate, TodoItem
+from todo.domain.deadline import Deadline
+from todo.domain.priority import Priority
+from todo.domain.project import Project
+from todo.domain.project_status import ProjectStatus
+from todo.domain.project_update import ProjectUpdate
+from todo.domain.status import Status
+from todo.domain.tag import Tag
+from todo.domain.title import Title
+from todo.domain.todo_item import TodoItem
 
 
 class Unset(Enum):
@@ -35,13 +42,13 @@ class StorageProtocol(Protocol):
 
     def add(
         self,
-        title: str,
+        title: Title,
         *,
         body: str = "",
         priority: Priority = Priority.MEDIUM,
         status: Status = Status.TODO,
-        deadline: date | None = None,
-        tags: list[str] | None = None,
+        deadline: Deadline | None = None,
+        tags: list[Tag] | None = None,
         project_id: int | None = None,
     ) -> TodoItem: ...
 
@@ -51,12 +58,12 @@ class StorageProtocol(Protocol):
         self,
         item_id: int,
         *,
-        title: str | None = None,
+        title: Title | None = None,
         body: str | None = None,
         priority: Priority | None = None,
         status: Status | None = None,
-        deadline: date | None | Unset = UNSET,
-        tags: list[str] | None = None,
+        deadline: Deadline | None | Unset = UNSET,
+        tags: list[Tag] | None = None,
         project_id: int | None | Unset = UNSET,
     ) -> TodoItem: ...
 

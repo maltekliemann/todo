@@ -1,45 +1,37 @@
+"""A todo item."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import datetime
 
-from todo.domain.enums import Priority, ProjectStatus, Status
-
-
-@dataclass(frozen=True)
-class Project:
-    id: int
-    name: str
-    description: str
-    status: ProjectStatus
-    created_at: datetime
-    updated_at: datetime
-
-    @property
-    def is_archived(self) -> bool:
-        return self.status == ProjectStatus.ARCHIVED
-
-
-@dataclass(frozen=True)
-class ProjectUpdate:
-    id: int
-    project_id: int
-    body: str
-    created_at: datetime
+from todo.domain.deadline import Deadline
+from todo.domain.priority import Priority
+from todo.domain.status import Status
+from todo.domain.tag import Tag
+from todo.domain.title import Title
 
 
 @dataclass(frozen=True)
 class TodoItem:
+    """One item, and the facts derived from its own fields.
+
+    `blocked_by`, `blocking` and `is_blocked` are read projections of the
+    DependencyGraph, filled in on read. They are not state: nothing writes
+    through them, because a dependency is not a property of either item it
+    joins. Change one through the graph.
+    """
+
     id: int
-    title: str
+    title: Title
     body: str
     priority: Priority
     status: Status
     created_at: datetime
     updated_at: datetime
     done_at: datetime | None
-    deadline: date | None
-    tags: list[str]
+    deadline: Deadline | None
+    tags: list[Tag]
     blocked_by: list[int] = field(default_factory=list)
     blocking: list[int] = field(default_factory=list)
     is_blocked: bool = False
@@ -52,15 +44,17 @@ class TodoItem:
 
     @property
     def is_overdue(self) -> bool:
+        # The date knows whether it has passed; only the item knows whether
+        # that still matters.
         if self.deadline is None or self.is_done:
             return False
-        return date.today() > self.deadline
+        return self.deadline.has_passed
 
     @property
     def days_until_deadline(self) -> int | None:
         if self.deadline is None:
             return None
-        return (self.deadline - date.today()).days
+        return self.deadline.days_until
 
     @property
     def deadline_urgent(self) -> bool:

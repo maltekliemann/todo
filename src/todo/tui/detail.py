@@ -7,7 +7,7 @@ from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widgets import Static
 
-from todo.domain.models import TodoItem
+from todo.domain.todo_item import TodoItem
 from todo.tui.render import escape_markup, meta_lines
 
 

@@ -6,8 +6,10 @@ from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from todo.application.queries import ProjectDetail, ProjectSummary
-from todo.domain.enums import Priority, Status
-from todo.domain.models import Project, TodoItem
+from todo.domain.priority import Priority
+from todo.domain.project import Project
+from todo.domain.status import Status
+from todo.domain.todo_item import TodoItem
 
 
 def _relative_age(dt: datetime) -> str:

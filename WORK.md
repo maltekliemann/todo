@@ -1,70 +1,66 @@
 # WORK
 
-Round 3, opened 2026-08-13. One request: **an item opens as a menu whose
-fields you edit in place; `$EDITOR` is for the body and nothing else.**
-
-Your two calls: every field except the body lives in the menu (title,
-priority, status, deadline, tags, project, blockers), and `i` / `e` /
-Enter collapse into that one screen — the read-only view goes away.
+Round 4, opened 2026-08-13. The domain layer holds the domain rules.
 
 ## done
 
-1. **`ItemScreen`** — the menu. Rows: Title, Priority, Status, Deadline,
-   Tags, Project, Blocked by, Blocking, Body. ↑↓ moves,
-   Enter edits the highlighted row, Esc closes. Errors report inline and
-   never close the screen; a body preview fills whatever height is left.
-2. **The editing affordances** — a text prompt (title, deadline, tags),
-   a choice menu (priority, status, project), and the existing searchable
-   picker for blockers. Nothing is typed as `key: value` any more.
-3. **`$EDITOR` carries the body alone** — no field lines, no `# Body`
-   marker, so there is no format to get wrong and no parse to reject.
-   `parse_editor_text` and the field parser go with it.
-4. **One key opens an item** — `i`, `e` and Enter all reach `ItemScreen`;
-   `InspectDialog` is deleted. The footer loses an entry.
-5. **Both ends of a dependency are editable** — `Blocking` opens the same
-   picker as `Blocked by`, asking "What waits on #1?" instead of "What
-   does #1 wait on?" and writing the edge the other way round.
-6. **Project becomes editable** — it was context-only in the buffer and
-   unreachable from the TUI; the menu picks from the existing projects
-   (or none).
+1. **One file per model.** `enums.py` and `models.py` are gone — they
+   sorted by Python data type (all the Enums here, all the dataclasses
+   there), which says how a thing is built and not what it is.
 
-## what I looked at
+   ```
+   domain/  title.py  tag.py  deadline.py  priority.py  status.py
+            project_status.py  todo_item.py  project.py
+            project_update.py  dependency_graph.py  text.py
+   ```
 
-Not widget state: the screens rendered to SVG at 80x24, 80x20 and 60x16
-and read back as text. Two things only the render showed —
+2. **`DependencyGraph`** — the aggregate. An edge belongs to neither item
+   it joins, and the rule that admits it (acyclic) ranges over the whole
+   set, so the graph is the consistency boundary. `with_edge` returns a
+   valid graph or raises; construction validates too, which is what
+   catches a set written by something that went around the type.
+   `_assert_no_cycle` is gone from `commands.py`.
 
-- the heading wrapped and left `11:10` alone on its own line (the box was
-  too narrow), and
-- at 60x16 the hint, and then the inline error, fell off the bottom —
-  round-2 defect #7 in a new dialog.
+3. **`Title`, `Tag`, `Deadline`** — `str`/`date` subclasses that validate
+   on construction, so an invalid one cannot exist and therefore cannot
+   be stored. `_normalize_title` and `_normalize_tags` are gone.
+   `StorageProtocol.add`/`update` now say `Title`, `list[Tag]`,
+   `Deadline`, so a raw string cannot reach storage.
 
-Both fixed: a wider box, the body preview moved last so it is the only
-part that gives way, and the error row shown only when it has something
-to say.
+4. **`Deadline` owns "has it passed"; `TodoItem` owns "is it overdue"** —
+   the date knows about itself, and only the item knows whether that
+   still matters.
+
+## what moved and what didn't
+
+- `is_blocked` is still computed in SQL (`sqlite_storage.py:279–286`).
+  It's the same species of misplacement, and it needs the port to change
+  shape. Not this round.
+- The row-level `add_blocker`/`remove_blocker` port is unchanged, so the
+  graph can still be bypassed — thirteen test call sites do exactly that.
+  Deliberate: closing it costs the adapter plus those thirteen, and buys
+  only that tests cannot lie. Production has one caller, `commands.py`.
+- `'none' is a reserved tag name` stayed in `commands.py`. It is a fact
+  about the CLI's clear-sentinel, not about a valid tag — and putting it
+  in the type would make a legacy row unreadable.
+
+## one rule I changed
+
+`tests/test_architecture.py` said the domain may import stdlib and
+`todo.domain` only. `DependencyGraph` needs `DependencyError`, so the
+rule now allows `todo.exceptions` as well. A domain that enforces a rule
+has to be able to say what it refused, and `exceptions.py` is a
+dependency-free leaf, so this cannot invert the layering. Say if you'd
+rather the graph raised something of its own instead.
 
 ## notes
 
-- **`PRD.md` will be stale again** and I am not editing your spec: it
-  describes `i` as a read-only inspect modal and `e` as the `$EDITOR`
-  round trip with `title:`/`priority:`/... lines. Say the word and I
-  will bring it up to date in a separate commit.
-- **What the deleted inspect view could do that the menu cannot**: it
-  scrolled a long body full-screen. The menu keeps a body preview, but
-  it is smaller — the whole body is one Enter away in `$EDITOR`, and the
-  detail pane under the table still renders it.
-- **An item deleted while its screen is open** reports "not found" inline
-  and stays; Esc closes it. Vanishing mid-keystroke was the alternative,
-  and it explains less.
-- **Editing an item can now change what another item shows**, which is
-  worth naming but is not new: a dependency is a row in
-  `todo_dependencies`, owned by neither item. `add_blocker` writes that
-  edge and touches neither item's own row, so `b` on #1 has always
-  changed what #2's Deps column says. Editing from the `Blocking` end
-  writes the same edge with the ids swapped — same command, same cycle
-  check, no new invariant.
+- **`PRD.md` is stale from round 3** and I have not touched your spec: it
+  still describes `i` as a read-only modal and `e` as the `$EDITOR`
+  buffer with `title:`/`priority:` lines.
 
 ---
 
-Round 2 (the footer, the blocker picker, the Deps column, cursor modes)
-is in git history: `fae5e2b..cb97d69`. Round 1 (PRD audit + the TUI
-split) is `9edf848..3663d44`.
+Round 3 (the item menu, `$EDITOR` reduced to the body, both ends of a
+dependency editable) is `70fa827..5a34bdc`. Round 2 is
+`fae5e2b..cb97d69`. Round 1 is `9edf848..3663d44`.

@@ -4,7 +4,9 @@ Layers, inner to outer:
     domain -> application -> adapters -> infra/cli, tui
 
 Rules:
-- domain imports stdlib + todo.domain only.
+- domain imports stdlib + todo.domain + exceptions only. A domain that
+  enforces a rule has to be able to say what it refused, and exceptions is
+  a dependency-free leaf, so this cannot invert the layering.
 - application imports stdlib + domain + application + exceptions only —
   never adapters, infra, tui, or third-party UI/storage libraries.
 - adapters implement application contracts: no click/textual, no infra/tui.
@@ -25,7 +27,7 @@ _STDLIB = set(sys.stdlib_module_names)
 
 # layer -> (allowed third-party roots, allowed todo.* prefixes)
 _RULES: dict[str, tuple[set[str], set[str]]] = {
-    "domain": (set(), {"todo.domain"}),
+    "domain": (set(), {"todo.domain", "todo.exceptions"}),
     "application": (
         set(),
         {"todo.domain", "todo.application", "todo.exceptions"},

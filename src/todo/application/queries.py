@@ -5,10 +5,13 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from todo.application.contracts.storage import StorageProtocol
-from todo.domain.enums import Priority, Status
-from todo.domain.models import Project, ProjectUpdate, TodoItem
-from todo.domain.tags import split_tags
+from todo.domain.priority import Priority
+from todo.domain.project import Project
+from todo.domain.project_update import ProjectUpdate
+from todo.domain.status import Status
+from todo.domain.tag import split_tags
 from todo.domain.text import single_line
+from todo.domain.todo_item import TodoItem
 from todo.exceptions import ProjectNotFoundError
 
 

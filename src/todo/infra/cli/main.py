@@ -33,8 +33,10 @@ from todo.application.queries import (
     summary,
 )
 from todo.config import get_db_path
-from todo.domain.enums import Priority, Status
-from todo.domain.models import Project, TodoItem
+from todo.domain.priority import Priority
+from todo.domain.project import Project
+from todo.domain.status import Status
+from todo.domain.todo_item import TodoItem
 from todo.exceptions import (
     DependencyError,
     DuplicateProjectError,
