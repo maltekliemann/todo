@@ -5,34 +5,40 @@ running program before being listed.
 
 ## todo
 
-1. **The footer is cut off.** 16 bindings render 187 columns into a
-   single-row footer; at width 80, 100 and 120 the tail is invisible —
-   which includes `.` (cursor mode). The special keys also render under
-   their raw names (`greater_than_sign`, `less_than_sign`, `full_stop`,
-   `slash`) instead of `>`, `<`, `.`, `/`.
-2. **Setting a blocker requires remembering an id.** `BlockDialog` is a
-   bare `Input`: you type `3` to add and `-3` to remove. Wanted: pick from
-   a searchable list.
-3. **The `$EDITOR` buffer shows neither the project nor the blockers.**
-   `item_to_editor_text` emits title/priority/status/deadline/tags/body
-   only. (The inspect modal — `i` / `Enter` — does show both; verified.)
-4. **Stay mode doesn't let you walk the list with `>`/`<`.** Repro: five
-   items, press `.` for stay, then `>` three times. The cursor sits on row
-   1 the whole time, but the item that lands on row 1 is the one just
-   moved (in-progress sorts above todo), so the same item is advanced
-   again and again. With `d` it happens to work, because done sorts to the
-   bottom.
-5. **The table shows no dependency information.** Which items block a row,
-   and how many items it blocks, appear only in the detail pane for the
-   selected item.
-
-## declined
-
-_(nothing yet this round)_
+_(none)_
 
 ## done
 
-_(nothing yet this round)_
+1. **The footer is cut off** — 16 bindings rendered 189 columns into a
+   one-row footer, hiding everything past the edge (including `.`). Special
+   keys show as `<`, `>`, `/`, `.` instead of `greater_than_sign` and
+   friends; status and filter keys share a group label; the priority digits
+   left the footer; the command-palette key is gone. 189 → 76 columns, and
+   a test now fails if it ever exceeds 80 again. `fae5e2b`.
+2. **Blockers are picked, not remembered** — `b` lists every other item,
+   marks and sorts first the ones already blocking this one, and narrows as
+   you type (title or id). Enter toggles. `-3` still removes blocker #3.
+   `ea99cf8`.
+3. **The `$EDITOR` buffer shows the project and the dependencies** — as
+   commented context lines the parser never sees, so editing one cannot
+   silently do nothing. `970dbd8`.
+4. **Stay mode walks the list** — it now names the item that *followed* the
+   one you moved, instead of holding a row index. Holding the index was why
+   `>` kept re-touching the same item: a status step re-sorts it to the top
+   of its new group, which is the row the cursor was on. `0f8df0c`.
+5. **A `Deps` column on every row** — `←#2,#3` for what it waits on (ids,
+   capped at two then `+n`), `→3` for how many wait on it. `cb718f5`.
+
+## notes
+
+- **`PRD.md` is now stale in one place** and I did not edit your spec: it
+  describes `b` as "a dialog to add a blocker to the selected item by id
+  (a `-` prefix removes it)". The `-id` form still works, but the dialog
+  is a searchable picker now.
+- **Self-blocking is unreachable rather than rejected.** The picker never
+  offers the item itself, so the inline "an item cannot block itself"
+  error no longer appears in the TUI. The domain rule is unchanged and
+  still tested.
 
 ---
 
