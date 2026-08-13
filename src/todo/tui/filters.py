@@ -9,36 +9,24 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from todo.domain.priority import Priority
-from todo.domain.project import Project
-from todo.domain.project_id import ProjectId
 from todo.domain.todo_item import TodoItem
 from todo.tui.render import escape_markup
 
 
 @dataclass
 class Filters:
-    """Search, tag, project and priority, as the list view holds them.
-
-    The project filter is keyed on the stable id, not the mutable name —
-    an external rename must not blank the filtered list. The name is
-    remembered alongside it so a deleted project can still be named in the
-    status bar instead of degrading to '?'.
-    """
+    """Search, tag and priority, as the list view holds them."""
 
     search: str = ""
     tag: str | None = None
-    project_id: ProjectId | None = None
-    project_name: str | None = None
     priority: Priority | None = None
 
     def any_active(self) -> bool:
-        return bool(self.search or self.tag or self.project_id or self.priority)
+        return bool(self.search or self.tag or self.priority)
 
     def clear(self) -> None:
         self.search = ""
         self.tag = None
-        self.project_id = None
-        self.project_name = None
         self.priority = None
 
     def apply_search(self, items: list[TodoItem]) -> list[TodoItem]:
@@ -72,26 +60,6 @@ class Filters:
             idx = -1
         self.tag = tags[idx + 1] if idx + 1 < len(tags) else None
 
-    def cycle_project(self, projects: list[Project]) -> None:
-        """No filter -> each project in turn -> no filter."""
-        if not projects:
-            return
-        ids = [p.id for p in projects]
-        if self.project_id is None:
-            idx = 0
-        else:
-            try:
-                current = ids.index(self.project_id)
-            except ValueError:
-                current = -1
-            idx = current + 1
-        if idx < len(ids):
-            self.project_id = ids[idx]
-            self.project_name = projects[idx].name
-        else:
-            self.project_id = None
-            self.project_name = None
-
     def toggle_priority(self, priority: Priority) -> None:
         """Pressing the same priority key again clears the filter."""
         self.priority = None if self.priority == priority else priority
@@ -103,9 +71,6 @@ class Filters:
             parts.append(f"[dim]Search:[/dim] [b]{escape_markup(self.search)}[/b]")
         if self.tag is not None:
             parts.append(f"[dim]Tag:[/dim] [b]{escape_markup(self.tag)}[/b]")
-        if self.project_id is not None:
-            label = escape_markup(self.project_name or "?")
-            parts.append(f"[dim]Project:[/dim] [b]{label}[/b]")
         if self.priority is not None:
             parts.append(f"[dim]Priority:[/dim] [b]{self.priority.value}[/b]")
         return parts

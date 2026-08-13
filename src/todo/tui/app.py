@@ -7,11 +7,9 @@ from textual.app import App, ComposeResult
 from todo.adapters.sqlite_counter_store import SqliteCounterStore
 from todo.adapters.sqlite_dependency_store import SqliteDependencyStore
 from todo.adapters.sqlite_item_store import SqliteItemStore
-from todo.adapters.sqlite_project_store import SqliteProjectStore
 from todo.application.contracts.counter_store import CounterStore
 from todo.application.contracts.dependency_store import DependencyStore
 from todo.application.contracts.item_store import ItemStore
-from todo.application.contracts.project_store import ProjectStore
 from todo.config import get_db_path
 from todo.tui.list_view import TodoListView
 
@@ -28,7 +26,6 @@ class TodoApp(App[None]):
         db_path: Path | None = None,
         *,
         items: ItemStore | None = None,
-        projects: ProjectStore | None = None,
         dependencies: DependencyStore | None = None,
         item_ids: CounterStore | None = None,
     ) -> None:
@@ -37,11 +34,8 @@ class TodoApp(App[None]):
         super().__init__()
         path = db_path or get_db_path()
         self._items = items or SqliteItemStore(path)
-        self._projects = projects or SqliteProjectStore(path)
         self._dependencies = dependencies or SqliteDependencyStore(path)
         self._item_ids = item_ids or SqliteCounterStore(path, "items")
 
     def compose(self) -> ComposeResult:
-        yield TodoListView(
-            self._items, self._dependencies, self._projects, self._item_ids
-        )
+        yield TodoListView(self._items, self._dependencies, self._item_ids)

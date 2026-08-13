@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from todo.application.queries.project_names import ProjectNames
 from todo.application.toast import Toast
 from todo.domain.dependency_graph import DependencyGraph
 from todo.domain.item_id import ItemId
@@ -112,15 +111,11 @@ def relative_age(dt: datetime) -> str:
     return f"{days // 30}mo"
 
 
-def meta_lines(
-    item: TodoItem,
-    graph: DependencyGraph,
-    names: ProjectNames,
-) -> list[str]:
+def meta_lines(item: TodoItem, graph: DependencyGraph) -> list[str]:
     """The metadata block shared by the detail pane and the item screen.
 
     One source of truth so the two renderings can never drift. User text
-    (project name, tags) is escaped — both widgets parse markup.
+    (tags) is escaped — both widgets parse markup.
     """
     first = f"Priority: {item.priority.value}    Status: {item.status.value}"
     if item.deadline:
@@ -132,9 +127,6 @@ def meta_lines(
     if item.done_at:
         second += f"    Done: {item.done_at.strftime('%b %d, %Y %H:%M')}"
     lines = [first, second]
-    project_name = names.of(item.project_id)
-    if project_name is not None:
-        lines.append(f"Project: {escape_markup(project_name)}")
     if item.tags:
         lines.append(f"Tags: {escape_markup(', '.join(sorted(item.tags)))}")
     blockers = graph.blockers_of(item.id)

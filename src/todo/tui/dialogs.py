@@ -15,13 +15,11 @@ from textual.widgets import Input, Label, Select
 
 from todo.application.contracts.counter_store import CounterStore
 from todo.application.contracts.item_store import ItemStore
-from todo.application.contracts.project_store import ProjectStore
 from todo.application.workflows.create_todo import CreateTodo
 from todo.application.workflows.take_item_id import TakeItemId
 from todo.domain.body import Body
 from todo.domain.deadline import Deadline
 from todo.domain.priority import Priority
-from todo.domain.project_id import ProjectId
 from todo.domain.status import Status
 from todo.domain.tag import Tag
 from todo.domain.title import Title
@@ -124,21 +122,10 @@ class NewItemDialog(ModalScreen[TodoItem | None]):
         Binding("up", "field_retreat", show=False),
     ]
 
-    def __init__(
-        self,
-        items: ItemStore,
-        projects: ProjectStore,
-        item_ids: CounterStore,
-        project_id: ProjectId | None = None,
-    ) -> None:
+    def __init__(self, items: ItemStore, item_ids: CounterStore) -> None:
         super().__init__()
         self._items = items
-        self._projects = projects
         self._item_ids = item_ids
-        # The list's active project filter. Creating an item while a
-        # filter is on used to store it unfiled, so it never appeared and
-        # the user re-added it — inheriting the filter matches intent.
-        self._project_id = project_id
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog-container"):
@@ -273,7 +260,6 @@ class NewItemDialog(ModalScreen[TodoItem | None]):
                 updated_at=stamp,
                 deadline=Deadline.from_date(deadline) if deadline else None,
                 tags=frozenset(Tag(t) for t in tags or ()),
-                project_id=self._project_id,
             )
             CreateTodo(self._items).execute(item)
         except (TodoError, ValueError) as exc:

@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from todo.domain.priority import Priority
-from todo.domain.project import Project
 from todo.domain.status import Status
 from todo.domain.todo_item import TodoItem
 from todo.tui.filters import Filters
@@ -25,16 +24,6 @@ def _item(item_id: int, title: str, *, body: str = "", tags: list[str] | None = 
         done_at=None,
         deadline=None,
         tags=tags or [],
-    )
-
-
-def _project(project_id: int, name: str) -> Project:
-    return Project(
-        id=project_id,
-        name=name,
-        description="",
-        created_at=_NOW,
-        updated_at=_NOW,
     )
 
 
@@ -78,28 +67,6 @@ class TestTagCycle:
         assert f.tag == "a"
 
 
-class TestProjectCycle:
-    def test_cycles_through_every_project_then_off(self) -> None:
-        f = Filters()
-        projects = [_project(1, "infra"), _project(2, "web")]
-        f.cycle_project(projects)
-        assert (f.project_id, f.project_name) == (1, "infra")
-        f.cycle_project(projects)
-        assert (f.project_id, f.project_name) == (2, "web")
-        f.cycle_project(projects)
-        assert (f.project_id, f.project_name) == (None, None)
-
-    def test_no_projects_is_a_no_op(self) -> None:
-        f = Filters()
-        f.cycle_project([])
-        assert f.project_id is None
-
-    def test_vanished_project_restarts_at_the_first(self) -> None:
-        f = Filters(project_id=99, project_name="deleted")
-        f.cycle_project([_project(1, "infra")])
-        assert (f.project_id, f.project_name) == (1, "infra")
-
-
 class TestPriorityAndClearing:
     def test_same_priority_twice_clears_it(self) -> None:
         f = Filters()
@@ -120,35 +87,16 @@ class TestPriorityAndClearing:
         assert f.any_active()
         f.clear()
         assert not f.any_active()
-        assert (f.tag, f.project_id, f.project_name, f.priority) == (
-            None,
-            None,
-            None,
-            None,
-        )
+        assert (f.tag, f.priority) == (None, None)
 
 
 class TestStatusParts:
     def test_lists_only_active_filters(self) -> None:
         assert Filters().status_parts() == []
-        parts = Filters(
-            search="q",
-            tag="t",
-            project_id=1,
-            project_name="infra",
-            priority=Priority.LOW,
-        ).status_parts()
-        assert len(parts) == 4
-        assert "infra" in parts[2]
-        assert "low" in parts[3]
-
-    def test_deleted_project_keeps_its_remembered_name(self) -> None:
-        parts = Filters(project_id=7, project_name="gone").status_parts()
-        assert "gone" in parts[0]
-
-    def test_unknown_project_name_degrades_to_a_placeholder(self) -> None:
-        parts = Filters(project_id=7).status_parts()
-        assert "?" in parts[0]
+        parts = Filters(search="q", tag="t", priority=Priority.LOW).status_parts()
+        assert len(parts) == 3
+        assert "t" in parts[1]
+        assert "low" in parts[2]
 
     def test_user_text_is_escaped(self) -> None:
         """The status line is markup: a tag named '[b]' must not style it."""

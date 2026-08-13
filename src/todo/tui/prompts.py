@@ -88,7 +88,7 @@ class ChoicePrompt(ModalScreen[str | None]):
     def on_mount(self) -> None:
         options = self.query_one("#prompt-options", OptionList)
         for _, label in self._choices:
-            # Text, never markup: project names are user-controlled.
+            # Text, never markup: a label may carry user-controlled text.
             options.add_option(Option(Text(label)))
         keys = [key for key, _ in self._choices]
         if self._choices:

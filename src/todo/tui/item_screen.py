@@ -25,13 +25,7 @@ from textual.widgets.option_list import Option
 
 from todo.application.contracts.dependency_store import DependencyStore
 from todo.application.contracts.item_store import ItemStore
-from todo.application.contracts.project_store import ProjectStore
-from todo.application.queries.list_projects import ListProjects
 from todo.application.queries.load_dependencies import LoadDependencies
-from todo.application.queries.project_names import (
-    LoadProjectNames,
-    ProjectNames,
-)
 from todo.application.queries.show_todo import ShowTodo
 from todo.application.toast import Toast
 from todo.application.workflows.edit_todo import EditTodo
@@ -39,8 +33,6 @@ from todo.application.workflows.set_status import SetStatus
 from todo.domain.deadline import Deadline
 from todo.domain.dependency_graph import DependencyGraph
 from todo.domain.priority import Priority
-from todo.domain.project_filter import ProjectFilter
-from todo.domain.project_id import ProjectId
 from todo.domain.status import Status
 from todo.domain.tag import Tag
 from todo.domain.title import Title
@@ -63,7 +55,6 @@ FIELDS: tuple[tuple[str, str], ...] = (
     ("status", "Status"),
     ("deadline", "Deadline"),
     ("tags", "Tags"),
-    ("project", "Project"),
     ("blocked_by", "Blocked by"),
     ("blocking", "Blocking"),
     ("body", "Body"),
@@ -79,12 +70,7 @@ def body_summary(body: str) -> str:
     return f"{lines} line{'' if lines == 1 else 's'}"
 
 
-def field_value(
-    item: TodoItem,
-    key: str,
-    graph: DependencyGraph,
-    names: ProjectNames,
-) -> str:
+def field_value(item: TodoItem, key: str, graph: DependencyGraph) -> str:
     """The current value of one field, as the row shows it."""
     if key == "title":
         return item.title
@@ -96,8 +82,6 @@ def field_value(
         return item.deadline.isoformat() if item.deadline else EMPTY
     if key == "tags":
         return ", ".join(sorted(item.tags)) or EMPTY
-    if key == "project":
-        return names.of(item.project_id) or EMPTY
     if key == "blocked_by":
         return ", ".join(i.label for i in graph.blockers_of(item.id)) or EMPTY
     if key == "blocking":
@@ -106,7 +90,7 @@ def field_value(
 
 
 def _row(label: str, value: str) -> Text:
-    # Text, never markup: titles, tags and project names are user text.
+    # Text, never markup: titles and tags are user text.
     row = Text()
     row.append(label.ljust(_LABEL_WIDTH), style="dim")
     row.append(value)
@@ -127,13 +111,11 @@ class ItemScreen(ModalScreen[bool]):
         self,
         items: ItemStore,
         dependencies: DependencyStore,
-        projects: ProjectStore,
         item: TodoItem,
     ) -> None:
         super().__init__()
         self._items = items
         self._dependencies = dependencies
-        self._projects = projects
         self._item = item
         self._changed = False
 
@@ -157,7 +139,6 @@ class ItemScreen(ModalScreen[bool]):
         item = self._item
         # Reloaded with the item: an edge changed by the picker has to show.
         graph = LoadDependencies(self._dependencies).execute()
-        names = LoadProjectNames(self._projects).execute()
 
         heading = Text(item.id.label, style="bold")
         heading.append(
@@ -175,9 +156,7 @@ class ItemScreen(ModalScreen[bool]):
         highlighted = options.highlighted
         options.clear_options()
         for key, label in FIELDS:
-            options.add_option(
-                Option(_row(label, field_value(item, key, graph, names)))
-            )
+            options.add_option(Option(_row(label, field_value(item, key, graph))))
         options.highlighted = 0 if highlighted is None else highlighted
 
         self.query_one("#item-body", Static).update(
@@ -282,8 +261,6 @@ class ItemScreen(ModalScreen[bool]):
                 ),
                 self._save_tags,
             )
-        elif key == "project":
-            self._edit_project()
         elif key == "blocked_by":
             self._edit_dependencies(Relation.WAITS_ON)
         elif key == "blocking":
@@ -355,34 +332,6 @@ class ItemScreen(ModalScreen[bool]):
                 self._item.remove_tag(gone)
             for added in wanted - self._item.tags:
                 self._item.add_tag(added)
-            EditTodo(self._items).execute(self._item)
-
-        self._apply_write(write)
-
-    def _edit_project(self) -> None:
-        try:
-            projects = [
-                s.project
-                for s in ListProjects(self._projects, self._items).execute(
-                    ProjectFilter(include_ended=True)
-                )
-            ]
-        except TodoError as exc:
-            self._show_message(str(exc) or "Could not read the projects")
-            return
-        choices = [("", f"({EMPTY} none)")] + [(str(p.id), p.name) for p in projects]
-        current = str(self._item.project_id or "")
-        self.app.push_screen(
-            ChoicePrompt("Project", choices, current), self._save_project
-        )
-
-    def _save_project(self, value: str | None) -> None:
-        if value is None:
-            return
-        project_id = ProjectId(int(value)) if value else None
-
-        def write() -> None:
-            self._item.set_project_id(project_id)
             EditTodo(self._items).execute(self._item)
 
         self._apply_write(write)

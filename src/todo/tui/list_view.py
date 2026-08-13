@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from types import MappingProxyType
-
 from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -11,15 +9,9 @@ from textual.widgets import DataTable, Footer, Static
 from todo.application.contracts.counter_store import CounterStore
 from todo.application.contracts.dependency_store import DependencyStore
 from todo.application.contracts.item_store import ItemStore
-from todo.application.contracts.project_store import ProjectStore
-from todo.application.queries.list_projects import ListProjects
 from todo.application.queries.list_tags import ListTags
 from todo.application.queries.list_todos import ListTodos
 from todo.application.queries.load_dependencies import DoneIds, LoadDependencies
-from todo.application.queries.project_names import (
-    LoadProjectNames,
-    ProjectNames,
-)
 from todo.application.queries.show_todo import ShowTodo
 from todo.application.toast import Toast
 from todo.application.workflows.delete_todo import DeleteTodo
@@ -28,8 +20,6 @@ from todo.domain.dependency_graph import DependencyGraph
 from todo.domain.item_filter import ItemFilter
 from todo.domain.item_id import ItemId
 from todo.domain.priority import Priority
-from todo.domain.project import Project
-from todo.domain.project_filter import ProjectFilter
 from todo.domain.status import Status
 from todo.domain.tag import Tag
 from todo.domain.todo_item import TodoItem
@@ -81,7 +71,6 @@ class TodoListView(Widget):
         Binding("4", "filter_priority('low')", "Low", show=False),
         Binding("slash", "search", "Search", key_display="/", group=_FILTER_GROUP),
         Binding("t", "cycle_tag", "Tag filter", group=_FILTER_GROUP),
-        Binding("p", "cycle_project", "Project filter", group=_FILTER_GROUP),
         Binding("0", "clear_filters", "Clear filters", group=_FILTER_GROUP),
         Binding(
             "full_stop", "toggle_cursor_mode", "Cursor", key_display=".", show=True
@@ -96,19 +85,16 @@ class TodoListView(Widget):
         self,
         items: ItemStore,
         dependencies: DependencyStore,
-        projects: ProjectStore,
         item_ids: CounterStore,
     ) -> None:
         super().__init__()
         self._item_store = items
         self._dependency_store = dependencies
-        self._project_store = projects
         self._item_id_counter = item_ids
         self._items: list[TodoItem] = []
         self._item_by_id: dict[ItemId, TodoItem] = {}
         self._graph = DependencyGraph(frozenset())
         self._done: frozenset[ItemId] = frozenset()
-        self._project_names = ProjectNames(MappingProxyType({}))
         self._filters = Filters()
         self._cursor_follows_item: bool = True
         # One error toast per failure streak: a persistently broken
@@ -196,33 +182,14 @@ class TodoListView(Widget):
     def _rows_for_refresh(self) -> list[TodoItem]:
         """Every read a refresh needs."""
 
-        # Tag/priority/project filtering happens in SQL via list_todos; only
+        # Tag and priority filtering happens in SQL via list_todos; only
         # the search filter stays in Filters, because it also matches tag
         # names, which storage-level search (title/body) does not cover.
-        project_id = self._filters.project_id
-        if project_id is not None:
-            match = next(
-                (
-                    p
-                    for p in _all_projects(self._project_store, self._item_store)
-                    if p.id == project_id
-                ),
-                None,
-            )
-            if match is None:
-                # Filtered project no longer exists: show nothing, but keep
-                # its remembered name — the last known name beats a bare '?'.
-                return []
-            # Label from the live row, so a rename shows the new name.
-            self._filters.project_name = match.name
-
-        self._project_names = LoadProjectNames(self._project_store).execute()
         return ListTodos(self._item_store).execute(
             ItemFilter(
                 include_done=True,
                 tags=frozenset({Tag(self._filters.tag)} if self._filters.tag else ()),
                 priority=self._filters.priority,
-                project_id=project_id,
             )
         )
 
@@ -303,7 +270,7 @@ class TodoListView(Widget):
             except TodoError:
                 return
 
-        pane.show(item, self._graph, self._project_names)
+        pane.show(item, self._graph)
 
     def _selected_item_id(self) -> ItemId | None:
         table = self.query_one("#item-list", DataTable)
@@ -329,12 +296,7 @@ class TodoListView(Widget):
                 self._refresh_list()
 
         self.app.push_screen(
-            NewItemDialog(
-                self._item_store,
-                self._project_store,
-                self._item_id_counter,
-                project_id=self._filters.project_id,
-            ),
+            NewItemDialog(self._item_store, self._item_id_counter),
             after,
         )
 
@@ -383,9 +345,7 @@ class TodoListView(Widget):
                 self._refresh_list()
 
         self.app.push_screen(
-            ItemScreen(
-                self._item_store, self._dependency_store, self._project_store, item
-            ),
+            ItemScreen(self._item_store, self._dependency_store, item),
             after,
         )
 
@@ -442,15 +402,6 @@ class TodoListView(Widget):
             self.notify(escape_markup(str(exc)), severity="error")
             return
         self._filters.cycle_tag(tags)
-        self._refresh_list()
-
-    def action_cycle_project(self) -> None:
-        try:
-            projects = _all_projects(self._project_store, self._item_store)
-        except TodoError as exc:
-            self.notify(escape_markup(str(exc)), severity="error")
-            return
-        self._filters.cycle_project(projects)
         self._refresh_list()
 
     def action_filter_priority(self, value: str) -> None:
@@ -522,13 +473,3 @@ class TodoListView(Widget):
                 self._refresh_list()
                 return
             self._refresh_list(select_id=successor)
-
-
-def _all_projects(projects: ProjectStore, items: ItemStore) -> list[Project]:
-    """Every project, ended ones included — for the filter and the picker."""
-    return [
-        s.project
-        for s in ListProjects(projects, items).execute(
-            ProjectFilter(include_ended=True)
-        )
-    ]

@@ -4,26 +4,21 @@ import contextlib
 from collections.abc import Iterator
 from datetime import date
 from pathlib import Path
-from types import MappingProxyType
 
 import pytest
 from rich.text import Text
 from textual.coordinate import Coordinate
 from textual.widgets import DataTable, Input, Label, OptionList, Static
 
-from tests.factory import NewItem, add_blocker, add_project, add_todo
+from tests.factory import NewItem, add_blocker, add_todo
 from todo.adapters.sqlite_dependency_store import SqliteDependencyStore
 from todo.adapters.sqlite_item_store import SqliteItemStore
-from todo.adapters.sqlite_project_log_store import SqliteProjectLogStore
 from todo.adapters.sqlite_project_store import SqliteProjectStore
-from todo.application.queries.project_names import ProjectNames
 from todo.domain.deadline import Deadline
 from todo.domain.dependency_graph import DependencyGraph
 from todo.domain.item_filter import ItemFilter
 from todo.domain.item_id import ItemId
 from todo.domain.priority import Priority
-from todo.domain.project_id import ProjectId
-from todo.domain.project_name import ProjectName
 from todo.domain.status import Status
 from todo.domain.tag import Tag
 from todo.domain.todo_item import TodoItem
@@ -1264,57 +1259,6 @@ class TestCursorMode:
             assert self._selected_id(app) == 3
 
 
-class TestProjectFilter:
-    @pytest.fixture()
-    def project_storage(
-        self, items: SqliteItemStore, projects: SqliteProjectStore, db_path: Path
-    ) -> Path:
-        infra = add_project(projects, "infra", description="")
-        web = add_project(projects, "web", description="")
-        add_todo(items, NewItem(title="Infra task", project_id=infra.id))
-        add_todo(items, NewItem(title="Web task", project_id=web.id))
-        add_todo(items, NewItem(title="Loose task"))
-        return db_path
-
-    async def test_p_cycles_project_filter(self, project_storage: Path) -> None:
-        app = TodoApp(project_storage)
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            table = app.query_one("#item-list", DataTable)
-            assert _item_rows(table) == 3
-
-            await pilot.press("p")  # infra
-            await pilot.pause()
-            assert _item_rows(table) == 1
-
-            await pilot.press("p")  # web
-            await pilot.pause()
-            assert _item_rows(table) == 1
-
-            await pilot.press("p")  # back to all
-            await pilot.pause()
-            assert _item_rows(table) == 3
-
-    async def test_zero_clears_project_filter(self, project_storage: Path) -> None:
-        app = TodoApp(project_storage)
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            table = app.query_one("#item-list", DataTable)
-            await pilot.press("p")
-            await pilot.pause()
-            assert _item_rows(table) == 1
-            await pilot.press("0")
-            await pilot.pause()
-            assert _item_rows(table) == 3
-
-    async def test_detail_pane_shows_project(self, project_storage: Path) -> None:
-        app = TodoApp(project_storage)
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            meta = str(app.query_one("#detail-meta", Static).render())
-            assert "Project: infra" in meta
-
-
 class TestSearch:
     async def test_slash_opens_search(
         self, seeded: Path, items: SqliteItemStore
@@ -1826,7 +1770,6 @@ class TestSharedMetaPresenter:
             done_at=None,
             deadline=Deadline(2099, 1, 1),
             tags=frozenset({Tag("a[red]b")}),
-            project_id=ProjectId(1),
         )
         lines = meta_lines(
             item,
@@ -1839,7 +1782,6 @@ class TestSharedMetaPresenter:
                     }
                 )
             ),
-            ProjectNames(MappingProxyType({ProjectId(1): ProjectName("proj [/]")})),
         )
         joined = "\n".join(lines)
         assert "Priority: high" in joined
@@ -1847,7 +1789,6 @@ class TestSharedMetaPresenter:
         assert "Blocked by: #1" in joined
         assert "Blocking: #2, #3" in joined
         # User text is escaped for markup-parsing widgets.
-        assert "proj [/]" not in joined
         assert "a[red]b" not in joined
 
 
@@ -1987,122 +1928,6 @@ class TestEditorBufferReadFailure:
             assert str(missing) in notices[0]
 
 
-class TestPollRetryAndRenameStableFilter:
-    async def test_project_filter_survives_external_rename(
-        self, items: SqliteItemStore, projects: SqliteProjectStore, db_path: Path
-    ) -> None:
-        """The filter keys on the stable project id: a rename must neither
-        blank the list nor mislabel the status bar."""
-        from tests.factory import add_project, edit_project
-        from todo.tui.list_view import TodoListView
-
-        project = add_project(projects, "Alpha")
-        add_todo(items, NewItem(title="in alpha", project_id=project.id))
-        app = TodoApp(db_path)
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            await pilot.press("p")  # filter: Alpha
-            await pilot.pause()
-            table = app.query_one("#item-list", DataTable)
-            assert _item_rows(table) == 1
-
-            other = SqliteProjectStore(db_path)
-            edit_project(other, project.id, name="Beta")
-            other.close()
-
-            view = app.query_one(TodoListView)
-            view._refresh_list()
-            await pilot.pause()
-            assert _item_rows(table) == 1  # still filtered to the project
-            status = str(app.query_one("#search-status", Static).render())
-            assert "Beta" in status
-
-
-class TestPollVersionRaceAndToastStreak:
-    async def test_deleted_filtered_project_is_named_not_question_mark(
-        self, items: SqliteItemStore, projects: SqliteProjectStore, db_path: Path
-    ) -> None:
-        """A deleted filtered project must still be nameable in the status
-        bar (round-10 regression: it degraded to '?')."""
-        from tests.factory import add_project, delete_project
-        from todo.tui.list_view import TodoListView
-
-        project = add_project(projects, "Apollo")
-        add_todo(items, NewItem(title="in apollo", project_id=project.id))
-        app = TodoApp(db_path)
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            await pilot.press("p")
-            await pilot.pause()
-
-            delete_project(
-                SqliteProjectStore(db_path),
-                SqliteItemStore(db_path),
-                SqliteProjectLogStore(db_path),
-                project.id,
-            )
-
-            view = app.query_one(TodoListView)
-            view._refresh_list()
-            await pilot.pause()
-            status = str(app.query_one("#search-status", Static).render())
-            assert "?" not in status
-            assert "Apollo" in status
-
-
-class TestCreateUnderActiveFilter:
-    async def test_new_item_lands_in_the_filtered_project(
-        self, projects: SqliteProjectStore, items: SqliteItemStore, db_path: Path
-    ) -> None:
-        """Creating while a project filter is active must not produce an
-        item the user can never see."""
-        from tests.factory import add_project
-
-        project = add_project(projects, "Alpha")
-        add_todo(items, NewItem(title="Alpha work item", project_id=project.id))
-        app = TodoApp(db_path)
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            await pilot.press("p")  # filter: Alpha
-            await pilot.pause()
-            await pilot.press("n")
-            await pilot.pause()
-            for ch in "Buy milk":
-                await pilot.press(ch)
-            for _ in range(4):
-                await pilot.press("enter")
-                await pilot.pause()
-
-            created = next(
-                i
-                for i in items.find(ItemFilter(include_done=True))
-                if i.title == "Buy milk"
-            )
-            assert created.project_id == project.id
-            table = app.query_one("#item-list", DataTable)
-            assert _item_rows(table) == 2  # visible, not invisible
-
-    async def test_new_item_visible_with_no_filter(
-        self, items: SqliteItemStore, db_path: Path
-    ) -> None:
-        app = TodoApp(db_path)
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            await pilot.press("n")
-            await pilot.pause()
-            for ch in "Solo":
-                await pilot.press(ch)
-            for _ in range(4):
-                await pilot.press("enter")
-                await pilot.pause()
-            created = next(
-                i
-                for i in items.find(ItemFilter(include_done=True))
-                if i.title == "Solo"
-            )
-            assert created.project_id is None
-
-
 @contextlib.contextmanager
 def monkeypatched(module: object, name: str, value: object) -> Iterator[None]:
     original = getattr(module, name)
@@ -2153,10 +1978,8 @@ class TestItemMenu:
         self,
         items: SqliteItemStore,
         dependencies: SqliteDependencyStore,
-        projects: SqliteProjectStore,
         db_path: Path,
     ) -> None:
-        project = add_project(projects, "infra", description="")
         add_todo(
             items,
             NewItem(
@@ -2164,7 +1987,6 @@ class TestItemMenu:
                 priority=Priority.HIGH,
                 deadline=date(2099, 3, 4),
                 tags=frozenset({"auth", "web"}),
-                project_id=project.id,
             ),
         )
         add_todo(items, NewItem(title="Blocker"))
@@ -2182,7 +2004,6 @@ class TestItemMenu:
             assert "Status      todo" in rows
             assert "Deadline    2099-03-04" in rows
             assert "Tags        auth, web" in rows
-            assert "Project     infra" in rows
             assert "Blocked by  #2" in rows
             assert "Blocking    #3" in rows
             assert "Body        empty" in rows
@@ -2317,31 +2138,6 @@ class TestItemMenu:
             await pilot.pause()
 
             assert items.get(1).tags == frozenset({"one", "two"})
-
-    async def test_the_project_is_picked_and_cleared(
-        self, items: SqliteItemStore, projects: SqliteProjectStore, db_path: Path
-    ) -> None:
-        """Project was context-only in the editor buffer: unreachable from
-        the TUI at all. It is a field like any other now."""
-        add_project(projects, "infra", description="")
-        add_todo(items, NewItem(title="Task"))
-
-        app = TodoApp(db_path)
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            await self._open(pilot)
-            await self._row(pilot, "project")
-            await pilot.press("down")  # (none) -> infra
-            await pilot.press("enter")
-            await pilot.pause()
-            filed = items.get(1)
-            assert filed.project_id == projects.get_by_name(ProjectName("infra")).id
-
-            await self._row(pilot, "project")
-            await pilot.press("up")  # back to (none)
-            await pilot.press("enter")
-            await pilot.pause()
-            assert items.get(1).project_id is None
 
     async def test_a_blocker_is_removed_from_the_menu(
         self, items: SqliteItemStore, dependencies: SqliteDependencyStore, db_path: Path
@@ -2547,7 +2343,7 @@ class TestItemMenu:
             await pilot.pause()
             before = items.get(1)
             await self._open(pilot)
-            for field in ("title", "priority", "deadline", "tags", "project"):
+            for field in ("title", "priority", "deadline", "tags"):
                 await self._row(pilot, field)
                 await pilot.press("escape")
                 await pilot.pause()
