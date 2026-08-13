@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
+from tests.factory import NewItem, add_todo
 from todo.adapters.sqlite_dependency_store import SqliteDependencyStore
 from todo.adapters.sqlite_item_store import SqliteItemStore
-from todo.application.commands import add_todo
 from todo.tui.app import TodoApp
 from todo.tui.edit_session import EditorSession
 from todo.tui.editor import apply_body_edit
@@ -21,45 +21,38 @@ class TestApplyBodyEdit:
     def test_edited_buffer_becomes_the_body(
         self, dependencies: SqliteDependencyStore, items: SqliteItemStore
     ) -> None:
-        add_todo(items, "Task", body="old")
-        result = apply_body_edit(items, dependencies, 1, "new body\n")
-        assert result.item.body == "new body"
+        add_todo(items, NewItem(title="Task", body="old"))
+        result = apply_body_edit(items, 1, "new body\n")
+        assert result.body == "new body"
 
     def test_emptied_buffer_clears_the_body(
         self, dependencies: SqliteDependencyStore, items: SqliteItemStore
     ) -> None:
-        add_todo(items, "Task", body="old body")
-        assert apply_body_edit(items, dependencies, 1, "").item.body == ""
+        add_todo(items, NewItem(title="Task", body="old body"))
+        assert apply_body_edit(items, 1, "").body == ""
 
     def test_field_looking_lines_are_body_text(
         self, dependencies: SqliteDependencyStore, items: SqliteItemStore
     ) -> None:
         """'status: done' in the body is prose, never a field override."""
-        add_todo(items, "Task")
-        result = apply_body_edit(
-            items, dependencies, 1, "status: done\ntitle: Renamed\n"
-        )
-        assert result.item.status.value == "todo"
-        assert result.item.title == "Task"
-        assert result.item.body == "status: done\ntitle: Renamed"
+        add_todo(items, NewItem(title="Task"))
+        result = apply_body_edit(items, 1, "status: done\ntitle: Renamed\n")
+        assert result.status.value == "todo"
+        assert result.title == "Task"
+        assert result.body == "status: done\ntitle: Renamed"
 
     def test_indentation_is_preserved(
         self, dependencies: SqliteDependencyStore, items: SqliteItemStore
     ) -> None:
-        add_todo(items, "Task", body="old")
+        add_todo(items, NewItem(title="Task", body="old"))
         edited = "    def f():\n        pass\n"
-        assert apply_body_edit(items, dependencies, 1, edited).item.body == (
-            "    def f():\n        pass"
-        )
+        assert apply_body_edit(items, 1, edited).body == ("    def f():\n        pass")
 
     def test_only_the_editors_final_newline_is_dropped(
         self, dependencies: SqliteDependencyStore, items: SqliteItemStore
     ) -> None:
-        add_todo(items, "Task")
-        assert (
-            apply_body_edit(items, dependencies, 1, "para\n\n\n").item.body
-            == "para\n\n"
-        )
+        add_todo(items, NewItem(title="Task"))
+        assert apply_body_edit(items, 1, "para\n\n\n").body == "para\n\n"
 
 
 class TestEditorCommand:
@@ -127,7 +120,7 @@ class TestApplyEditedBuffer:
         so the user's typing must stay recoverable on disk."""
         from todo.tui.list_view import TodoListView
 
-        add_todo(items, "Task", body="keep me")
+        add_todo(items, NewItem(title="Task", body="keep me"))
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -138,9 +131,7 @@ class TestApplyEditedBuffer:
             buf.write_text(edited)
 
             items.delete(1)
-            EditorSession(view, items, dependencies).apply(
-                1, original, edited, str(buf)
-            )
+            EditorSession(view, items).apply(1, original, edited, str(buf))
             await pilot.pause()
 
             assert app.is_running
@@ -155,7 +146,7 @@ class TestApplyEditedBuffer:
     ) -> None:
         from todo.tui.list_view import TodoListView
 
-        add_todo(items, "Task", body="old")
+        add_todo(items, NewItem(title="Task", body="old"))
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -165,9 +156,7 @@ class TestApplyEditedBuffer:
             buf = tmp_path / "buffer.todo.txt"
             buf.write_text(edited)
 
-            EditorSession(view, items, dependencies).apply(
-                1, original, edited, str(buf)
-            )
+            EditorSession(view, items).apply(1, original, edited, str(buf))
             await pilot.pause()
             assert items.get(1).body == "rewritten"
             assert not buf.exists()
@@ -184,14 +173,14 @@ class TestEditorFailureHandling:
         """A missing/broken $EDITOR shows an error instead of tearing down."""
         from todo.tui.list_view import TodoListView
 
-        add_todo(items, "Task", body="untouched")
+        add_todo(items, NewItem(title="Task", body="untouched"))
         monkeypatch.setenv("EDITOR", "/nonexistent/editor-binary")
 
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
             await pilot.pause()
             view = app.query_one(TodoListView)
-            assert EditorSession(view, items, dependencies).run(items.get(1)) is None
+            assert EditorSession(view, items).run(items.get(1)) is None
             await pilot.pause()
             assert app.is_running
             assert items.get(1).body == "untouched"
@@ -209,7 +198,7 @@ class TestWhitespaceOnlyBodyEdit:
         edit ('whitespace is content'), not an unchanged buffer."""
         from todo.tui.list_view import TodoListView
 
-        add_todo(items, "Task", body="print(x)")
+        add_todo(items, NewItem(title="Task", body="print(x)"))
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -219,9 +208,7 @@ class TestWhitespaceOnlyBodyEdit:
             buf = tmp_path / "buffer.todo.txt"
             buf.write_text(edited)
 
-            EditorSession(view, items, dependencies).apply(
-                1, original, edited, str(buf)
-            )
+            EditorSession(view, items).apply(1, original, edited, str(buf))
             await pilot.pause()
             assert items.get(1).body == "print(x)\n"
 
@@ -234,7 +221,7 @@ class TestWhitespaceOnlyBodyEdit:
     ) -> None:
         from todo.tui.list_view import TodoListView
 
-        add_todo(items, "Task", body="print(x)")
+        add_todo(items, NewItem(title="Task", body="print(x)"))
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -245,9 +232,7 @@ class TestWhitespaceOnlyBodyEdit:
             buf = tmp_path / "buffer.todo.txt"
             buf.write_text(edited)
 
-            EditorSession(view, items, dependencies).apply(
-                1, original, edited, str(buf)
-            )
+            EditorSession(view, items).apply(1, original, edited, str(buf))
             await pilot.pause()
             after = items.get(1)
             assert after.body == "print(x)"
@@ -271,7 +256,7 @@ class TestEditorNonzeroExitKeepsBuffer:
 
         from todo.tui.list_view import TodoListView
 
-        add_todo(items, "Task", body="typed work")
+        add_todo(items, NewItem(title="Task", body="typed work"))
         monkeypatch.setenv("EDITOR", "vi")
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
@@ -289,7 +274,7 @@ class TestEditorNonzeroExitKeepsBuffer:
             monkeypatch.setattr(
                 view, "notify", lambda msg, **kw: notices.append(str(msg))
             )
-            EditorSession(view, items, dependencies).run(items.get(1))
+            EditorSession(view, items).run(items.get(1))
             await pilot.pause()
             assert notices and "kept at" in notices[0]
             match = re.search(r"kept at (\S+)", notices[0])
@@ -310,7 +295,7 @@ class TestEditorEncodingRobustness:
         ValueError, so an OSError-only handler misses it)."""
         from todo.tui.list_view import TodoListView
 
-        add_todo(items, "Task")
+        add_todo(items, NewItem(title="Task"))
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -320,7 +305,7 @@ class TestEditorEncodingRobustness:
             notices: list[str] = []
             view.notify = lambda msg, **kw: notices.append(str(msg))  # type: ignore[method-assign]
 
-            content = EditorSession(view, items, dependencies).read_buffer(str(buf))
+            content = EditorSession(view, items).read_buffer(str(buf))
 
             assert app.is_running
             assert content is None
@@ -333,19 +318,14 @@ class TestEditorEncodingRobustness:
         never at the mercy of the locale."""
         from todo.tui.list_view import TodoListView
 
-        add_todo(items, "Ünïcode ✅ täsk", body="emoji 🎉 body")
+        add_todo(items, NewItem(title="Ünïcode ✅ täsk", body="emoji 🎉 body"))
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
             await pilot.pause()
             view = app.query_one(TodoListView)
-            path = EditorSession(view, items, dependencies).write_buffer(
-                items.get(1).body
-            )
+            path = EditorSession(view, items).write_buffer(items.get(1).body)
             try:
                 assert "emoji 🎉 body" in Path(path).read_text(encoding="utf-8")
-                assert (
-                    EditorSession(view, items, dependencies).read_buffer(path)
-                    is not None
-                )
+                assert EditorSession(view, items).read_buffer(path) is not None
             finally:
                 Path(path).unlink(missing_ok=True)

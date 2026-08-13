@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from todo.domain.description import Description
 from todo.domain.project import Project
+from todo.domain.project_filter import ProjectFilter
 from todo.domain.project_id import ProjectId
 from todo.domain.project_name import ProjectName
 
@@ -32,9 +32,9 @@ class ProjectStore(Protocol):
     need versions and the writes need to refuse a stale one.
     """
 
-    def create(self, name: ProjectName, description: Description) -> Project:
-        """Give a project an identity and keep it. The store decides the
-        id, and refuses a name another project already has."""
+    def create(self, project: Project) -> None:
+        """Keep a project that was not there before, identity included.
+        Refuses a name another project already has."""
         ...
 
     def get(self, project_id: ProjectId) -> Project:
@@ -54,6 +54,6 @@ class ProjectStore(Protocol):
         means for items and for its log is decided above, not here."""
         ...
 
-    def find_all(self, *, include_ended: bool = False) -> list[Project]:
-        """Every project by name; the cancelled and the done only if asked."""
+    def find(self, project_filter: ProjectFilter) -> list[Project]:
+        """Every project the filter describes, by name."""
         ...

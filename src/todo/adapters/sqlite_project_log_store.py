@@ -6,16 +6,16 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from todo.adapters.sqlite_connection import connect, now, reading, writing
+from todo.adapters.sqlite_connection import connect, reading, writing
 from todo.domain.project_id import ProjectId
 from todo.domain.project_update import ProjectUpdate
 from todo.domain.update_body import UpdateBody
 from todo.domain.update_id import UpdateId
-from todo.exceptions import ProjectNotFoundError, UpdateNotFoundError
+from todo.exceptions import UpdateNotFoundError
 
 _DDL = """\
 CREATE TABLE IF NOT EXISTS project_updates (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    id         INTEGER PRIMARY KEY,
     project_id INTEGER NOT NULL,
     body       TEXT    NOT NULL,
     created_at TEXT    NOT NULL
@@ -41,22 +41,18 @@ class SqliteProjectLogStore:
     def close(self) -> None:
         self._conn.close()
 
-    def append(self, project_id: ProjectId, body: UpdateBody) -> ProjectUpdate:
-        with writing(self._conn, "log project update") as conn:
-            if (
-                conn.execute(
-                    "SELECT 1 FROM projects WHERE id = ?", (project_id,)
-                ).fetchone()
-                is None
-            ):
-                raise ProjectNotFoundError(project_id)
-            cursor = conn.execute(
-                "INSERT INTO project_updates (project_id, body, created_at) "
-                "VALUES (?, ?, ?)",
-                (project_id, body, now().isoformat()),
+    def append(self, update: ProjectUpdate) -> None:
+        with writing(self._conn, f"write log entry {update.id.label}") as conn:
+            conn.execute(
+                "INSERT INTO project_updates (id, project_id, body, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                (
+                    update.id,
+                    update.project_id,
+                    update.body,
+                    update.created_at.isoformat(),
+                ),
             )
-            new_id = UpdateId(cursor.lastrowid or 0)
-        return self.get(new_id)
 
     def get(self, update_id: UpdateId) -> ProjectUpdate:
         with reading(self._conn, f"read log entry #{update_id}") as conn:

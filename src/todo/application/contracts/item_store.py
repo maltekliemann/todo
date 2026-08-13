@@ -8,38 +8,14 @@ a service: no transactions, no connections, no column names.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Protocol
 
-from todo.domain.body import Body
-from todo.domain.deadline import Deadline
+from todo.domain.item_filter import ItemFilter
 from todo.domain.item_id import ItemId
-from todo.domain.priority import Priority
+from todo.domain.moment import Moment
 from todo.domain.project_id import ProjectId
-from todo.domain.status import Status
 from todo.domain.tag import Tag
-from todo.domain.title import Title
 from todo.domain.todo_item import TodoItem
-
-
-@dataclass(frozen=True)
-class ItemQuery:
-    """Which items to hand back; every field left alone means "any".
-
-    One value instead of a handful of optional arguments, because the
-    frontends pass a filter around as one thing and a store that takes it
-    apart has to put it back together.
-
-    `text` is the only raw string in this layer: it is not a property of
-    an item, it is whatever the person typed to look for one.
-    """
-
-    status: Status | None = None
-    priority: Priority | None = None
-    tags: frozenset[Tag] = frozenset()
-    text: str | None = None
-    project_id: ProjectId | None = None
-    include_done: bool = False
 
 
 @dataclass(frozen=True)
@@ -72,18 +48,8 @@ class ItemStore(Protocol):
     need versions and the writes need to refuse a stale one.
     """
 
-    def create(
-        self,
-        *,
-        title: Title,
-        body: Body,
-        priority: Priority,
-        status: Status,
-        deadline: Deadline | None = None,
-        tags: frozenset[Tag] = frozenset(),
-        project_id: ProjectId | None = None,
-    ) -> TodoItem:
-        """Give an item an identity and keep it. The store decides the id."""
+    def create(self, item: TodoItem) -> None:
+        """Keep an item that was not there before, identity included."""
         ...
 
     def get(self, item_id: ItemId) -> TodoItem:
@@ -108,17 +74,12 @@ class ItemStore(Protocol):
         are the graph's, and go when the graph is next saved."""
         ...
 
-    def find(self, query: ItemQuery) -> list[TodoItem]:
-        """Every item the query describes, in the order items are shown."""
+    def find(self, item_filter: ItemFilter) -> list[TodoItem]:
+        """Every item the filter describes, in the order items are shown."""
         ...
 
-    def done_since(self, moment: datetime) -> list[TodoItem]:
+    def done_since(self, moment: Moment) -> list[TodoItem]:
         """Items finished since then, most recently finished first."""
-        ...
-
-    def all_ids(self) -> frozenset[ItemId]:
-        """Which items there are. Whether a dependency still stands is a
-        question about that, and asking it must not cost loading them."""
         ...
 
     def done_ids(self) -> frozenset[ItemId]:

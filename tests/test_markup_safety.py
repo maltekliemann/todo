@@ -9,18 +9,27 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from types import MappingProxyType
 
 import pytest
 from textual.widgets import DataTable, Label, Static
 
-from todo.adapters.output import RichOutput
+from tests.factory import (
+    NewItem,
+    add_blocker,
+    add_project,
+    add_todo,
+    log_project_update,
+    show_project,
+)
 from todo.adapters.sqlite_dependency_store import SqliteDependencyStore
 from todo.adapters.sqlite_item_store import SqliteItemStore
 from todo.adapters.sqlite_project_log_store import SqliteProjectLogStore
 from todo.adapters.sqlite_project_store import SqliteProjectStore
-from todo.application.commands import add_todo, block_todo
-from todo.application.dependencies import Dependencies
-from todo.application.queries import ProjectDetail, ProjectSummary, show_project
+from todo.application.queries.list_projects import ProjectSummary
+from todo.application.queries.list_tags import TagCount
+from todo.application.queries.project_names import ProjectNames
+from todo.application.queries.show_project import ProjectDetail
 from todo.domain.dependency_graph import DependencyGraph
 from todo.domain.description import Description
 from todo.domain.item_id import ItemId
@@ -31,9 +40,11 @@ from todo.domain.project_name import ProjectName
 from todo.domain.project_status import ProjectStatus
 from todo.domain.project_update import ProjectUpdate
 from todo.domain.status import Status
+from todo.domain.tag import Tag
 from todo.domain.todo_item import TodoItem
 from todo.domain.update_body import UpdateBody
 from todo.domain.update_id import UpdateId
+from todo.infra.cli.output import RichOutput
 from todo.tui.app import TodoApp
 
 HOSTILE = "Fix [/] thing"
@@ -42,11 +53,16 @@ HOSTILE_VARIANTS = ["Fix [/] thing", "open [bold tag", "double ]] close", "[/b]"
 _NOW = datetime.now(tz=timezone.utc)
 
 
-def _deps(*edges: tuple[int, int], done: tuple[int, ...] = ()) -> Dependencies:
-    return Dependencies(
-        graph=DependencyGraph(frozenset((ItemId(a), ItemId(b)) for a, b in edges)),
-        done_ids=frozenset(ItemId(d) for d in done),
-    )
+# No project is filed under anything in these renders.
+NO_NAMES = ProjectNames(MappingProxyType({}))
+
+
+def _graph(*edges: tuple[int, int]) -> DependencyGraph:
+    return DependencyGraph(frozenset((ItemId(a), ItemId(b)) for a, b in edges))
+
+
+def _done(*ids: int) -> frozenset[ItemId]:
+    return frozenset(ItemId(i) for i in ids)
 
 
 def _item(**overrides: object) -> TodoItem:
@@ -90,27 +106,27 @@ class TestRichOutputMarkupSafety:
     def test_print_list_hostile_titles(
         self, rich_out: RichOutput, capsys, title: str
     ) -> None:
-        rich_out.print_list([_item(title=title)], _deps())
+        rich_out.print_list([_item(title=title)], _graph(), _done())
         assert title in capsys.readouterr().out
 
     def test_print_list_hostile_blocked_title(
         self, rich_out: RichOutput, capsys
     ) -> None:
-        rich_out.print_list([_item()], _deps((2, 1)))
+        rich_out.print_list([_item()], _graph((2, 1)), _done())
         assert HOSTILE in capsys.readouterr().out
 
     def test_print_item_hostile(self, rich_out: RichOutput, capsys) -> None:
-        rich_out.print_item(_item(), _deps(), {})
+        rich_out.print_item(_item(), _graph(), _done(), NO_NAMES)
         out = capsys.readouterr().out
         assert "[/]" in out
 
     def test_print_summary_hostile_title(self, rich_out: RichOutput, capsys) -> None:
         done = _item(status=Status.DONE, done_at=_NOW)
-        rich_out.print_summary(_NOW, [done], _deps())
+        rich_out.print_summary(_NOW, [done], _graph(), _done())
         assert HOSTILE in capsys.readouterr().out
 
     def test_print_tags_hostile_tag(self, rich_out: RichOutput, capsys) -> None:
-        rich_out.print_tags([("[/]", 2)])
+        rich_out.print_tags([TagCount(tag=Tag("[/]"), count=2)])
         assert "[/]" in capsys.readouterr().out
 
     def test_print_projects_hostile_name_and_description(
@@ -148,7 +164,7 @@ class TestRichOutputMarkupSafety:
                 )
             ],
         )
-        rich_out.print_project(detail, _deps(), {})
+        rich_out.print_project(detail, _graph(), _done(), NO_NAMES)
         out = capsys.readouterr().out
         assert "desc [/] here" in out
         assert "log [/] body" in out
@@ -163,18 +179,18 @@ class TestTuiMarkupSafety:
         projects: SqliteProjectStore,
         db_path: Path,
     ) -> Path:
-        project = projects.create(
-            ProjectName("proj [/] name"), Description("desc [/] here")
-        )
+        project = add_project(projects, "proj [/] name", description="desc [/] here")
         add_todo(
             items,
-            HOSTILE,
-            body="body with [/] markup",
-            tags=["[/]"],
-            project_id=project.id,
+            NewItem(
+                title=HOSTILE,
+                body="body with [/] markup",
+                tags=["[/]"],
+                project_id=project.id,
+            ),
         )
-        add_todo(items, "Blocker [bold title")
-        block_todo(items, dependencies, 1, 2)
+        add_todo(items, NewItem(title="Blocker [bold title"))
+        add_blocker(items, dependencies, 1, [2])
         return db_path
 
     async def test_tui_launches_with_hostile_items(self, hostile_storage: Path) -> None:
@@ -272,9 +288,9 @@ class TestShowProjectHostileEndToEnd:
         projects: SqliteProjectStore,
         log: SqliteProjectLogStore,
     ) -> None:
-        project = projects.create(ProjectName("p [/] q"), Description("d [/] e"))
-        add_todo(items, HOSTILE, project_id=project.id)
-        log.append(project.id, "u [/] v")
+        project = add_project(projects, "p [/] q", description="d [/] e")
+        add_todo(items, NewItem(title=HOSTILE, project_id=project.id))
+        log_project_update(projects, log, project.id, "u [/] v")
         detail = show_project(projects, items, log, "p [/] q")
         assert detail.updates[0].body == "u [/] v"
 
@@ -295,10 +311,10 @@ class TestTextualMarkupEscaping:
     async def test_detail_pane_keeps_bracketed_title(
         self, items: SqliteItemStore, db_path: Path
     ) -> None:
-        from todo.application.commands import add_todo
+        from tests.factory import NewItem, add_todo
         from todo.tui.app import TodoApp
 
-        add_todo(items, "[WIP] refactor auth", tags=["[Red]tag"])
+        add_todo(items, NewItem(title="[WIP] refactor auth", tags=["[Red]tag"]))
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -313,10 +329,10 @@ class TestTextualMarkupEscaping:
         from rich.text import Text
         from textual.widgets import OptionList
 
-        from todo.application.commands import add_todo
+        from tests.factory import NewItem, add_todo
         from todo.tui.app import TodoApp
 
-        add_todo(items, "[WIP] refactor auth")
+        add_todo(items, NewItem(title="[WIP] refactor auth"))
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -332,11 +348,11 @@ class TestTextualMarkupEscaping:
     async def test_filter_bar_keeps_bracketed_search(
         self, items: SqliteItemStore, db_path: Path
     ) -> None:
-        from todo.application.commands import add_todo
+        from tests.factory import NewItem, add_todo
         from todo.tui.app import TodoApp
         from todo.tui.list_view import TodoListView
 
-        add_todo(items, "plain")
+        add_todo(items, NewItem(title="plain"))
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -362,10 +378,10 @@ class TestBackslashAndLiteralHints:
     async def test_windows_path_title_renders_once(
         self, items: SqliteItemStore, db_path: Path
     ) -> None:
-        from todo.application.commands import add_todo
+        from tests.factory import NewItem, add_todo
         from todo.tui.app import TodoApp
 
-        add_todo(items, r"Sync C:\Users\alice\notes", tags=[r"win\path"])
+        add_todo(items, NewItem(title=r"Sync C:\Users\alice\notes", tags=[r"win\path"]))
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -380,10 +396,10 @@ class TestBackslashAndLiteralHints:
     ) -> None:
         """The app's own literal '[y] Yes   [n] No' hint was being eaten as
         markup, so the user saw no key labels at all."""
-        from todo.application.commands import add_todo
+        from tests.factory import NewItem, add_todo
         from todo.tui.app import TodoApp
 
-        add_todo(items, "item")
+        add_todo(items, NewItem(title="item"))
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
             await pilot.pause()

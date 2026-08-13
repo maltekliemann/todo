@@ -6,11 +6,13 @@ import sqlite3
 from datetime import date, datetime
 from pathlib import Path
 
-from todo.adapters.sqlite_connection import connect, now, reading, writing
-from todo.application.contracts.item_store import ItemCounts, ItemQuery
+from todo.adapters.sqlite_connection import connect, reading, writing
+from todo.application.contracts.item_store import ItemCounts
 from todo.domain.body import Body
 from todo.domain.deadline import Deadline
+from todo.domain.item_filter import ItemFilter
 from todo.domain.item_id import ItemId
+from todo.domain.moment import Moment
 from todo.domain.priority import Priority
 from todo.domain.project_id import ProjectId
 from todo.domain.status import Status
@@ -21,7 +23,7 @@ from todo.exceptions import NotFoundError
 
 _DDL = """\
 CREATE TABLE IF NOT EXISTS todos (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    id         INTEGER PRIMARY KEY,
     title      TEXT    NOT NULL,
     body       TEXT    NOT NULL DEFAULT '',
     priority   TEXT    NOT NULL DEFAULT 'medium',
@@ -142,38 +144,26 @@ class SqliteItemStore:
 
     # --- items -----------------------------------------------------------
 
-    def create(
-        self,
-        *,
-        title: Title,
-        body: Body,
-        priority: Priority,
-        status: Status,
-        deadline: Deadline | None = None,
-        tags: frozenset[Tag] = frozenset(),
-        project_id: ProjectId | None = None,
-    ) -> TodoItem:
-        stamp = now().isoformat()
-        with writing(self._conn, "add todo") as conn:
-            cursor = conn.execute(
-                "INSERT INTO todos (title, body, priority, status, created_at, "
+    def create(self, item: TodoItem) -> None:
+        with writing(self._conn, f"create todo {item.id.label}") as conn:
+            conn.execute(
+                "INSERT INTO todos (id, title, body, priority, status, created_at, "
                 "updated_at, done_at, deadline, project_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    title,
-                    body,
-                    priority.value,
-                    status.value,
-                    stamp,
-                    stamp,
-                    stamp if status.done else None,
-                    deadline.isoformat() if deadline else None,
-                    project_id,
+                    item.id,
+                    item.title,
+                    item.body,
+                    item.priority.value,
+                    item.status.value,
+                    item.created_at.isoformat(),
+                    item.updated_at.isoformat(),
+                    item.done_at.isoformat() if item.done_at else None,
+                    item.deadline.isoformat() if item.deadline else None,
+                    item.project_id,
                 ),
             )
-            new_id = ItemId(cursor.lastrowid or 0)
-            self._write_tags(conn, new_id, tags)
-        return self.get(new_id)
+            self._write_tags(conn, item.id, item.tags)
 
     def get(self, item_id: ItemId) -> TodoItem:
         with reading(self._conn, f"read todo #{item_id}") as conn:
@@ -227,39 +217,39 @@ class SqliteItemStore:
             conn.execute("DELETE FROM todo_tags WHERE item_id = ?", (item_id,))
             conn.execute("DELETE FROM todos WHERE id = ?", (item_id,))
 
-    def find(self, query: ItemQuery) -> list[TodoItem]:
+    def find(self, item_filter: ItemFilter) -> list[TodoItem]:
         clauses: list[str] = []
         params: list[str | int] = []
 
-        if query.status is not None:
+        if item_filter.status is not None:
             clauses.append("todos.status = ?")
-            params.append(query.status.value)
-        elif not query.include_done:
+            params.append(item_filter.status.value)
+        elif not item_filter.include_done:
             clauses.append("todos.status != ?")
             params.append(Status.DONE.value)
 
-        if query.priority is not None:
+        if item_filter.priority is not None:
             clauses.append("todos.priority = ?")
-            params.append(query.priority.value)
+            params.append(item_filter.priority.value)
 
-        for tag in sorted(query.tags):
+        for tag in sorted(item_filter.tags):
             # One clause per tag: an item carrying all of them is one that
             # appears in every subquery.
             clauses.append("todos.id IN (SELECT item_id FROM todo_tags WHERE tag = ?)")
             params.append(tag)
 
-        if query.text:
+        if item_filter.text:
             # casefold + instr: Unicode case-insensitive substring match,
             # agreeing with the TUI's own search over the same words.
             clauses.append(
                 "(instr(casefold(todos.title), casefold(?)) > 0 "
                 "OR instr(casefold(todos.body), casefold(?)) > 0)"
             )
-            params.extend([query.text, query.text])
+            params.extend([item_filter.text, item_filter.text])
 
-        if query.project_id is not None:
+        if item_filter.project_id is not None:
             clauses.append("todos.project_id = ?")
-            params.append(query.project_id)
+            params.append(item_filter.project_id)
 
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         today = date.today().isoformat()
@@ -270,7 +260,7 @@ class SqliteItemStore:
             ).fetchall()
             return self._to_items(conn, rows)
 
-    def done_since(self, moment: datetime) -> list[TodoItem]:
+    def done_since(self, moment: Moment) -> list[TodoItem]:
         with reading(self._conn, "read completed todos") as conn:
             rows = conn.execute(
                 "SELECT * FROM todos WHERE status = ? AND done_at >= ? "
@@ -278,11 +268,6 @@ class SqliteItemStore:
                 (Status.DONE.value, moment.isoformat()),
             ).fetchall()
             return self._to_items(conn, rows)
-
-    def all_ids(self) -> frozenset[ItemId]:
-        with reading(self._conn, "read item ids") as conn:
-            rows = conn.execute("SELECT id FROM todos").fetchall()
-        return frozenset(ItemId(r["id"]) for r in rows)
 
     def done_ids(self) -> frozenset[ItemId]:
         with reading(self._conn, "read completed ids") as conn:

@@ -6,10 +6,8 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from todo.adapters.sqlite_dependency_store import SqliteDependencyStore
-from todo.adapters.sqlite_item_store import SqliteItemStore
+from tests.factory import add_project, find_project
 from todo.adapters.sqlite_project_store import SqliteProjectStore
-from todo.application.queries import list_todos, parse_since, resolve_project
 from todo.domain.deadline import Deadline
 from todo.domain.description import Description
 from todo.domain.priority import Priority
@@ -95,73 +93,55 @@ class TestModels:
 
 
 class TestQueryHelpers:
-    def test_blocked_and_ready_mutually_exclusive(
-        self, items: SqliteItemStore, dependencies: SqliteDependencyStore
-    ) -> None:
-        with pytest.raises(ValueError, match="mutually exclusive"):
-            list_todos(items, dependencies, blocked=True, ready=True)
-
-    def test_resolve_project_numeric_ref_prefers_id(
+    def test_find_project_numeric_ref_prefers_id(
         self, projects: SqliteProjectStore
     ) -> None:
         """Round-1 asserted name-first here; round-2 confirmed that lets a
         numerically-named project shadow another project's id in every
         command including `project rm`. Numeric refs now mean the id shown
         in `project list`; names win only for non-numeric refs."""
-        first = projects.create(ProjectName("something"), Description(""))  # id 1
+        first = add_project(projects, "something", description="")  # id 1
         second_id = first.id + 1
-        projects.create(
-            ProjectName(str(first.id)), Description("")
-        )  # id 2, literally named "1"
+        add_project(projects, str(first.id))  # id 2, literally named "1"
         # "1" is numeric -> resolves to project id 1, not the one named "1".
-        assert resolve_project(projects, str(first.id)).name == "something"
+        assert find_project(projects, str(first.id)).name == "something"
         # The numerically-named project stays reachable by its id.
-        assert resolve_project(projects, str(second_id)).name == str(first.id)
+        assert find_project(projects, str(second_id)).name == str(first.id)
 
-    def test_resolve_project_numeric_name_fallback(
+    def test_find_project_numeric_name_fallback(
         self, projects: SqliteProjectStore
     ) -> None:
         """A numeric ref that matches no id still finds a project named so."""
-        projects.create(ProjectName("77"), Description(""))  # id 1, named "77"
-        assert resolve_project(projects, "77").name == "77"
+        add_project(projects, "77", description="")  # id 1, named "77"
+        assert find_project(projects, "77").name == "77"
 
-    def test_resolve_project_falls_back_to_id(
-        self, projects: SqliteProjectStore
-    ) -> None:
-        project = projects.create(ProjectName("named"), Description(""))
-        assert resolve_project(projects, str(project.id)).name == "named"
+    def test_find_project_falls_back_to_id(self, projects: SqliteProjectStore) -> None:
+        project = add_project(projects, "named", description="")
+        assert find_project(projects, str(project.id)).name == "named"
 
-    def test_resolve_project_unknown_raises(self, projects: SqliteProjectStore) -> None:
+    def test_find_project_unknown_raises(self, projects: SqliteProjectStore) -> None:
         with pytest.raises(ProjectNotFoundError):
-            resolve_project(projects, "ghost")
+            find_project(projects, "ghost")
 
-    def test_resolve_project_superscript_digit_is_clean_not_found(
+    def test_find_project_superscript_digit_is_clean_not_found(
         self, projects: SqliteProjectStore
     ) -> None:
         """'²'.isdigit() is True but int('²') raises — must not traceback."""
         with pytest.raises(ProjectNotFoundError):
-            resolve_project(projects, "²")
+            find_project(projects, "²")
 
-    def test_resolve_project_huge_numeric_ref_is_clean_not_found(
+    def test_find_project_huge_numeric_ref_is_clean_not_found(
         self, projects: SqliteProjectStore
     ) -> None:
         """Ids beyond SQLite's 64-bit range must not raise OverflowError."""
         with pytest.raises(ProjectNotFoundError):
-            resolve_project(projects, "99999999999999999999")
+            find_project(projects, "99999999999999999999")
 
-    def test_resolve_project_huge_numeric_name_still_found(
+    def test_find_project_huge_numeric_name_still_found(
         self, projects: SqliteProjectStore
     ) -> None:
-        projects.create(ProjectName("99999999999999999999"), Description(""))
-        assert resolve_project(projects, "99999999999999999999").id == 1
-
-    def test_parse_since_weeks_and_months(self) -> None:
-        assert parse_since("2 weeks") < parse_since("1 week")
-        assert parse_since("1 month") < parse_since("2 weeks")
-
-    def test_parse_since_unknown_unit(self) -> None:
-        with pytest.raises(ValueError, match="Unknown time unit"):
-            parse_since("3 fortnights")
+        add_project(projects, "99999999999999999999", description="")
+        assert find_project(projects, "99999999999999999999").id == 1
 
 
 class TestTitle:

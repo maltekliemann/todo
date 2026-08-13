@@ -6,9 +6,10 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from todo.adapters.sqlite_connection import connect, now, reading, writing
+from todo.adapters.sqlite_connection import connect, reading, writing
 from todo.domain.description import Description
 from todo.domain.project import Project
+from todo.domain.project_filter import ProjectFilter
 from todo.domain.project_id import ProjectId
 from todo.domain.project_name import ProjectName
 from todo.domain.project_status import ProjectStatus
@@ -16,7 +17,7 @@ from todo.exceptions import DuplicateProjectError, ProjectNotFoundError, Storage
 
 _DDL = """\
 CREATE TABLE IF NOT EXISTS projects (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    id          INTEGER PRIMARY KEY,
     name        TEXT    NOT NULL UNIQUE,
     description TEXT    NOT NULL DEFAULT '',
     status      TEXT    NOT NULL DEFAULT 'not-started',
@@ -54,28 +55,26 @@ class SqliteProjectStore:
     def close(self) -> None:
         self._conn.close()
 
-    def create(self, name: ProjectName, description: Description) -> Project:
-        stamp = now().isoformat()
-        with writing(self._conn, "add project") as conn:
+    def create(self, project: Project) -> None:
+        with writing(self._conn, f"create project {project.id.label}") as conn:
             try:
-                cursor = conn.execute(
-                    "INSERT INTO projects (name, description, status, created_at, "
-                    "updated_at) VALUES (?, ?, ?, ?, ?)",
+                conn.execute(
+                    "INSERT INTO projects (id, name, description, status, "
+                    "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
                     (
-                        name,
-                        description,
-                        ProjectStatus.NOT_STARTED.value,
-                        stamp,
-                        stamp,
+                        project.id,
+                        project.name,
+                        project.description,
+                        project.status.value,
+                        project.created_at.isoformat(),
+                        project.updated_at.isoformat(),
                     ),
                 )
             except sqlite3.IntegrityError as e:
                 # The name is taken. That is a thing a person did, not a
                 # database failure, so it is named as such before the
                 # write's generic wrapping can bury it.
-                raise DuplicateProjectError(name) from e
-            new_id = ProjectId(cursor.lastrowid or 0)
-        return self.get(new_id)
+                raise DuplicateProjectError(project.name) from e
 
     def get(self, project_id: ProjectId) -> Project:
         with reading(self._conn, f"read project #{project_id}") as conn:
@@ -131,9 +130,11 @@ class SqliteProjectStore:
                 raise ProjectNotFoundError(project_id)
             conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
 
-    def find_all(self, *, include_ended: bool = False) -> list[Project]:
+    def find(self, project_filter: ProjectFilter) -> list[Project]:
         ended = ",".join(f"'{s.value}'" for s in ProjectStatus if s.ended)
-        where = "" if include_ended else f" WHERE status NOT IN ({ended})"
+        where = (
+            "" if project_filter.include_ended else f" WHERE status NOT IN ({ended})"
+        )
         with reading(self._conn, "list projects") as conn:
             rows = conn.execute(
                 f"SELECT * FROM projects{where} ORDER BY name ASC"

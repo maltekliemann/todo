@@ -4,23 +4,22 @@ import contextlib
 from collections.abc import Iterator
 from datetime import date
 from pathlib import Path
+from types import MappingProxyType
 
 import pytest
 from rich.text import Text
 from textual.coordinate import Coordinate
 from textual.widgets import DataTable, Input, Label, OptionList, Static
 
-from todo.adapters.sqlite_change_feed import SqliteChangeFeed
+from tests.factory import NewItem, add_blocker, add_project, add_todo
 from todo.adapters.sqlite_dependency_store import SqliteDependencyStore
 from todo.adapters.sqlite_item_store import SqliteItemStore
 from todo.adapters.sqlite_project_log_store import SqliteProjectLogStore
 from todo.adapters.sqlite_project_store import SqliteProjectStore
-from todo.application.commands import add_todo, block_todo
-from todo.application.contracts.item_store import ItemQuery
-from todo.application.dependencies import Dependencies
+from todo.application.queries.project_names import ProjectNames
 from todo.domain.deadline import Deadline
 from todo.domain.dependency_graph import DependencyGraph
-from todo.domain.description import Description
+from todo.domain.item_filter import ItemFilter
 from todo.domain.item_id import ItemId
 from todo.domain.priority import Priority
 from todo.domain.project_id import ProjectId
@@ -42,9 +41,9 @@ def _item_rows(table: DataTable) -> int:
 
 @pytest.fixture()
 def seeded(db_path: Path, items: SqliteItemStore) -> Path:
-    add_todo(items, "Urgent task", priority=Priority.URGENT)
-    add_todo(items, "High task", priority=Priority.HIGH)
-    add_todo(items, "Backlog thing", status=Status.BACKLOG)
+    add_todo(items, NewItem(title="Urgent task", priority=Priority.URGENT))
+    add_todo(items, NewItem(title="High task", priority=Priority.HIGH))
+    add_todo(items, NewItem(title="Backlog thing", status=Status.BACKLOG))
     return db_path
 
 
@@ -155,7 +154,7 @@ class TestPrdKeyBindings:
         incremental horizontal scroll. A title wider than the terminal must
         still be readable from the keyboard, and scrolling must not mutate
         the item."""
-        add_todo(items, "X" * 200)
+        add_todo(items, NewItem(title="X" * 200))
         app = TodoApp(db_path)
         async with app.run_test(size=(60, 20)) as pilot:
             await pilot.pause()
@@ -196,10 +195,10 @@ class TestBlockerPicker:
 
     @pytest.fixture()
     def several(self, items: SqliteItemStore, db_path: Path) -> Path:
-        add_todo(items, "Write the migration")
-        add_todo(items, "Deploy the gateway")
-        add_todo(items, "Rotate the certificates")
-        add_todo(items, "Deploy the frontend")
+        add_todo(items, NewItem(title="Write the migration"))
+        add_todo(items, NewItem(title="Deploy the gateway"))
+        add_todo(items, NewItem(title="Rotate the certificates"))
+        add_todo(items, NewItem(title="Deploy the frontend"))
         return db_path
 
     @staticmethod
@@ -258,7 +257,7 @@ class TestBlockerPicker:
             await pilot.pause()
             await pilot.press("enter")
             await pilot.pause()
-            assert Dependencies.load(items, dependencies).blockers_of(1) == [2]
+            assert dependencies.load().blockers_of(1) == [2]
 
     async def test_down_moves_the_highlight_before_choosing(
         self, items: SqliteItemStore, dependencies: SqliteDependencyStore, several: Path
@@ -274,12 +273,12 @@ class TestBlockerPicker:
             await pilot.press("down")
             await pilot.press("enter")
             await pilot.pause()
-            assert Dependencies.load(items, dependencies).blockers_of(1) == [4]
+            assert dependencies.load().blockers_of(1) == [4]
 
     async def test_choosing_an_existing_blocker_removes_it(
         self, items: SqliteItemStore, dependencies: SqliteDependencyStore, several: Path
     ) -> None:
-        block_todo(items, dependencies, 1, 2)
+        add_blocker(items, dependencies, 1, [2])
         app = TodoApp(several)
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
@@ -289,12 +288,12 @@ class TestBlockerPicker:
             assert options[0].startswith("✓"), options
             await pilot.press("enter")
             await pilot.pause()
-            assert Dependencies.load(items, dependencies).blockers_of(1) == []
+            assert dependencies.load().blockers_of(1) == []
 
     async def test_current_blockers_sort_first(
         self, items: SqliteItemStore, dependencies: SqliteDependencyStore, several: Path
     ) -> None:
-        block_todo(items, dependencies, 1, 4)
+        add_blocker(items, dependencies, 1, [4])
         app = TodoApp(several)
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
@@ -361,7 +360,7 @@ class TestBlockerPicker:
             await pilot.pause()
             await pilot.press("enter")
             await pilot.pause()
-            assert Dependencies.load(items, dependencies).blockers_of(1) == [2]
+            assert dependencies.load().blockers_of(1) == [2]
 
     async def test_backspace_widens_the_filter(self, several: Path) -> None:
         app = TodoApp(several)
@@ -385,9 +384,9 @@ class TestBlockerPicker:
         """The dialog this replaced acted on the id you typed. Typing an id
         must still designate that item, not a title that happens to contain
         the digit."""
-        add_todo(items, "Ship the release")
-        add_todo(items, "Fix bug 3 in parser")
-        add_todo(items, "Rotate certificates")
+        add_todo(items, NewItem(title="Ship the release"))
+        add_todo(items, NewItem(title="Fix bug 3 in parser"))
+        add_todo(items, NewItem(title="Rotate certificates"))
         app = TodoApp(db_path)
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
@@ -398,15 +397,15 @@ class TestBlockerPicker:
             assert self._options(app)[0].endswith("Rotate certificates")
             await pilot.press("enter")
             await pilot.pause()
-            assert Dependencies.load(items, dependencies).blockers_of(1) == [3]
+            assert dependencies.load().blockers_of(1) == [3]
 
     async def test_a_dash_query_is_a_search_not_a_removal(
         self, items: SqliteItemStore, dependencies: SqliteDependencyStore, db_path: Path
     ) -> None:
-        add_todo(items, "Main")
-        add_todo(items, "Ship v1")
-        add_todo(items, "Fix bug-2 crash")
-        block_todo(items, dependencies, 1, 2)
+        add_todo(items, NewItem(title="Main"))
+        add_todo(items, NewItem(title="Ship v1"))
+        add_todo(items, NewItem(title="Fix bug-2 crash"))
+        add_blocker(items, dependencies, 1, [2])
         app = TodoApp(db_path)
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
@@ -418,15 +417,15 @@ class TestBlockerPicker:
             await pilot.press("enter")
             await pilot.pause()
             # The #2 relation is untouched and #3 was added.
-            assert Dependencies.load(items, dependencies).blockers_of(1) == [2, 3]
+            assert dependencies.load().blockers_of(1) == [2, 3]
 
     async def test_a_non_decimal_digit_does_not_crash(
         self, items: SqliteItemStore, db_path: Path
     ) -> None:
         """'²'.isdigit() is True but int('²') raises; a German keyboard
         produces it with AltGr+2."""
-        add_todo(items, "Main")
-        add_todo(items, "Other")
+        add_todo(items, NewItem(title="Main"))
+        add_todo(items, NewItem(title="Other"))
         app = TodoApp(db_path)
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
@@ -448,12 +447,12 @@ class TestBlockerPicker:
             await pilot.pause()
             await pilot.click("#block-options", offset=(2, 0))
             await pilot.pause()
-            assert Dependencies.load(items, dependencies).blockers_of(1) == [2]
+            assert dependencies.load().blockers_of(1) == [2]
 
     async def test_a_new_search_clears_the_previous_error(
         self, items: SqliteItemStore, dependencies: SqliteDependencyStore, several: Path
     ) -> None:
-        block_todo(items, dependencies, 2, 1)  # a cycle awaits anyone choosing #2
+        add_blocker(items, dependencies, 2, [1])  # a cycle awaits anyone choosing #2
         app = TodoApp(several)
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
@@ -491,7 +490,7 @@ class TestBlockerPicker:
     ) -> None:
         from todo.tui.blockers import BlockDialog
 
-        block_todo(items, dependencies, 2, 1)  # #2 already waits on #1
+        add_blocker(items, dependencies, 2, [1])  # #2 already waits on #1
         app = TodoApp(several)
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
@@ -505,7 +504,7 @@ class TestBlockerPicker:
             assert isinstance(app.screen, BlockDialog)
             error = str(app.screen.query_one("#block-error", Label).render())
             assert error
-            assert Dependencies.load(items, dependencies).blockers_of(1) == []
+            assert dependencies.load().blockers_of(1) == []
 
 
 class TestDepsColumn:
@@ -517,11 +516,11 @@ class TestDepsColumn:
         self, dependencies: SqliteDependencyStore, items: SqliteItemStore, db_path: Path
     ) -> Path:
         for n in range(1, 7):
-            add_todo(items, f"Task {n}")
-        block_todo(items, dependencies, 1, 2)  # 1 waits on 2
-        block_todo(items, dependencies, 1, 3)  # 1 waits on 3
-        block_todo(items, dependencies, 4, 2)  # 4 waits on 2
-        block_todo(items, dependencies, 5, 2)  # 5 waits on 2
+            add_todo(items, NewItem(title=f"Task {n}"))
+        add_blocker(items, dependencies, 1, [2])  # 1 waits on 2
+        add_blocker(items, dependencies, 1, [3])  # 1 waits on 3
+        add_blocker(items, dependencies, 4, [2])  # 4 waits on 2
+        add_blocker(items, dependencies, 5, [2])  # 5 waits on 2
         return db_path
 
     @staticmethod
@@ -548,15 +547,15 @@ class TestDepsColumn:
     ) -> None:
         """The row drops its 🚧 marker the moment its last blocker is done;
         the Deps cell must agree instead of still claiming a wait."""
-        from todo.application.commands import complete_todo
+        from tests.factory import set_status
 
-        complete_todo(items, dependencies, 2)
-        complete_todo(items, dependencies, 3)
+        set_status(items, dependencies, 2, Status.DONE)
+        set_status(items, dependencies, 3, Status.DONE)
         app = TodoApp(linked)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
             table = app.query_one("#item-list", DataTable)
-            assert Dependencies.load(items, dependencies).is_blocked(1) is False
+            assert dependencies.load().is_blocked(1, items.done_ids()) is False
             assert self._deps_cell(table, "Task 1") == ""
 
     async def test_shows_both_directions_at_once(
@@ -564,7 +563,7 @@ class TestDepsColumn:
     ) -> None:
         # #3 already blocks #1; make it wait on #6 too, so its cell has to
         # carry both halves.
-        block_todo(items, dependencies, 3, 6)
+        add_blocker(items, dependencies, 3, [6])
         app = TodoApp(linked)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
@@ -576,9 +575,9 @@ class TestDepsColumn:
         self, dependencies: SqliteDependencyStore, items: SqliteItemStore, db_path: Path
     ) -> None:
         for n in range(1, 7):
-            add_todo(items, f"Task {n}")
+            add_todo(items, NewItem(title=f"Task {n}"))
         for blocker in (2, 3, 4, 5, 6):
-            block_todo(items, dependencies, 1, blocker)
+            add_blocker(items, dependencies, 1, [blocker])
         app = TodoApp(db_path)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
@@ -596,7 +595,7 @@ class TestStayCursorMode:
     @pytest.fixture()
     def five_items(self, items: SqliteItemStore, db_path: Path) -> Path:
         for n in range(1, 6):
-            add_todo(items, f"Task {n}")
+            add_todo(items, NewItem(title=f"Task {n}"))
         return db_path
 
     async def test_the_mode_is_named_for_what_it_does(self, five_items: Path) -> None:
@@ -628,10 +627,10 @@ class TestStayCursorMode:
                 await pilot.press("greater_than_sign")
                 await pilot.pause()
 
-            moved = [i.id for i in items.find(ItemQuery(include_done=True))]
+            moved = [i.id for i in items.find(ItemFilter(include_done=True))]
             in_progress = sorted(
                 i.id
-                for i in items.find(ItemQuery(include_done=True))
+                for i in items.find(ItemFilter(include_done=True))
                 if i.status == Status.IN_PROGRESS
             )
             assert in_progress == [1, 2, 3], moved
@@ -650,7 +649,7 @@ class TestStayCursorMode:
 
             done = sorted(
                 i.id
-                for i in items.find(ItemQuery(include_done=True))
+                for i in items.find(ItemFilter(include_done=True))
                 if i.status == Status.DONE
             )
             assert done == [1, 2, 3]
@@ -670,7 +669,7 @@ class TestStayCursorMode:
             assert item.status == Status.DONE  # todo -> in-progress -> done
             assert all(
                 i.status == Status.TODO
-                for i in items.find(ItemQuery(include_done=True))
+                for i in items.find(ItemFilter(include_done=True))
                 if i.id != 1
             )
 
@@ -717,13 +716,19 @@ class TestPriorityAndDeadlineStyling:
     def styled_storage(self, items: SqliteItemStore, db_path: Path) -> Path:
         from datetime import date, timedelta
 
-        add_todo(items, "Urgent one", priority=Priority.URGENT)
-        add_todo(items, "High one", priority=Priority.HIGH)
-        add_todo(items, "Medium one", priority=Priority.MEDIUM)
-        add_todo(items, "Low one", priority=Priority.LOW)
-        add_todo(items, "Overdue", deadline=date.today() - timedelta(days=3))
-        add_todo(items, "Soon", deadline=date.today() + timedelta(days=1))
-        add_todo(items, "Later", deadline=date.today() + timedelta(days=90))
+        add_todo(items, NewItem(title="Urgent one", priority=Priority.URGENT))
+        add_todo(items, NewItem(title="High one", priority=Priority.HIGH))
+        add_todo(items, NewItem(title="Medium one", priority=Priority.MEDIUM))
+        add_todo(items, NewItem(title="Low one", priority=Priority.LOW))
+        add_todo(
+            items, NewItem(title="Overdue", deadline=date.today() - timedelta(days=3))
+        )
+        add_todo(
+            items, NewItem(title="Soon", deadline=date.today() + timedelta(days=1))
+        )
+        add_todo(
+            items, NewItem(title="Later", deadline=date.today() + timedelta(days=90))
+        )
         return db_path
 
     @staticmethod
@@ -773,7 +778,7 @@ class TestPriorityAndDeadlineStyling:
         dependencies: SqliteDependencyStore,
         styled_storage: Path,
     ) -> None:
-        block_todo(items, dependencies, 1, 2)  # #1 (urgent) blocked by #2
+        add_blocker(items, dependencies, 1, [2])  # #1 (urgent) blocked by #2
         app = TodoApp(styled_storage)
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -864,7 +869,7 @@ class TestNewDialog:
             await pilot.pause()
 
             # Back to list view, no new item
-            count_before = len(items.find(ItemQuery(include_done=True)))
+            count_before = len(items.find(ItemFilter(include_done=True)))
             assert count_before == 3
 
     async def test_enter_advances_through_fields_then_saves(
@@ -904,7 +909,7 @@ class TestNewDialog:
             await pilot.press("enter")
             await pilot.pause()
 
-            items = items.find(ItemQuery(include_done=True))
+            items = items.find(ItemFilter(include_done=True))
             new_item = next(i for i in items if i.title == "From dialog")
             assert new_item.priority == Priority.HIGH
             assert "demo" in new_item.tags
@@ -934,7 +939,7 @@ class TestNewDialog:
 
             new_item = next(
                 i
-                for i in items.find(ItemQuery(include_done=True))
+                for i in items.find(ItemFilter(include_done=True))
                 if i.title == "Default pri"
             )
             assert new_item.priority == Priority.MEDIUM
@@ -1087,7 +1092,7 @@ class TestNewDialog:
             assert app.screen.query_one("#new-deadline", Input).has_focus
             # No item was saved
             assert not any(
-                i.title == "Bad date" for i in items.find(ItemQuery(include_done=True))
+                i.title == "Bad date" for i in items.find(ItemFilter(include_done=True))
             )
             # An error message is shown
             error_label = app.screen.query_one("#dialog-error", Label)
@@ -1118,12 +1123,14 @@ class TestFilters:
     def tagged_storage(self, items: SqliteItemStore, db_path: Path) -> Path:
         add_todo(
             items,
-            "Backend work",
-            priority=Priority.URGENT,
-            tags=frozenset({"backend"}),
+            NewItem(
+                title="Backend work",
+                priority=Priority.URGENT,
+                tags=frozenset({"backend"}),
+            ),
         )
-        add_todo(items, "Frontend work", tags=frozenset({"frontend"}))
-        add_todo(items, "Untagged", priority=Priority.URGENT)
+        add_todo(items, NewItem(title="Frontend work", tags=frozenset({"frontend"})))
+        add_todo(items, NewItem(title="Untagged", priority=Priority.URGENT))
         return db_path
 
     async def test_priority_filter_toggles(self, tagged_storage: Path) -> None:
@@ -1189,9 +1196,9 @@ class TestFilters:
 class TestCursorMode:
     @pytest.fixture()
     def three_todos(self, items: SqliteItemStore, db_path: Path) -> Path:
-        add_todo(items, "First")
-        add_todo(items, "Second")
-        add_todo(items, "Third")
+        add_todo(items, NewItem(title="First"))
+        add_todo(items, NewItem(title="Second"))
+        add_todo(items, NewItem(title="Third"))
         return db_path
 
     def _selected_id(self, app: TodoApp) -> object:
@@ -1262,11 +1269,11 @@ class TestProjectFilter:
     def project_storage(
         self, items: SqliteItemStore, projects: SqliteProjectStore, db_path: Path
     ) -> Path:
-        infra = projects.create(ProjectName("infra"), Description(""))
-        web = projects.create(ProjectName("web"), Description(""))
-        add_todo(items, "Infra task", project_id=infra.id)
-        add_todo(items, "Web task", project_id=web.id)
-        add_todo(items, "Loose task")
+        infra = add_project(projects, "infra", description="")
+        web = add_project(projects, "web", description="")
+        add_todo(items, NewItem(title="Infra task", project_id=infra.id))
+        add_todo(items, NewItem(title="Web task", project_id=web.id))
+        add_todo(items, NewItem(title="Loose task"))
         return db_path
 
     async def test_p_cycles_project_filter(self, project_storage: Path) -> None:
@@ -1431,7 +1438,7 @@ class TestOpenItem:
         from todo.tui.item_screen import ItemScreen
 
         long_body = "\n".join(f"line {i}" for i in range(40))
-        add_todo(items, "Has long body", body=long_body)
+        add_todo(items, NewItem(title="Has long body", body=long_body))
 
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
@@ -1463,10 +1470,10 @@ class TestStatusGroups:
         self, items: SqliteItemStore, db_path: Path
     ) -> None:
         """A separator row appears for each non-empty status group."""
-        add_todo(items, "todo 1")  # default status: todo
-        add_todo(items, "backlog 1", status=Status.BACKLOG)
-        add_todo(items, "in-progress 1", status=Status.IN_PROGRESS)
-        add_todo(items, "done 1", status=Status.DONE)
+        add_todo(items, NewItem(title="todo 1"))  # default status: todo
+        add_todo(items, NewItem(title="backlog 1", status=Status.BACKLOG))
+        add_todo(items, NewItem(title="in-progress 1", status=Status.IN_PROGRESS))
+        add_todo(items, NewItem(title="done 1", status=Status.DONE))
 
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
@@ -1487,8 +1494,8 @@ class TestStatusGroups:
         self, items: SqliteItemStore, db_path: Path
     ) -> None:
         """Pressing down on the last item of a group skips the next separator."""
-        add_todo(items, "alpha")  # todo
-        add_todo(items, "bravo", status=Status.BACKLOG)
+        add_todo(items, NewItem(title="alpha"))  # todo
+        add_todo(items, NewItem(title="bravo", status=Status.BACKLOG))
 
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
@@ -1505,118 +1512,17 @@ class TestStatusGroups:
 class TestExternalChangePolling:
     """The TUI should pick up changes made via the CLI (or any other process)."""
 
-    async def test_external_add_appears(
-        self, seeded: Path, items: SqliteItemStore
-    ) -> None:
-        app = TodoApp(seeded)
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            initial_rows = _item_rows(app.query_one("#item-list", DataTable))
-
-            # Simulate the CLI adding an item via a separate connection
-            from pathlib import Path
-
-            other = SqliteItemStore(
-                Path(items._conn.execute("PRAGMA database_list").fetchone()[2])
-            )
-            add_todo(other, "Added by CLI", priority=Priority.MEDIUM)
-            other.close()
-
-            # Trigger the poll
-            view = app.query_one(TodoListView)
-            view._poll_for_external_changes()
-            await pilot.pause()
-
-            new_rows = _item_rows(app.query_one("#item-list", DataTable))
-            assert new_rows == initial_rows + 1
-
-    async def test_external_delete_disappears(
-        self, seeded: Path, items: SqliteItemStore
-    ) -> None:
-        app = TodoApp(seeded)
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            initial_rows = _item_rows(app.query_one("#item-list", DataTable))
-
-            from pathlib import Path
-
-            other = SqliteItemStore(
-                Path(items._conn.execute("PRAGMA database_list").fetchone()[2])
-            )
-            other.delete(1)
-            other.close()
-
-            view = app.query_one(TodoListView)
-            view._poll_for_external_changes()
-            await pilot.pause()
-
-            new_rows = _item_rows(app.query_one("#item-list", DataTable))
-            assert new_rows == initial_rows - 1
-
-    async def test_no_refresh_when_unchanged(
-        self, seeded: Path, items: SqliteItemStore, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Polling must not call _refresh_list when data hasn't changed."""
-        app = TodoApp(seeded)
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            view = app.query_one(TodoListView)
-
-            calls: list[None] = []
-            original = view._refresh_list
-            monkeypatch.setattr(
-                view,
-                "_refresh_list",
-                lambda **kw: (calls.append(None), original(**kw))[1],
-            )
-
-            view._poll_for_external_changes()
-            await pilot.pause()
-            assert calls == []  # unchanged data: refresh must NOT run
-
-    async def test_refresh_on_external_change(
-        self,
-        seeded: Path,
-        items: SqliteItemStore,
-        db_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Polling must refresh when another process wrote to the database."""
-        app = TodoApp(seeded)
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            view = app.query_one(TodoListView)
-
-            calls: list[None] = []
-            original = view._refresh_list
-            monkeypatch.setattr(
-                view,
-                "_refresh_list",
-                lambda **kw: (calls.append(None), original(**kw))[1],
-            )
-
-            # Simulate an external writer via a second connection.
-            other = SqliteItemStore(db_path)
-            add_todo(other, "From outside")
-            other.close()
-
-            view._poll_for_external_changes()
-            await pilot.pause()
-            assert len(calls) == 1
-            table = app.query_one("#item-list", DataTable)
-            assert _item_rows(table) == 4
-
 
 class TestBlocking:
     async def test_blocked_marker_appears_in_list(
         self, items: SqliteItemStore, dependencies: SqliteDependencyStore, db_path: Path
     ) -> None:
         """An actively blocked item shows the crane marker in its title cell."""
-        from todo.application.commands import block_todo
+        from tests.factory import add_blocker
 
-        add_todo(items, "Blocked item")  # id 1
-        add_todo(items, "Blocker item")  # id 2
-        block_todo(items, dependencies, 1, 2)  # #1 blocked by #2
+        add_todo(items, NewItem(title="Blocked item"))  # id 1
+        add_todo(items, NewItem(title="Blocker item"))  # id 2
+        add_blocker(items, dependencies, 1, [2])  # #1 blocked by #2
 
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
@@ -1660,9 +1566,10 @@ class TestBlocking:
             await pilot.press("enter")
             await pilot.pause()
 
-            deps = Dependencies.load(items, dependencies)
-            assert deps.blockers_of(1) == [2]
-            assert deps.is_blocked(1) is True
+            graph = dependencies.load()
+            done = items.done_ids()
+            assert graph.blockers_of(1) == [2]
+            assert graph.is_blocked(1, done) is True
             # Dialog dismissed back to the list view.
             from todo.tui.blockers import BlockDialog
 
@@ -1694,7 +1601,7 @@ class TestBlocking:
             await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, BlockDialog)  # nothing to choose
-            assert Dependencies.load(items, dependencies).blockers_of(1) == []
+            assert dependencies.load().blockers_of(1) == []
 
     async def test_b_block_dialog_removes_an_existing_blocker(
         self, dependencies: SqliteDependencyStore, seeded: Path, items: SqliteItemStore
@@ -1702,10 +1609,10 @@ class TestBlocking:
         """Removal is choosing the marked candidate. The old "-2" shorthand
         is gone: it collided with the search box, where "-2" is a perfectly
         good query for a title containing "-2"."""
-        from todo.application.commands import block_todo
+        from tests.factory import add_blocker
 
-        block_todo(items, dependencies, 1, 2)
-        assert Dependencies.load(items, dependencies).is_blocked(1) is True
+        add_blocker(items, dependencies, 1, [2])
+        assert dependencies.load().is_blocked(1, items.done_ids()) is True
 
         app = TodoApp(seeded)
         async with app.run_test() as pilot:
@@ -1715,20 +1622,21 @@ class TestBlocking:
             await pilot.press("enter")  # #2 is marked and sorted first
             await pilot.pause()
 
-            deps = Dependencies.load(items, dependencies)
-            assert deps.blockers_of(1) == []
-            assert deps.is_blocked(1) is False
+            graph = dependencies.load()
+            done = items.done_ids()
+            assert graph.blockers_of(1) == []
+            assert graph.is_blocked(1, done) is False
 
     async def test_blocked_row_is_dimmed(
         self, items: SqliteItemStore, dependencies: SqliteDependencyStore, db_path: Path
     ) -> None:
         from rich.text import Text
 
-        from todo.application.commands import block_todo
+        from tests.factory import add_blocker
 
-        add_todo(items, "Blocked item")  # id 1
-        add_todo(items, "Blocker item")  # id 2
-        block_todo(items, dependencies, 1, 2)
+        add_todo(items, NewItem(title="Blocked item"))  # id 1
+        add_todo(items, NewItem(title="Blocker item"))  # id 2
+        add_blocker(items, dependencies, 1, [2])
 
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
@@ -1815,8 +1723,8 @@ class TestConcurrentDeletionGuards:
 class _LockedItemStore(SqliteItemStore):
     """Simulates a database whose write lock another process holds."""
 
-    def create(self, **kwargs: object) -> TodoItem:  # type: ignore[override]
-        raise StorageError("Failed to add todo: database is locked")
+    def create(self, item: TodoItem) -> None:
+        raise StorageError("Failed to create todo: database is locked")
 
 
 class _LockedDependencyStore(SqliteDependencyStore):
@@ -1830,8 +1738,8 @@ class TestLockedDatabaseDialogs:
     ) -> None:
         # Seed through a working store; the locked one only refuses writes.
         plain = SqliteItemStore(db_path)
-        add_todo(plain, "One")
-        add_todo(plain, "Two")
+        add_todo(plain, NewItem(title="One"))
+        add_todo(plain, NewItem(title="Two"))
         plain.close()
 
         app = TodoApp(db_path, dependencies=_LockedDependencyStore(db_path))
@@ -1851,7 +1759,7 @@ class TestLockedDatabaseDialogs:
         self, items: SqliteItemStore, db_path: Path
     ) -> None:
         plain = SqliteItemStore(db_path)
-        add_todo(plain, "Existing")
+        add_todo(plain, NewItem(title="Existing"))
         plain.close()
 
         app = TodoApp(db_path, items=_LockedItemStore(db_path))
@@ -1922,19 +1830,16 @@ class TestSharedMetaPresenter:
         )
         lines = meta_lines(
             item,
-            Dependencies(
-                graph=DependencyGraph(
-                    frozenset(
-                        {
-                            (ItemId(1), ItemId(7)),
-                            (ItemId(7), ItemId(2)),
-                            (ItemId(7), ItemId(3)),
-                        }
-                    )
-                ),
-                done_ids=frozenset(),
+            DependencyGraph(
+                frozenset(
+                    {
+                        (ItemId(1), ItemId(7)),
+                        (ItemId(7), ItemId(2)),
+                        (ItemId(7), ItemId(3)),
+                    }
+                )
             ),
-            {ProjectId(1): ProjectName("proj [/]")},
+            ProjectNames(MappingProxyType({ProjectId(1): ProjectName("proj [/]")})),
         )
         joined = "\n".join(lines)
         assert "Priority: high" in joined
@@ -1973,7 +1878,7 @@ class TestStorageFailureDoesNotCrashTui:
         app = TodoApp(seeded)
         async with app.run_test() as pilot:
             await pilot.pause()
-            monkeypatch.setattr(SqliteProjectStore, "find_all", self._boom)
+            monkeypatch.setattr(SqliteProjectStore, "find", self._boom)
             await pilot.press("p")
             await pilot.pause()
             assert app.is_running
@@ -1988,20 +1893,6 @@ class TestStorageFailureDoesNotCrashTui:
             await pilot.pause()
             monkeypatch.setattr(SqliteItemStore, "find", self._boom)
             await pilot.press("d")
-            await pilot.pause()
-            assert app.is_running
-
-    async def test_poll_timer_survives_read_failure(
-        self, seeded: Path, items: SqliteItemStore, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from todo.tui.list_view import TodoListView
-
-        app = TodoApp(seeded)
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            monkeypatch.setattr(SqliteChangeFeed, "revision", self._boom)
-            view = app.query_one(TodoListView)
-            view._poll_for_external_changes()
             await pilot.pause()
             assert app.is_running
 
@@ -2040,11 +1931,11 @@ class TestRefreshRobustness:
             original = SqliteItemStore.find
             fail_once = {"armed": True}
 
-            def flaky(self: SqliteItemStore, query: ItemQuery) -> list[TodoItem]:
+            def flaky(self: SqliteItemStore, item_filter: ItemFilter) -> list[TodoItem]:
                 if fail_once["armed"]:
                     fail_once["armed"] = False
                     raise StorageError("database disk image is malformed")
-                return original(self, query)
+                return original(self, item_filter)
 
             monkeypatch.setattr(SqliteItemStore, "find", flaky)
             await pilot.press("d")
@@ -2058,7 +1949,7 @@ class TestRefreshRobustness:
     ) -> None:
         """Deleting the last item must not leave it rendered in the detail
         pane forever."""
-        add_todo(items, "only item", body="ghost body")
+        add_todo(items, NewItem(title="only item", body="ghost body"))
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -2070,20 +1961,6 @@ class TestRefreshRobustness:
             body = str(app.query_one("#detail-body", Static).render())
             assert "only item" not in title
             assert "ghost body" not in body
-
-    async def test_startup_survives_data_version_failure(
-        self, seeded: Path, items: SqliteItemStore, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from todo.exceptions import StorageError
-
-        def boom(self: SqliteChangeFeed) -> int:
-            raise StorageError("database disk image is malformed")
-
-        monkeypatch.setattr(SqliteChangeFeed, "revision", boom)
-        app = TodoApp(seeded)
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            assert app.is_running
 
 
 class TestEditorBufferReadFailure:
@@ -2104,61 +1981,23 @@ class TestEditorBufferReadFailure:
             missing = tmp_path / "vanished.todo.txt"
             notices: list[str] = []
             view.notify = lambda msg, **kw: notices.append(str(msg))  # type: ignore[method-assign]
-            content = EditorSession(view, items, dependencies).read_buffer(str(missing))
+            content = EditorSession(view, items).read_buffer(str(missing))
             assert content is None
             assert notices
             assert str(missing) in notices[0]
 
 
 class TestPollRetryAndRenameStableFilter:
-    async def test_poll_retries_after_transient_refresh_failure(
-        self, items: SqliteItemStore, db_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A failed refresh must not record the new data_version, or the
-        poll never retries and the TUI shows stale rows forever."""
-        from todo.exceptions import StorageError
-        from todo.tui.list_view import TodoListView
-
-        for title in ("one", "two", "three"):
-            add_todo(items, title)
-        app = TodoApp(db_path)
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            view = app.query_one(TodoListView)
-            table = app.query_one("#item-list", DataTable)
-            assert _item_rows(table) == 3
-
-            # External write bumps data_version.
-            other = SqliteItemStore(db_path)
-            add_todo(other, "four")
-            other.close()
-
-            original = SqliteItemStore.find
-            fail_once = {"armed": True}
-
-            def flaky(self: SqliteItemStore, query: ItemQuery) -> list[TodoItem]:
-                if fail_once["armed"]:
-                    fail_once["armed"] = False
-                    raise StorageError("database is locked")
-                return original(self, query)
-
-            monkeypatch.setattr(SqliteItemStore, "find", flaky)
-            view._poll_for_external_changes()  # sees change, refresh fails
-            await pilot.pause()
-            view._poll_for_external_changes()  # must retry, not no-op
-            await pilot.pause()
-            assert _item_rows(table) == 4
-
     async def test_project_filter_survives_external_rename(
         self, items: SqliteItemStore, projects: SqliteProjectStore, db_path: Path
     ) -> None:
         """The filter keys on the stable project id: a rename must neither
         blank the list nor mislabel the status bar."""
-        from todo.application.commands import add_project, edit_project
+        from tests.factory import add_project, edit_project
         from todo.tui.list_view import TodoListView
 
         project = add_project(projects, "Alpha")
-        add_todo(items, "in alpha", project_id=project.id)
+        add_todo(items, NewItem(title="in alpha", project_id=project.id))
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -2180,91 +2019,16 @@ class TestPollRetryAndRenameStableFilter:
 
 
 class TestPollVersionRaceAndToastStreak:
-    async def test_write_during_rebuild_is_not_marked_seen(
-        self, items: SqliteItemStore, db_path: Path
-    ) -> None:
-        """The version must be captured BEFORE the reads: a commit landing
-        during the table rebuild would otherwise be recorded as already
-        seen and never displayed (round-10 regression)."""
-        from todo.tui.list_view import TodoListView
-
-        add_todo(items, "first")
-        app = TodoApp(db_path)
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            view = app.query_one(TodoListView)
-            table = app.query_one("#item-list", DataTable)
-            assert _item_rows(table) == 1
-
-            # An external write lands mid-rebuild, after this refresh read
-            # its rows but before it records the version.
-            original_rows = TodoListView._rows_for_refresh
-
-            def racing(self: TodoListView):  # type: ignore[no-untyped-def]
-                result = original_rows(self)
-                other = SqliteItemStore(db_path)
-                add_todo(other, "added mid-rebuild")
-                other.close()
-                return result
-
-            TodoListView._rows_for_refresh = racing  # type: ignore[method-assign]
-            try:
-                view._refresh_list()
-                await pilot.pause()
-            finally:
-                TodoListView._rows_for_refresh = original_rows  # type: ignore[method-assign]
-
-            # The racing write must still be pending, not swallowed.
-            view._poll_for_external_changes()
-            await pilot.pause()
-            assert _item_rows(table) == 2
-
-    async def test_repeated_refresh_failure_toasts_once_per_streak(
-        self,
-        seeded: Path,
-        items: SqliteItemStore,
-        db_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """A persistently broken database must not stack an error toast
-        every 2 seconds forever."""
-        from todo.exceptions import StorageError
-        from todo.tui.list_view import TodoListView
-
-        app = TodoApp(seeded)
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            view = app.query_one(TodoListView)
-            notices: list[str] = []
-            monkeypatch.setattr(
-                view, "notify", lambda msg, **kw: notices.append(str(msg))
-            )
-
-            def boom(self: SqliteItemStore, query: ItemQuery) -> list[TodoItem]:
-                raise StorageError("no such table: todos")
-
-            # An external write makes every tick see a version change, so
-            # each tick genuinely attempts (and fails) a refresh.
-            other = SqliteItemStore(db_path)
-            add_todo(other, "external")
-            other.close()
-
-            monkeypatch.setattr(SqliteItemStore, "find", boom)
-            for _ in range(5):
-                view._poll_for_external_changes()
-                await pilot.pause()
-            assert len(notices) == 1
-
     async def test_deleted_filtered_project_is_named_not_question_mark(
         self, items: SqliteItemStore, projects: SqliteProjectStore, db_path: Path
     ) -> None:
         """A deleted filtered project must still be nameable in the status
         bar (round-10 regression: it degraded to '?')."""
-        from todo.application.commands import add_project, delete_project
+        from tests.factory import add_project, delete_project
         from todo.tui.list_view import TodoListView
 
         project = add_project(projects, "Apollo")
-        add_todo(items, "in apollo", project_id=project.id)
+        add_todo(items, NewItem(title="in apollo", project_id=project.id))
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -2292,10 +2056,10 @@ class TestCreateUnderActiveFilter:
     ) -> None:
         """Creating while a project filter is active must not produce an
         item the user can never see."""
-        from todo.application.commands import add_project
+        from tests.factory import add_project
 
         project = add_project(projects, "Alpha")
-        add_todo(items, "Alpha work item", project_id=project.id)
+        add_todo(items, NewItem(title="Alpha work item", project_id=project.id))
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -2311,7 +2075,7 @@ class TestCreateUnderActiveFilter:
 
             created = next(
                 i
-                for i in items.find(ItemQuery(include_done=True))
+                for i in items.find(ItemFilter(include_done=True))
                 if i.title == "Buy milk"
             )
             assert created.project_id == project.id
@@ -2332,7 +2096,9 @@ class TestCreateUnderActiveFilter:
                 await pilot.press("enter")
                 await pilot.pause()
             created = next(
-                i for i in items.find(ItemQuery(include_done=True)) if i.title == "Solo"
+                i
+                for i in items.find(ItemFilter(include_done=True))
+                if i.title == "Solo"
             )
             assert created.project_id is None
 
@@ -2390,19 +2156,21 @@ class TestItemMenu:
         projects: SqliteProjectStore,
         db_path: Path,
     ) -> None:
-        project = projects.create(ProjectName("infra"), Description(""))
+        project = add_project(projects, "infra", description="")
         add_todo(
             items,
-            "Main",
-            priority=Priority.HIGH,
-            deadline=date(2099, 3, 4),
-            tags=frozenset({"auth", "web"}),
-            project_id=project.id,
+            NewItem(
+                title="Main",
+                priority=Priority.HIGH,
+                deadline=date(2099, 3, 4),
+                tags=frozenset({"auth", "web"}),
+                project_id=project.id,
+            ),
         )
-        add_todo(items, "Blocker")
-        add_todo(items, "Dependent")
-        block_todo(items, dependencies, 1, 2)
-        block_todo(items, dependencies, 3, 1)
+        add_todo(items, NewItem(title="Blocker"))
+        add_todo(items, NewItem(title="Dependent"))
+        add_blocker(items, dependencies, 1, [2])
+        add_blocker(items, dependencies, 3, [1])
 
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
@@ -2422,7 +2190,7 @@ class TestItemMenu:
     async def test_renaming_from_the_menu(
         self, items: SqliteItemStore, db_path: Path
     ) -> None:
-        add_todo(items, "Old name")
+        add_todo(items, NewItem(title="Old name"))
 
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
@@ -2441,7 +2209,7 @@ class TestItemMenu:
     async def test_an_empty_title_is_refused_and_the_screen_stays(
         self, items: SqliteItemStore, db_path: Path
     ) -> None:
-        add_todo(items, "Keep me")
+        add_todo(items, NewItem(title="Keep me"))
 
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
@@ -2457,9 +2225,9 @@ class TestItemMenu:
             assert items.get(1).title == "Keep me"
 
     async def test_priority_is_chosen_from_its_values(
-        self, changes: SqliteChangeFeed, items: SqliteItemStore, db_path: Path
+        self, items: SqliteItemStore, db_path: Path
     ) -> None:
-        add_todo(items, "Task", priority=Priority.MEDIUM)
+        add_todo(items, NewItem(title="Task", priority=Priority.MEDIUM))
 
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
@@ -2481,9 +2249,9 @@ class TestItemMenu:
     async def test_status_change_reports_what_it_unblocked(
         self, dependencies: SqliteDependencyStore, items: SqliteItemStore, db_path: Path
     ) -> None:
-        add_todo(items, "Blocker")
-        add_todo(items, "Waiting")
-        block_todo(items, dependencies, 2, 1)
+        add_todo(items, NewItem(title="Blocker"))
+        add_todo(items, NewItem(title="Waiting"))
+        add_blocker(items, dependencies, 2, [1])
 
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
@@ -2503,7 +2271,7 @@ class TestItemMenu:
     async def test_a_bad_deadline_is_refused_inline(
         self, items: SqliteItemStore, db_path: Path
     ) -> None:
-        add_todo(items, "Task", deadline=date(2099, 1, 1))
+        add_todo(items, NewItem(title="Task", deadline=date(2099, 1, 1)))
 
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
@@ -2521,7 +2289,7 @@ class TestItemMenu:
     async def test_an_emptied_deadline_clears_it(
         self, items: SqliteItemStore, db_path: Path
     ) -> None:
-        add_todo(items, "Task", deadline=date(2099, 1, 1))
+        add_todo(items, NewItem(title="Task", deadline=date(2099, 1, 1)))
 
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
@@ -2537,7 +2305,7 @@ class TestItemMenu:
     async def test_tags_are_replaced_by_what_you_type(
         self, items: SqliteItemStore, db_path: Path
     ) -> None:
-        add_todo(items, "Task", tags=frozenset({"old"}))
+        add_todo(items, NewItem(title="Task", tags=frozenset({"old"})))
 
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
@@ -2555,8 +2323,8 @@ class TestItemMenu:
     ) -> None:
         """Project was context-only in the editor buffer: unreachable from
         the TUI at all. It is a field like any other now."""
-        projects.create(ProjectName("infra"), Description(""))
-        add_todo(items, "Task")
+        add_project(projects, "infra", description="")
+        add_todo(items, NewItem(title="Task"))
 
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
@@ -2581,9 +2349,9 @@ class TestItemMenu:
         """'you also need to be able to remove blockers and such'."""
         from todo.tui.blockers import BlockDialog
 
-        add_todo(items, "Main")
-        add_todo(items, "Blocker")
-        block_todo(items, dependencies, 1, 2)
+        add_todo(items, NewItem(title="Main"))
+        add_todo(items, NewItem(title="Blocker"))
+        add_blocker(items, dependencies, 1, [2])
 
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
@@ -2600,7 +2368,7 @@ class TestItemMenu:
             await pilot.press("enter")
             await pilot.pause()
 
-            assert Dependencies.load(items, dependencies).blockers_of(1) == []
+            assert dependencies.load().blockers_of(1) == []
             assert "Blocked by  —" in "\n".join(self._rows(app.screen))
 
     async def test_a_dependent_is_added_from_the_blocking_row(
@@ -2610,8 +2378,8 @@ class TestItemMenu:
         neither item, so it can be written from either side."""
         from todo.tui.blockers import BlockDialog
 
-        add_todo(items, "Main")
-        add_todo(items, "Later")
+        add_todo(items, NewItem(title="Main"))
+        add_todo(items, NewItem(title="Later"))
 
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
@@ -2622,16 +2390,16 @@ class TestItemMenu:
             await pilot.press("enter")  # the only candidate, #2
             await pilot.pause()
 
-            assert Dependencies.load(items, dependencies).blockers_of(2) == [1]
-            assert Dependencies.load(items, dependencies).dependents_of(1) == [2]
+            assert dependencies.load().blockers_of(2) == [1]
+            assert dependencies.load().dependents_of(1) == [2]
             assert "Blocking    #2" in "\n".join(self._rows(app.screen))
 
     async def test_a_dependent_is_removed_from_the_blocking_row(
         self, items: SqliteItemStore, dependencies: SqliteDependencyStore, db_path: Path
     ) -> None:
-        add_todo(items, "Main")
-        add_todo(items, "Waiting")
-        block_todo(items, dependencies, 2, 1)
+        add_todo(items, NewItem(title="Main"))
+        add_todo(items, NewItem(title="Waiting"))
+        add_blocker(items, dependencies, 2, [1])
 
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
@@ -2644,14 +2412,14 @@ class TestItemMenu:
             await pilot.press("enter")
             await pilot.pause()
 
-            assert Dependencies.load(items, dependencies).blockers_of(2) == []
+            assert dependencies.load().blockers_of(2) == []
             assert "Blocking    —" in "\n".join(self._rows(app.screen))
 
     async def test_the_two_directions_ask_different_questions(
         self, items: SqliteItemStore, db_path: Path
     ) -> None:
-        add_todo(items, "Main")
-        add_todo(items, "Other")
+        add_todo(items, NewItem(title="Main"))
+        add_todo(items, NewItem(title="Other"))
 
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
@@ -2673,9 +2441,9 @@ class TestItemMenu:
         """The cycle check does not care which end you entered from."""
         from todo.tui.blockers import BlockDialog
 
-        add_todo(items, "Main")
-        add_todo(items, "Blocker")
-        block_todo(items, dependencies, 1, 2)  # #1 waits on #2
+        add_todo(items, NewItem(title="Main"))
+        add_todo(items, NewItem(title="Blocker"))
+        add_blocker(items, dependencies, 1, [2])  # #1 waits on #2
 
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
@@ -2689,24 +2457,19 @@ class TestItemMenu:
             assert isinstance(app.screen, BlockDialog)  # still open
             error = str(app.screen.query_one("#block-error", Label).render())
             assert "cycle" in error
-            assert Dependencies.load(items, dependencies).blockers_of(2) == []
+            assert dependencies.load().blockers_of(2) == []
 
     async def test_the_body_row_hands_off_to_the_editor(
         self, dependencies: SqliteDependencyStore, items: SqliteItemStore, db_path: Path
     ) -> None:
         from todo.tui import item_screen as item_screen_module
 
-        add_todo(items, "Task", body="line one\nline two")
+        add_todo(items, NewItem(title="Task", body="line one\nline two"))
 
         seen: list[str] = []
 
         class FakeSession:
-            def __init__(
-                self,
-                view: object,
-                items: SqliteItemStore,
-                dependencies: SqliteDependencyStore,
-            ) -> None:
+            def __init__(self, view: object, items: SqliteItemStore) -> None:
                 pass
 
             def run(self, item: TodoItem) -> None:
@@ -2725,7 +2488,7 @@ class TestItemMenu:
     async def test_a_change_reaches_the_list_behind_it(
         self, items: SqliteItemStore, db_path: Path
     ) -> None:
-        add_todo(items, "Before")
+        add_todo(items, NewItem(title="Before"))
 
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
@@ -2752,7 +2515,9 @@ class TestItemMenu:
         """The body preview is the only part allowed to give way: a screen
         taller than the terminal must never push the inline error off it
         (round-2 defect #7, one dialog over)."""
-        add_todo(items, "Task", body="\n".join(f"line {i}" for i in range(40)))
+        add_todo(
+            items, NewItem(title="Task", body="\n".join(f"line {i}" for i in range(40)))
+        )
 
         app = TodoApp(db_path)
         async with app.run_test(size=size) as pilot:
@@ -2775,7 +2540,7 @@ class TestItemMenu:
     async def test_escaping_a_prompt_changes_nothing(
         self, items: SqliteItemStore, db_path: Path
     ) -> None:
-        add_todo(items, "Task", priority=Priority.MEDIUM)
+        add_todo(items, NewItem(title="Task", priority=Priority.MEDIUM))
 
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
@@ -2796,7 +2561,7 @@ class TestItemMenu:
         beats vanishing mid-keystroke, and Esc still works."""
         from todo.tui.item_screen import ItemScreen
 
-        add_todo(items, "Doomed")
+        add_todo(items, NewItem(title="Doomed"))
 
         app = TodoApp(db_path)
         async with app.run_test() as pilot:
@@ -2818,26 +2583,20 @@ class TestItemMenu:
     async def test_an_applied_body_edit_updates_the_row(
         self, items: SqliteItemStore, dependencies: SqliteDependencyStore, db_path: Path
     ) -> None:
-        from todo.application.commands import CompletionResult, edit_todo
+
+        from tests.factory import edit_todo
         from todo.tui import item_screen as item_screen_module
 
-        add_todo(items, "Task", body="one line")
+        add_todo(items, NewItem(title="Task", body="one line"))
 
         class FakeSession:
-            def __init__(
-                self,
-                view: object,
-                item_store: SqliteItemStore,
-                dependency_store: SqliteDependencyStore,
-            ) -> None:
+            def __init__(self, view: object, item_store: SqliteItemStore) -> None:
                 self._items = item_store
-                self._dependencies = dependency_store
 
-            def run(self, item: TodoItem) -> CompletionResult:
+            def run(self, item: TodoItem) -> TodoItem:
                 # What a real $EDITOR round trip leaves behind.
-                return edit_todo(
-                    self._items, self._dependencies, item.id, body="one\ntwo\nthree"
-                )
+                edit_todo(self._items, item.id, body="one\ntwo\nthree")
+                return self._items.get(item.id)
 
         app = TodoApp(db_path)
         async with app.run_test() as pilot:

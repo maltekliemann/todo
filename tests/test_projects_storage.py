@@ -4,22 +4,28 @@ from __future__ import annotations
 
 import pytest
 
+from tests.factory import (
+    NewItem,
+    add_project,
+    add_todo,
+    delete_project,
+    log_project_update,
+)
 from todo.adapters.sqlite_item_store import SqliteItemStore
 from todo.adapters.sqlite_project_log_store import SqliteProjectLogStore
 from todo.adapters.sqlite_project_store import SqliteProjectStore
-from todo.application.commands import add_todo, delete_project
 from todo.domain.description import Description
 from todo.domain.item_id import ItemId
+from todo.domain.project_filter import ProjectFilter
 from todo.domain.project_id import ProjectId
 from todo.domain.project_name import ProjectName
 from todo.domain.project_status import ProjectStatus
-from todo.domain.update_body import UpdateBody
 from todo.exceptions import DuplicateProjectError, ProjectNotFoundError
 
 
 class TestProjectCrud:
     def test_add_and_get(self, projects: SqliteProjectStore) -> None:
-        project = projects.create(ProjectName("infra"), Description("Infra work"))
+        project = add_project(projects, "infra", description="Infra work")
         assert project.name == "infra"
         assert project.description == "Infra work"
         assert project.status is ProjectStatus.NOT_STARTED
@@ -27,9 +33,9 @@ class TestProjectCrud:
         assert projects.get_by_name(ProjectName("infra")) == project
 
     def test_duplicate_name_rejected(self, projects: SqliteProjectStore) -> None:
-        projects.create(ProjectName("infra"), Description(""))
+        add_project(projects, "infra", description="")
         with pytest.raises(DuplicateProjectError):
-            projects.create(ProjectName("infra"), Description(""))
+            add_project(projects, "infra", description="")
 
     def test_get_missing_raises(self, projects: SqliteProjectStore) -> None:
         with pytest.raises(ProjectNotFoundError):
@@ -40,19 +46,19 @@ class TestProjectCrud:
     def test_list_excludes_the_ended_by_default(
         self, projects: SqliteProjectStore
     ) -> None:
-        projects.create(ProjectName("current-one"), Description(""))
-        finished = projects.create(ProjectName("finished-one"), Description(""))
+        add_project(projects, "current-one", description="")
+        finished = add_project(projects, "finished-one", description="")
         finished.set_status(ProjectStatus.DONE)
         projects.save(finished)
 
-        assert [p.name for p in projects.find_all()] == ["current-one"]
-        assert [p.name for p in projects.find_all(include_ended=True)] == [
+        assert [p.name for p in projects.find(ProjectFilter())] == ["current-one"]
+        assert [p.name for p in projects.find(ProjectFilter(include_ended=True))] == [
             "current-one",
             "finished-one",
         ]
 
     def test_update_fields(self, projects: SqliteProjectStore) -> None:
-        project = projects.create(ProjectName("old"), Description("d"))
+        project = add_project(projects, "old", description="d")
         project.set_name(ProjectName("new"))
         project.set_description(Description("d2"))
         updated = projects.save(project)
@@ -62,8 +68,8 @@ class TestProjectCrud:
     def test_rename_to_existing_name_rejected(
         self, projects: SqliteProjectStore
     ) -> None:
-        projects.create(ProjectName("taken"), Description(""))
-        other = projects.create(ProjectName("other"), Description(""))
+        add_project(projects, "taken", description="")
+        other = add_project(projects, "other", description="")
         with pytest.raises(DuplicateProjectError):
             other.set_name(ProjectName("taken"))
             projects.save(other)
@@ -74,8 +80,8 @@ class TestProjectCrud:
         projects: SqliteProjectStore,
         log: SqliteProjectLogStore,
     ) -> None:
-        project = projects.create(ProjectName("doomed"), Description(""))
-        item = add_todo(items, "Task", project_id=project.id)
+        project = add_project(projects, "doomed", description="")
+        item = add_todo(items, NewItem(title="Task", project_id=project.id))
         assert item.project_id == projects.get_by_name(ProjectName("doomed")).id
 
         # Through the command: what a deleted project means for its items
@@ -90,8 +96,8 @@ class TestProjectCrud:
         projects: SqliteProjectStore,
         log: SqliteProjectLogStore,
     ) -> None:
-        project = projects.create(ProjectName("doomed"), Description(""))
-        log.append(project.id, UpdateBody("a note"))
+        project = add_project(projects, "doomed", description="")
+        log_project_update(projects, log, project.id, "a note")
 
         delete_project(projects, items, log, project.id)
         assert log.entries_for(project.id) == []
@@ -99,8 +105,8 @@ class TestProjectCrud:
     def test_assign_and_clear_project_on_todo(
         self, items: SqliteItemStore, projects: SqliteProjectStore
     ) -> None:
-        project = projects.create(ProjectName("p"), Description(""))
-        add_todo(items, "Task")
+        project = add_project(projects, "p", description="")
+        add_todo(items, NewItem(title="Task"))
         item = items.get(ItemId(1))
         item.set_project_id(project.id)
         assigned = items.save(item)

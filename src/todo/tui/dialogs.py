@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 
 from rich.text import Text
 from textual import on
@@ -13,11 +13,18 @@ from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Input, Label, Select
 
-from todo.application.commands import add_todo
+from todo.application.contracts.counter_store import CounterStore
 from todo.application.contracts.item_store import ItemStore
 from todo.application.contracts.project_store import ProjectStore
+from todo.application.workflows.create_todo import CreateTodo
+from todo.application.workflows.take_item_id import TakeItemId
+from todo.domain.body import Body
+from todo.domain.deadline import Deadline
 from todo.domain.priority import Priority
 from todo.domain.project_id import ProjectId
+from todo.domain.status import Status
+from todo.domain.tag import Tag
+from todo.domain.title import Title
 from todo.domain.todo_item import TodoItem
 from todo.exceptions import TodoError
 from todo.tui.tag_input import parse_tag_input
@@ -121,11 +128,13 @@ class NewItemDialog(ModalScreen[TodoItem | None]):
         self,
         items: ItemStore,
         projects: ProjectStore,
+        item_ids: CounterStore,
         project_id: ProjectId | None = None,
     ) -> None:
         super().__init__()
         self._items = items
         self._projects = projects
+        self._item_ids = item_ids
         # The list's active project filter. Creating an item while a
         # filter is on used to store it unfiled, so it never appeared and
         # the user re-added it — inheriting the filter matches intent.
@@ -253,14 +262,20 @@ class NewItemDialog(ModalScreen[TodoItem | None]):
         tags = parse_tag_input(tags_str) if tags_str else None
 
         try:
-            item = add_todo(
-                self._items,
-                title,
+            stamp = datetime.now(tz=timezone.utc)
+            item = TodoItem(
+                id=TakeItemId(self._item_ids).execute(),
+                title=Title(title),
+                body=Body(""),
                 priority=priority,
-                deadline=deadline,
-                tags=tags,
+                status=Status.TODO,
+                created_at=stamp,
+                updated_at=stamp,
+                deadline=Deadline.from_date(deadline) if deadline else None,
+                tags=frozenset(Tag(t) for t in tags or ()),
                 project_id=self._project_id,
             )
+            CreateTodo(self._items).execute(item)
         except (TodoError, ValueError) as exc:
             # E.g. a locked database or a rejected tag: report inline and
             # keep the dialog (and the user's typed input) alive.

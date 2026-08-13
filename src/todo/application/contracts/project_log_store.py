@@ -11,13 +11,17 @@ from typing import Protocol
 
 from todo.domain.project_id import ProjectId
 from todo.domain.project_update import ProjectUpdate
-from todo.domain.update_body import UpdateBody
 from todo.domain.update_id import UpdateId
 
 
 class ProjectLogStore(Protocol):
-    def append(self, project_id: ProjectId, body: UpdateBody) -> ProjectUpdate:
-        """Write one entry, dated now. Raises if there is no such project."""
+    def append(self, update: ProjectUpdate) -> None:
+        """Write one entry.
+
+        That there is a project to write it against is not asked here:
+        the entry and the project are two aggregates, and what one means
+        for the other is decided above.
+        """
         ...
 
     def get(self, update_id: UpdateId) -> ProjectUpdate:

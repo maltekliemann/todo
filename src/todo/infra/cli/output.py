@@ -1,12 +1,24 @@
+"""How the CLI prints things.
+
+Rich when a terminal is watching, plain when the output is a pipe, and
+the same JSON either way. All of it is this frontend's business: the TUI
+draws its own widgets and shares nothing with this — the two render the
+same items to different places, and saying so twice is cheaper than one
+set of helpers neither owns.
+"""
+
 from __future__ import annotations
 
 import json
 import sys
 from datetime import datetime
-from typing import Protocol, runtime_checkable
 
-from todo.application.dependencies import Dependencies
-from todo.application.queries import ProjectDetail, ProjectNames, ProjectSummary
+from todo.application.queries.list_projects import ProjectSummary
+from todo.application.queries.list_tags import TagCount
+from todo.application.queries.project_names import ProjectNames
+from todo.application.queries.show_project import ProjectDetail
+from todo.domain.dependency_graph import DependencyGraph
+from todo.domain.item_id import ItemId
 from todo.domain.priority import Priority
 from todo.domain.project import Project
 from todo.domain.status import Status
@@ -74,42 +86,6 @@ def _styled(text: str, style: str) -> str:
     return f"[{style}]{text}[/{style}]" if style else text
 
 
-@runtime_checkable
-class OutputProtocol(Protocol):
-    def print_list(self, items: list[TodoItem], deps: Dependencies) -> None: ...
-    def print_item(
-        self, item: TodoItem, deps: Dependencies, names: ProjectNames
-    ) -> None: ...
-    def print_summary(
-        self, since: datetime, items: list[TodoItem], deps: Dependencies
-    ) -> None: ...
-    def print_deleted(self, item_id: int) -> None: ...
-    def print_json_list(
-        self, items: list[TodoItem], deps: Dependencies, names: ProjectNames
-    ) -> None: ...
-    def print_json_item(
-        self, item: TodoItem, deps: Dependencies, names: ProjectNames
-    ) -> None: ...
-    def print_json_summary(
-        self,
-        since: datetime,
-        items: list[TodoItem],
-        deps: Dependencies,
-        names: ProjectNames,
-    ) -> None: ...
-    def print_tags(self, counts: list[tuple[str, int]]) -> None: ...
-    def print_json_tags(self, counts: list[tuple[str, int]]) -> None: ...
-    def print_projects(self, summaries: list[ProjectSummary]) -> None: ...
-    def print_project(
-        self, detail: ProjectDetail, deps: Dependencies, names: ProjectNames
-    ) -> None: ...
-    def print_json_projects(self, summaries: list[ProjectSummary]) -> None: ...
-    def print_json_project(
-        self, detail: ProjectDetail, deps: Dependencies, names: ProjectNames
-    ) -> None: ...
-    def print_json_deleted_project(self, project: Project) -> None: ...
-
-
 def _project_to_dict(project: Project) -> dict[str, object]:
     return {
         "id": project.id,
@@ -123,11 +99,14 @@ def _project_to_dict(project: Project) -> dict[str, object]:
 
 
 def _detail_to_dict(
-    detail: ProjectDetail, deps: Dependencies, names: ProjectNames
+    detail: ProjectDetail,
+    graph: DependencyGraph,
+    done: frozenset[ItemId],
+    names: ProjectNames,
 ) -> dict[str, object]:
     return {
         **_project_to_dict(detail.project),
-        "items": [_item_to_dict(i, deps, names) for i in detail.items],
+        "items": [_item_to_dict(i, graph, done, names) for i in detail.items],
         "updates": [
             {
                 "id": u.id,
@@ -140,7 +119,10 @@ def _detail_to_dict(
 
 
 def _item_to_dict(
-    item: TodoItem, deps: Dependencies, names: ProjectNames
+    item: TodoItem,
+    graph: DependencyGraph,
+    done: frozenset[ItemId],
+    names: ProjectNames,
 ) -> dict[str, object]:
     return {
         "id": item.id,
@@ -154,13 +136,13 @@ def _item_to_dict(
         "deadline": item.deadline.isoformat() if item.deadline else None,
         "tags": sorted(item.tags),
         "is_overdue": item.is_overdue,
-        "blocked_by": deps.blockers_of(item.id),
-        "blocking": deps.dependents_of(item.id),
-        "is_blocked": deps.is_blocked(item.id),
+        "blocked_by": graph.blockers_of(item.id),
+        "blocking": graph.dependents_of(item.id),
+        "is_blocked": graph.is_blocked(item.id, done),
         "project_id": item.project_id,
         # The item names its project; the name is looked up, because a
         # copy of it on the item would be a copy that goes stale.
-        "project": names.get(item.project_id) if item.project_id else None,
+        "project": names.of(item.project_id),
     }
 
 
@@ -172,35 +154,46 @@ class _JsonOutput:
     """
 
     def print_json_list(
-        self, items: list[TodoItem], deps: Dependencies, names: ProjectNames
+        self,
+        items: list[TodoItem],
+        graph: DependencyGraph,
+        done: frozenset[ItemId],
+        names: ProjectNames,
     ) -> None:
-        print(json.dumps([_item_to_dict(i, deps, names) for i in items], indent=2))
+        print(
+            json.dumps([_item_to_dict(i, graph, done, names) for i in items], indent=2)
+        )
 
     def print_json_item(
-        self, item: TodoItem, deps: Dependencies, names: ProjectNames
+        self,
+        item: TodoItem,
+        graph: DependencyGraph,
+        done: frozenset[ItemId],
+        names: ProjectNames,
     ) -> None:
-        print(json.dumps(_item_to_dict(item, deps, names), indent=2))
+        print(json.dumps(_item_to_dict(item, graph, done, names), indent=2))
 
     def print_json_summary(
         self,
         since: datetime,
         items: list[TodoItem],
-        deps: Dependencies,
+        graph: DependencyGraph,
+        done: frozenset[ItemId],
         names: ProjectNames,
     ) -> None:
         print(
             json.dumps(
                 {
                     "since": since.isoformat(),
-                    "items": [_item_to_dict(i, deps, names) for i in items],
+                    "items": [_item_to_dict(i, graph, done, names) for i in items],
                     "count": len(items),
                 },
                 indent=2,
             )
         )
 
-    def print_json_tags(self, counts: list[tuple[str, int]]) -> None:
-        print(json.dumps([{"tag": t, "count": c} for t, c in counts], indent=2))
+    def print_json_tags(self, counts: list[TagCount]) -> None:
+        print(json.dumps([{"tag": c.tag, "count": c.count} for c in counts], indent=2))
 
     def print_json_projects(self, summaries: list[ProjectSummary]) -> None:
         print(
@@ -218,9 +211,13 @@ class _JsonOutput:
         )
 
     def print_json_project(
-        self, detail: ProjectDetail, deps: Dependencies, names: ProjectNames
+        self,
+        detail: ProjectDetail,
+        graph: DependencyGraph,
+        done: frozenset[ItemId],
+        names: ProjectNames,
     ) -> None:
-        print(json.dumps(_detail_to_dict(detail, deps, names), indent=2))
+        print(json.dumps(_detail_to_dict(detail, graph, done, names), indent=2))
 
     def print_json_deleted_project(self, project: Project) -> None:
         print(json.dumps(_project_to_dict(project), indent=2))
@@ -232,7 +229,9 @@ class RichOutput(_JsonOutput):
 
         self._console = Console()
 
-    def print_list(self, items: list[TodoItem], deps: Dependencies) -> None:
+    def print_list(
+        self, items: list[TodoItem], graph: DependencyGraph, done: frozenset[ItemId]
+    ) -> None:
         if not items:
             self._console.print("[dim]No items.[/dim]")
             return
@@ -255,7 +254,9 @@ class RichOutput(_JsonOutput):
             dl_style = _deadline_style(item)
             status_icon = _status_icon(item.status)
             title = (
-                f"\U0001f6a7 {item.title}" if deps.is_blocked(item.id) else item.title
+                f"\U0001f6a7 {item.title}"
+                if graph.is_blocked(item.id, done)
+                else item.title
             )
             table.add_row(
                 str(item.id),
@@ -272,7 +273,11 @@ class RichOutput(_JsonOutput):
         )
 
     def print_item(
-        self, item: TodoItem, deps: Dependencies, names: ProjectNames
+        self,
+        item: TodoItem,
+        graph: DependencyGraph,
+        done: frozenset[ItemId],
+        names: ProjectNames,
     ) -> None:
         from rich.panel import Panel
         from rich.text import Text
@@ -296,15 +301,16 @@ class RichOutput(_JsonOutput):
         )
         if item.done_at:
             lines.append(f"   Done: {item.done_at.strftime('%b %d, %Y %H:%M')}")
-        if item.project_id in names:
-            lines.append(f"\nProject: {names[item.project_id]}")
+        project_name = names.of(item.project_id)
+        if project_name is not None:
+            lines.append(f"\nProject: {project_name}")
         if item.tags:
             lines.append(f"\nTags: {', '.join(sorted(item.tags))}")
-        if deps.blockers_of(item.id):
-            blocked = ", ".join(i.label for i in deps.blockers_of(item.id))
+        if graph.blockers_of(item.id):
+            blocked = ", ".join(i.label for i in graph.blockers_of(item.id))
             lines.append(f"\nBlocked by: {blocked}")
-        if deps.dependents_of(item.id):
-            blocking = ", ".join(i.label for i in deps.dependents_of(item.id))
+        if graph.dependents_of(item.id):
+            blocking = ", ".join(i.label for i in graph.dependents_of(item.id))
             lines.append(f"\nBlocking: {blocking}")
         if item.body:
             lines.append(f"\n\n{item.body}")
@@ -312,7 +318,11 @@ class RichOutput(_JsonOutput):
         self._console.print(Panel(lines))
 
     def print_summary(
-        self, since: datetime, items: list[TodoItem], deps: Dependencies
+        self,
+        since: datetime,
+        items: list[TodoItem],
+        graph: DependencyGraph,
+        done: frozenset[ItemId],
     ) -> None:
         now = datetime.now(tz=since.tzinfo)
         header = f"Done ({since.strftime('%b %d')} \u2192 {now.strftime('%b %d')})"
@@ -350,7 +360,7 @@ class RichOutput(_JsonOutput):
     def print_deleted(self, item_id: int) -> None:
         self._console.print(f"[dim]Deleted #{item_id}.[/dim]")
 
-    def print_tags(self, counts: list[tuple[str, int]]) -> None:
+    def print_tags(self, counts: list[TagCount]) -> None:
         from rich.table import Table
 
         if not counts:
@@ -361,8 +371,8 @@ class RichOutput(_JsonOutput):
         table = Table(show_header=True, header_style="dim", box=None, padding=(0, 1))
         table.add_column("Tag")
         table.add_column("Items", justify="right")
-        for tag, count in counts:
-            table.add_row(Text(tag), str(count))  # user text
+        for entry in counts:
+            table.add_row(Text(entry.tag), str(entry.count))  # user text
         self._console.print(table)
 
     def print_projects(self, summaries: list[ProjectSummary]) -> None:
@@ -395,18 +405,22 @@ class RichOutput(_JsonOutput):
         self._console.print(table)
 
     def print_project(
-        self, detail: ProjectDetail, deps: Dependencies, names: ProjectNames
+        self,
+        detail: ProjectDetail,
+        graph: DependencyGraph,
+        done: frozenset[ItemId],
+        names: ProjectNames,
     ) -> None:
         from rich.text import Text
 
         project, items = detail.project, detail.items
-        done = sum(1 for i in items if i.is_done)
+        done_count = sum(1 for i in items if i.is_done)
         header = Text()
         header.append(f"{project.id.label}  ", style="dim")
         header.append(project.name, style="bold")
         if project.ended:
             header.append(f"  ({project.status.value})", style="dim")
-        header.append(f"   {done}/{len(items)} done", style="dim")
+        header.append(f"   {done_count}/{len(items)} done", style="dim")
         self._console.print(header)
         if project.description:
             self._console.print(Text(project.description))  # user text
@@ -421,11 +435,13 @@ class RichOutput(_JsonOutput):
                 self._console.print(line)
         if items:
             self._console.print()
-            self.print_list(items, deps)
+            self.print_list(items, graph, done)
 
 
 class PlainOutput(_JsonOutput):
-    def print_list(self, items: list[TodoItem], deps: Dependencies) -> None:
+    def print_list(
+        self, items: list[TodoItem], graph: DependencyGraph, done: frozenset[ItemId]
+    ) -> None:
         if not items:
             print("No items.")
             return
@@ -441,7 +457,11 @@ class PlainOutput(_JsonOutput):
         print(f"\n{len(items)} item{'s' if len(items) != 1 else ''}")
 
     def print_item(
-        self, item: TodoItem, deps: Dependencies, names: ProjectNames
+        self,
+        item: TodoItem,
+        graph: DependencyGraph,
+        done: frozenset[ItemId],
+        names: ProjectNames,
     ) -> None:
         print(f"{item.id.label}  {item.title}")
         print(f"Priority: {item.priority.value}  Status: {item.status.value}")
@@ -453,21 +473,26 @@ class PlainOutput(_JsonOutput):
         )
         if item.done_at:
             print(f"Done: {item.done_at.isoformat()}")
-        if item.project_id in names:
-            print(f"Project: {names[item.project_id]}")
+        project_name = names.of(item.project_id)
+        if project_name is not None:
+            print(f"Project: {project_name}")
         if item.tags:
             print(f"Tags: {', '.join(sorted(item.tags))}")
-        if deps.blockers_of(item.id):
-            ids = ", ".join(i.label for i in deps.blockers_of(item.id))
+        if graph.blockers_of(item.id):
+            ids = ", ".join(i.label for i in graph.blockers_of(item.id))
             print(f"Blocked by: {ids}")
-        if deps.dependents_of(item.id):
-            ids = ", ".join(i.label for i in deps.dependents_of(item.id))
+        if graph.dependents_of(item.id):
+            ids = ", ".join(i.label for i in graph.dependents_of(item.id))
             print(f"Blocking: {ids}")
         if item.body:
             print(f"\n{item.body}")
 
     def print_summary(
-        self, since: datetime, items: list[TodoItem], deps: Dependencies
+        self,
+        since: datetime,
+        items: list[TodoItem],
+        graph: DependencyGraph,
+        done: frozenset[ItemId],
     ) -> None:
         now = datetime.now(tz=since.tzinfo)
         print(f"-- Done ({since.strftime('%b %d')} -> {now.strftime('%b %d')}) --")
@@ -485,12 +510,12 @@ class PlainOutput(_JsonOutput):
     def print_deleted(self, item_id: int) -> None:
         print(f"Deleted #{item_id}.")
 
-    def print_tags(self, counts: list[tuple[str, int]]) -> None:
+    def print_tags(self, counts: list[TagCount]) -> None:
         if not counts:
             print("No tags.")
             return
-        for tag, count in counts:
-            print(f"  {tag}  {count}")
+        for entry in counts:
+            print(f"  {entry.tag}  {entry.count}")
 
     def print_projects(self, summaries: list[ProjectSummary]) -> None:
         if not summaries:
@@ -505,12 +530,19 @@ class PlainOutput(_JsonOutput):
             )
 
     def print_project(
-        self, detail: ProjectDetail, deps: Dependencies, names: ProjectNames
+        self,
+        detail: ProjectDetail,
+        graph: DependencyGraph,
+        done: frozenset[ItemId],
+        names: ProjectNames,
     ) -> None:
         project, items = detail.project, detail.items
-        done = sum(1 for i in items if i.is_done)
+        done_count = sum(1 for i in items if i.is_done)
         suffix = f" ({project.status.value})" if project.ended else ""
-        print(f"{project.id.label}  {project.name}{suffix}  {done}/{len(items)} done")
+        print(
+            f"{project.id.label}  {project.name}{suffix}  "
+            f"{done_count}/{len(items)} done"
+        )
         if project.description:
             print(project.description)
         if detail.updates:
@@ -520,7 +552,7 @@ class PlainOutput(_JsonOutput):
                 print(f"{update.id.label:>5}  {stamp}  {update.body}")
         if items:
             print()
-            self.print_list(items, deps)
+            self.print_list(items, graph, done)
 
 
 def _pri_style(p: Priority) -> str:

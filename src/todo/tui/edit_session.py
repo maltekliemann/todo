@@ -15,8 +15,6 @@ import tempfile
 from textual.app import SuspendNotSupported
 from textual.widget import Widget
 
-from todo.application.commands import CompletionResult
-from todo.application.contracts.dependency_store import DependencyStore
 from todo.application.contracts.item_store import ItemStore
 from todo.domain.item_id import ItemId
 from todo.domain.todo_item import TodoItem
@@ -28,14 +26,11 @@ from todo.tui.render import escape_markup
 class EditorSession:
     """One $EDITOR round trip, driven by the widget that owns the screen."""
 
-    def __init__(
-        self, view: Widget, items: ItemStore, dependencies: DependencyStore
-    ) -> None:
+    def __init__(self, view: Widget, items: ItemStore) -> None:
         self._view = view
         self._items = items
-        self._dependencies = dependencies
 
-    def run(self, item: TodoItem) -> CompletionResult | None:
+    def run(self, item: TodoItem) -> TodoItem | None:
         """Edit an item's body in $EDITOR. Returns the result of a real
         edit, or None if nothing was applied (cancelled, unchanged, or
         failed)."""
@@ -115,7 +110,7 @@ class EditorSession:
 
     def apply(
         self, item_id: ItemId, original: str, edited: str, tmp_path: str
-    ) -> CompletionResult | None:
+    ) -> TodoItem | None:
         """Apply an edited buffer. On rejection the buffer file is kept and
         its path reported, so a failed write never destroys the user's work."""
         # Exact no-op check (plus the editor's final newline): anything
@@ -125,7 +120,7 @@ class EditorSession:
             return None
 
         try:
-            result = apply_body_edit(self._items, self._dependencies, item_id, edited)
+            result = apply_body_edit(self._items, item_id, edited)
         except (ValueError, TodoError) as exc:
             self._error(
                 f"Edit rejected: {escape_markup(str(exc))} — "

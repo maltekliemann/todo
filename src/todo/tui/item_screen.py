@@ -23,26 +23,33 @@ from textual.screen import ModalScreen
 from textual.widgets import Label, OptionList, Static
 from textual.widgets.option_list import Option
 
-from todo.application.commands import CompletionResult, edit_todo
 from todo.application.contracts.dependency_store import DependencyStore
 from todo.application.contracts.item_store import ItemStore
 from todo.application.contracts.project_store import ProjectStore
-from todo.application.dependencies import Dependencies
-from todo.application.queries import (
+from todo.application.queries.list_projects import ListProjects
+from todo.application.queries.load_dependencies import LoadDependencies
+from todo.application.queries.project_names import (
+    LoadProjectNames,
     ProjectNames,
-    list_all_projects,
-    project_names,
-    show_todo,
 )
+from todo.application.queries.show_todo import ShowTodo
+from todo.application.toast import Toast
+from todo.application.workflows.edit_todo import EditTodo
+from todo.application.workflows.set_status import SetStatus
+from todo.domain.deadline import Deadline
+from todo.domain.dependency_graph import DependencyGraph
 from todo.domain.priority import Priority
+from todo.domain.project_filter import ProjectFilter
 from todo.domain.project_id import ProjectId
 from todo.domain.status import Status
+from todo.domain.tag import Tag
+from todo.domain.title import Title
 from todo.domain.todo_item import TodoItem
 from todo.exceptions import NotFoundError, TodoError
 from todo.tui.blockers import BlockDialog, Relation
 from todo.tui.edit_session import EditorSession
 from todo.tui.prompts import ChoicePrompt, TextPrompt
-from todo.tui.render import unblocked_notices
+from todo.tui.render import toast_messages
 from todo.tui.tag_input import parse_tag_input
 
 # Shown where a field has no value. An empty cell reads as a rendering
@@ -73,7 +80,10 @@ def body_summary(body: str) -> str:
 
 
 def field_value(
-    item: TodoItem, key: str, deps: Dependencies, names: ProjectNames
+    item: TodoItem,
+    key: str,
+    graph: DependencyGraph,
+    names: ProjectNames,
 ) -> str:
     """The current value of one field, as the row shows it."""
     if key == "title":
@@ -87,11 +97,11 @@ def field_value(
     if key == "tags":
         return ", ".join(sorted(item.tags)) or EMPTY
     if key == "project":
-        return names.get(item.project_id, EMPTY) if item.project_id else EMPTY
+        return names.of(item.project_id) or EMPTY
     if key == "blocked_by":
-        return ", ".join(i.label for i in deps.blockers_of(item.id)) or EMPTY
+        return ", ".join(i.label for i in graph.blockers_of(item.id)) or EMPTY
     if key == "blocking":
-        return ", ".join(i.label for i in deps.dependents_of(item.id)) or EMPTY
+        return ", ".join(i.label for i in graph.dependents_of(item.id)) or EMPTY
     return body_summary(item.body)
 
 
@@ -146,8 +156,8 @@ class ItemScreen(ModalScreen[bool]):
     def _show_item(self) -> None:
         item = self._item
         # Reloaded with the item: an edge changed by the picker has to show.
-        deps = Dependencies.load(self._items, self._dependencies)
-        names = project_names(self._projects)
+        graph = LoadDependencies(self._dependencies).execute()
+        names = LoadProjectNames(self._projects).execute()
 
         heading = Text(item.id.label, style="bold")
         heading.append(
@@ -165,7 +175,9 @@ class ItemScreen(ModalScreen[bool]):
         highlighted = options.highlighted
         options.clear_options()
         for key, label in FIELDS:
-            options.add_option(Option(_row(label, field_value(item, key, deps, names))))
+            options.add_option(
+                Option(_row(label, field_value(item, key, graph, names)))
+            )
         options.highlighted = 0 if highlighted is None else highlighted
 
         self.query_one("#item-body", Static).update(
@@ -189,7 +201,7 @@ class ItemScreen(ModalScreen[bool]):
         """Re-read the item after a write, so every row shows what is
         actually stored rather than what we think we just set."""
         try:
-            self._item = show_todo(self._items, self._item.id)
+            self._item = ShowTodo(self._items).execute(self._item.id)
         except NotFoundError:
             # Deleted underneath us: there is nothing left to show, and
             # the list needs to hear about it.
@@ -200,7 +212,18 @@ class ItemScreen(ModalScreen[bool]):
             return
         self._show_item()
 
-    def _apply(self, call: Callable[[], CompletionResult]) -> None:
+    def _apply_write(self, call: Callable[[], None]) -> None:
+        """A change that cannot free another item, so there is nothing to
+        report but the failure."""
+        try:
+            call()
+        except (TodoError, ValueError) as exc:
+            self._show_message(str(exc) or "Could not save the change")
+            return
+        self._changed = True
+        self._reload()
+
+    def _apply(self, call: Callable[[], list[Toast]]) -> None:
         try:
             result = call()
         except (TodoError, ValueError) as exc:
@@ -209,7 +232,7 @@ class ItemScreen(ModalScreen[bool]):
             self._show_message(str(exc) or "Could not save the change")
             return
         self._changed = True
-        for message in unblocked_notices(result):
+        for message in toast_messages(result, {}):
             self.notify(message)
         self._reload()
 
@@ -271,29 +294,34 @@ class ItemScreen(ModalScreen[bool]):
     def _save_title(self, value: str | None) -> None:
         if value is None:
             return
-        self._apply(
-            lambda: edit_todo(
-                self._items, self._dependencies, self._item.id, title=value
-            )
-        )
+
+        def write() -> None:
+            # Changed through the item's own method, then handed over
+            # whole: a rejected title raises before anything is written.
+            self._item.set_title(Title(value))
+            EditTodo(self._items).execute(self._item)
+
+        self._apply_write(write)
 
     def _save_priority(self, value: str | None) -> None:
         if value is None:
             return
-        priority = Priority.from_string(value)
-        self._apply(
-            lambda: edit_todo(
-                self._items, self._dependencies, self._item.id, priority=priority
-            )
-        )
+
+        def write() -> None:
+            self._item.set_priority(Priority.from_string(value))
+            EditTodo(self._items).execute(self._item)
+
+        self._apply_write(write)
 
     def _save_status(self, value: str | None) -> None:
         if value is None:
             return
         status = Status.from_string(value)
+        # The one field change that can free another item, so the one
+        # that has something to report.
         self._apply(
-            lambda: edit_todo(
-                self._items, self._dependencies, self._item.id, status=status
+            lambda: SetStatus(self._items, self._dependencies).execute(
+                self._item.id, status
             )
         )
 
@@ -301,32 +329,44 @@ class ItemScreen(ModalScreen[bool]):
         if value is None:
             return
         text = value.strip()
-        deadline: date | None = None
+        deadline: Deadline | None = None
         if text:
             try:
-                deadline = date.fromisoformat(text)
+                deadline = Deadline.from_date(date.fromisoformat(text))
             except ValueError:
                 # Same contract as everywhere else: bad input is reported,
                 # never silently ignored.
                 self._show_message(f"Invalid date '{text}' — use YYYY-MM-DD")
                 return
-        self._apply(
-            lambda: edit_todo(
-                self._items, self._dependencies, self._item.id, deadline=deadline
-            )
-        )
+
+        def write() -> None:
+            self._item.set_deadline(deadline)
+            EditTodo(self._items).execute(self._item)
+
+        self._apply_write(write)
 
     def _save_tags(self, value: str | None) -> None:
         if value is None:
             return
-        tags = parse_tag_input(value)
-        self._apply(
-            lambda: edit_todo(self._items, self._dependencies, self._item.id, tags=tags)
-        )
+
+        def write() -> None:
+            wanted = frozenset(Tag(t) for t in parse_tag_input(value))
+            for gone in self._item.tags - wanted:
+                self._item.remove_tag(gone)
+            for added in wanted - self._item.tags:
+                self._item.add_tag(added)
+            EditTodo(self._items).execute(self._item)
+
+        self._apply_write(write)
 
     def _edit_project(self) -> None:
         try:
-            projects = list_all_projects(self._projects, include_ended=True)
+            projects = [
+                s.project
+                for s in ListProjects(self._projects, self._items).execute(
+                    ProjectFilter(include_ended=True)
+                )
+            ]
         except TodoError as exc:
             self._show_message(str(exc) or "Could not read the projects")
             return
@@ -340,11 +380,12 @@ class ItemScreen(ModalScreen[bool]):
         if value is None:
             return
         project_id = ProjectId(int(value)) if value else None
-        self._apply(
-            lambda: edit_todo(
-                self._items, self._dependencies, self._item.id, project_id=project_id
-            )
-        )
+
+        def write() -> None:
+            self._item.set_project_id(project_id)
+            EditTodo(self._items).execute(self._item)
+
+        self._apply_write(write)
 
     def _edit_dependencies(self, relation: Relation) -> None:
         """Edit either end of the relation.
@@ -365,13 +406,12 @@ class ItemScreen(ModalScreen[bool]):
         )
 
     def _edit_body(self) -> None:
-        result = EditorSession(self, self._items, self._dependencies).run(self._item)
+        result = EditorSession(self, self._items).run(self._item)
         if result is None:
             # Cancelled, unchanged, or already reported by the session.
             return
+        # A body edit cannot unblock anything, so there is nothing to say.
         self._changed = True
-        for message in unblocked_notices(result):
-            self.notify(message)
         self._reload()
 
     def action_close(self) -> None:

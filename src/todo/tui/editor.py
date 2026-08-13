@@ -13,10 +13,12 @@ from __future__ import annotations
 import shlex
 import shutil
 
-from todo.application.commands import CompletionResult, edit_todo
-from todo.application.contracts.dependency_store import DependencyStore
 from todo.application.contracts.item_store import ItemStore
+from todo.application.queries.show_todo import ShowTodo
+from todo.application.workflows.edit_todo import EditTodo
+from todo.domain.body import Body
 from todo.domain.item_id import ItemId
+from todo.domain.todo_item import TodoItem
 
 
 def editor_command(editor_value: str, path: str) -> list[str]:
@@ -42,16 +44,14 @@ def editor_command(editor_value: str, path: str) -> list[str]:
     return [*parts, path]
 
 
-def apply_body_edit(
-    items: ItemStore,
-    dependencies: DependencyStore,
-    item_id: ItemId,
-    edited: str,
-) -> CompletionResult:
+def apply_body_edit(items: ItemStore, item_id: ItemId, edited: str) -> TodoItem:
     """Store an edited buffer as the item's body.
 
     The single trailing newline an editor adds on save is dropped; deeper
     whitespace is content (pasted code) and is kept verbatim. A buffer
     saved empty clears the body, which is the only way to say so.
     """
-    return edit_todo(items, dependencies, item_id, body=edited.removesuffix("\n"))
+    item = ShowTodo(items).execute(item_id)
+    item.set_body(Body(edited[:-1] if edited.endswith("\n") else edited))
+    EditTodo(items).execute(item)
+    return item

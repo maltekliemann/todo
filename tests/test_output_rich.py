@@ -5,14 +5,16 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime, timedelta, timezone
+from types import MappingProxyType
 
 import pytest
 
-from todo.adapters.output import RichOutput
 from todo.adapters.sqlite_item_store import SqliteItemStore
 from todo.adapters.sqlite_project_store import SqliteProjectStore
-from todo.application.dependencies import Dependencies
-from todo.application.queries import ProjectDetail, ProjectSummary
+from todo.application.queries.list_projects import ProjectSummary
+from todo.application.queries.list_tags import TagCount
+from todo.application.queries.project_names import ProjectNames
+from todo.application.queries.show_project import ProjectDetail
 from todo.domain.deadline import Deadline
 from todo.domain.dependency_graph import DependencyGraph
 from todo.domain.description import Description
@@ -24,19 +26,26 @@ from todo.domain.project_name import ProjectName
 from todo.domain.project_status import ProjectStatus
 from todo.domain.project_update import ProjectUpdate
 from todo.domain.status import Status
+from todo.domain.tag import Tag
 from todo.domain.todo_item import TodoItem
 from todo.domain.update_body import UpdateBody
 from todo.domain.update_id import UpdateId
+from todo.infra.cli.output import RichOutput
 
 _NOW = datetime.now(tz=timezone.utc)
 
 
-def _deps(*edges: tuple[int, int], done: tuple[int, ...] = ()) -> Dependencies:
-    """The dependency read model the presenters take, built by hand."""
-    return Dependencies(
-        graph=DependencyGraph(frozenset((ItemId(a), ItemId(b)) for a, b in edges)),
-        done_ids=frozenset(ItemId(d) for d in done),
-    )
+# No project is filed under anything in these renders.
+NO_NAMES = ProjectNames(MappingProxyType({}))
+
+
+def _graph(*edges: tuple[int, int]) -> DependencyGraph:
+    """The blocking relations a presenter takes, built by hand."""
+    return DependencyGraph(frozenset((ItemId(a), ItemId(b)) for a, b in edges))
+
+
+def _done(*ids: int) -> frozenset[ItemId]:
+    return frozenset(ItemId(i) for i in ids)
 
 
 def _item(**overrides: object) -> TodoItem:
@@ -79,7 +88,7 @@ class TestRichLists:
     def test_empty_list(
         self, items: SqliteItemStore, rich_out: RichOutput, capsys
     ) -> None:
-        rich_out.print_list([], _deps())
+        rich_out.print_list([], _graph(), _done())
         assert "No items" in capsys.readouterr().out
 
     def test_list_variants(self, rich_out: RichOutput, capsys) -> None:
@@ -104,7 +113,7 @@ class TestRichLists:
                 priority=Priority.LOW,
             ),
         ]
-        rich_out.print_list(items, _deps((1, 3)))
+        rich_out.print_list(items, _graph((1, 3)), _done())
         out = capsys.readouterr().out
         assert "Overdue" in out
         assert "Urgent soon" in out
@@ -120,7 +129,7 @@ class TestRichLists:
             done_at=_NOW,
             status=Status.DONE,
         )
-        rich_out.print_item(item, _deps((7, 1), (1, 9)), {})
+        rich_out.print_item(item, _graph((7, 1), (1, 9)), _done(), NO_NAMES)
         out = capsys.readouterr().out
         assert "Everything" in out
         assert "Tags: a, b" in out
@@ -130,7 +139,7 @@ class TestRichLists:
 
     def test_summary(self, rich_out: RichOutput, capsys) -> None:
         done = _item(status=Status.DONE, done_at=_NOW, title="Shipped")
-        rich_out.print_summary(_NOW - timedelta(days=7), [done], _deps())
+        rich_out.print_summary(_NOW - timedelta(days=7), [done], _graph(), _done())
         out = capsys.readouterr().out
         assert "Shipped" in out
         assert "1 item completed" in out
@@ -138,7 +147,7 @@ class TestRichLists:
     def test_summary_empty(
         self, items: SqliteItemStore, rich_out: RichOutput, capsys
     ) -> None:
-        rich_out.print_summary(_NOW - timedelta(days=7), [], _deps())
+        rich_out.print_summary(_NOW - timedelta(days=7), [], _graph(), _done())
         assert "No items completed" in capsys.readouterr().out
 
     def test_deleted(self, rich_out: RichOutput, capsys) -> None:
@@ -160,7 +169,7 @@ class TestRelativeAge:
             _item(id=i, title=f"Age {i}", created_at=_NOW - age)
             for i, age in enumerate(ages, start=1)
         ]
-        rich_out.print_list(items, _deps())
+        rich_out.print_list(items, _graph(), _done())
         out = capsys.readouterr().out
         for pattern in (r"\d+s", r"5m", r"3h", r"2d", r"2w", r"3mo"):
             assert re.search(pattern, out), pattern
@@ -168,7 +177,9 @@ class TestRelativeAge:
 
 class TestRichTagsProjects:
     def test_tags(self, rich_out: RichOutput, capsys) -> None:
-        rich_out.print_tags([("deploy", 3), ("infra", 1)])
+        rich_out.print_tags(
+            [TagCount(tag=Tag("deploy"), count=3), TagCount(tag=Tag("infra"), count=1)]
+        )
         out = capsys.readouterr().out
         assert "deploy" in out
         assert "3" in out
@@ -214,7 +225,8 @@ class TestRichTagsProjects:
         ]
         rich_out.print_project(
             ProjectDetail(project=_project(), items=items, updates=updates),
-            _deps(),
+            _graph(),
+            _done(),
             {},
         )
         out = capsys.readouterr().out
@@ -229,7 +241,7 @@ class TestRichTagsProjects:
         import json as jsonlib
 
         detail = ProjectDetail(project=_project(), items=[_item()], updates=[])
-        rich_out.print_json_project(detail, _deps(), {})
+        rich_out.print_json_project(detail, _graph(), _done(), NO_NAMES)
         data = jsonlib.loads(capsys.readouterr().out)
         assert data["name"] == "infra"
         assert len(data["items"]) == 1
@@ -245,7 +257,7 @@ class TestRelativeAgeBuckets:
         from datetime import datetime, timedelta
         from zoneinfo import ZoneInfo
 
-        from todo.adapters.output import _relative_age
+        from todo.infra.cli.output import _relative_age
 
         dt = datetime.now(tz=ZoneInfo("UTC")) - timedelta(days=days, minutes=1)
         return _relative_age(dt)
@@ -267,7 +279,7 @@ class TestJsonOutputShared:
     def test_json_methods_are_one_implementation(self) -> None:
         """--json output is frontend-independent by definition: both output
         classes must share one implementation so the copies cannot drift."""
-        from todo.adapters.output import PlainOutput, RichOutput
+        from todo.infra.cli.output import PlainOutput, RichOutput
 
         for name in (
             "print_json_list",
@@ -284,8 +296,8 @@ class TestColumnAlignment:
     def test_plain_priority_labels_are_equal_width(self) -> None:
         """PlainOutput is the machine-parseable format: a 7-char HIGH label
         against 6-char others shifts every high-priority row's columns."""
-        from todo.adapters.output import _priority_label
         from todo.domain.priority import Priority
+        from todo.infra.cli.output import _priority_label
 
         widths = {len(_priority_label(p)) for p in Priority}
         assert len(widths) == 1, {p.value: _priority_label(p) for p in Priority}
@@ -293,13 +305,13 @@ class TestColumnAlignment:
     def test_plain_rows_align_across_priorities(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        from todo.adapters.output import PlainOutput
+        from todo.infra.cli.output import PlainOutput
 
         items = [
             _item(id=i + 1, title=f"item {p.value}", priority=p)
             for i, p in enumerate(Priority)
         ]
-        PlainOutput().print_list(items, _deps())
+        PlainOutput().print_list(items, _graph(), _done())
         rows = [
             ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("  ")
         ]
@@ -311,7 +323,7 @@ class TestColumnAlignment:
         form, or every such row wraps onto two lines."""
         from datetime import date, timedelta
 
-        from todo.adapters.output import _DEADLINE_COL_WIDTH, _deadline_str
+        from todo.infra.cli.output import _DEADLINE_COL_WIDTH, _deadline_str
 
         longest = max(
             len(

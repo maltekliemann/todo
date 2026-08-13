@@ -4,11 +4,11 @@ from pathlib import Path
 
 from textual.app import App, ComposeResult
 
-from todo.adapters.sqlite_change_feed import SqliteChangeFeed
+from todo.adapters.sqlite_counter_store import SqliteCounterStore
 from todo.adapters.sqlite_dependency_store import SqliteDependencyStore
 from todo.adapters.sqlite_item_store import SqliteItemStore
 from todo.adapters.sqlite_project_store import SqliteProjectStore
-from todo.application.contracts.change_feed import ChangeFeed
+from todo.application.contracts.counter_store import CounterStore
 from todo.application.contracts.dependency_store import DependencyStore
 from todo.application.contracts.item_store import ItemStore
 from todo.application.contracts.project_store import ProjectStore
@@ -30,18 +30,18 @@ class TodoApp(App[None]):
         items: ItemStore | None = None,
         projects: ProjectStore | None = None,
         dependencies: DependencyStore | None = None,
-        changes: ChangeFeed | None = None,
+        item_ids: CounterStore | None = None,
     ) -> None:
-        """SQLite by default; any of the four may be handed in instead,
+        """SQLite by default; any of them may be handed in instead,
         which is the whole point of them being contracts."""
         super().__init__()
         path = db_path or get_db_path()
         self._items = items or SqliteItemStore(path)
         self._projects = projects or SqliteProjectStore(path)
         self._dependencies = dependencies or SqliteDependencyStore(path)
-        self._changes = changes or SqliteChangeFeed(path)
+        self._item_ids = item_ids or SqliteCounterStore(path, "items")
 
     def compose(self) -> ComposeResult:
         yield TodoListView(
-            self._items, self._dependencies, self._projects, self._changes
+            self._items, self._dependencies, self._projects, self._item_ids
         )

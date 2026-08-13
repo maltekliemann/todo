@@ -13,23 +13,27 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from todo.adapters.sqlite_change_feed import SqliteChangeFeed
+from tests.factory import (
+    NewItem,
+    add_blocker,
+    add_project,
+    add_todo,
+    log_project_update,
+)
 from todo.adapters.sqlite_dependency_store import SqliteDependencyStore
 from todo.adapters.sqlite_item_store import SqliteItemStore
 from todo.adapters.sqlite_project_log_store import SqliteProjectLogStore
 from todo.adapters.sqlite_project_store import SqliteProjectStore
-from todo.application.commands import add_todo, block_todo
-from todo.application.contracts.item_store import ItemQuery
 from todo.domain.body import Body
-from todo.domain.description import Description
+from todo.domain.item_filter import ItemFilter
 from todo.domain.item_id import ItemId
 from todo.domain.priority import Priority
+from todo.domain.project_filter import ProjectFilter
 from todo.domain.project_id import ProjectId
 from todo.domain.project_name import ProjectName
 from todo.domain.status import Status
 from todo.domain.title import Title
 from todo.domain.todo_item import TodoItem
-from todo.domain.update_body import UpdateBody
 from todo.exceptions import StorageError, TodoError
 from todo.infra.cli.main import main
 
@@ -40,7 +44,6 @@ class _Stores:
     projects: SqliteProjectStore
     log: SqliteProjectLogStore
     dependencies: SqliteDependencyStore
-    changes: SqliteChangeFeed
     item_id: ItemId
     project_id: ProjectId
 
@@ -52,26 +55,24 @@ def _broken_stores(tmp_path: Path) -> _Stores:
     projects = SqliteProjectStore(path)
     log = SqliteProjectLogStore(path)
     dependencies = SqliteDependencyStore(path)
-    changes = SqliteChangeFeed(path)
-    item = add_todo(items, "x")
-    project = projects.create(ProjectName("p"), Description(""))
-    for store in (items, projects, log, dependencies, changes):
+    item = add_todo(items, NewItem(title="x"))
+    project = add_project(projects, "p", description="")
+    for store in (items, projects, log, dependencies):
         store.close()
-    return _Stores(items, projects, log, dependencies, changes, item.id, project.id)
+    return _Stores(items, projects, log, dependencies, item.id, project.id)
 
 
 _READ_CALLS: dict[str, Callable[[_Stores], object]] = {
     "get": lambda s: s.items.get(s.item_id),
-    "find": lambda s: s.items.find(ItemQuery()),
+    "find": lambda s: s.items.find(ItemFilter()),
     "exists": lambda s: s.items.exists(s.item_id),
     "done_since": lambda s: s.items.done_since(datetime.now(tz=timezone.utc)),
     "done_ids": lambda s: s.items.done_ids(),
     "tags_of_every_item": lambda s: s.items.tags_of_every_item(),
     "counts_by_project": lambda s: s.items.counts_by_project(),
-    "revision": lambda s: s.changes.revision(),
     "get_project": lambda s: s.projects.get(s.project_id),
     "get_project_by_name": lambda s: s.projects.get_by_name(ProjectName("p")),
-    "find_all_projects": lambda s: s.projects.find_all(),
+    "find_projects": lambda s: s.projects.find(ProjectFilter()),
     "load_dependencies": lambda s: s.dependencies.load(),
     "entries_for": lambda s: s.log.entries_for(s.project_id),
 }
@@ -140,9 +141,9 @@ class TestOversizedIds:
     def test_blocking_an_oversized_id_raises_domain_error(
         self, items: SqliteItemStore, dependencies: SqliteDependencyStore
     ) -> None:
-        add_todo(items, "a")
+        add_todo(items, NewItem(title="a"))
         with pytest.raises(TodoError):
-            block_todo(items, dependencies, ItemId(1), ItemId(10**20))
+            add_blocker(items, dependencies, ItemId(1), [ItemId(10**20)])
 
     def test_cli_show_oversized_id_errors_cleanly(self, tmp_path: Path) -> None:
         runner = CliRunner()
@@ -156,7 +157,7 @@ class TestOversizedIds:
 
 class TestParseSinceOverflow:
     def test_huge_since_amount_raises_value_error(self) -> None:
-        from todo.application.queries import parse_since
+        from todo.infra.cli.main import _parse_since_or_exit as parse_since
 
         for value in ("9999999 days", "99999999999 days", "999999999999999 weeks"):
             with pytest.raises(ValueError, match="Cannot parse|too large"):
@@ -188,12 +189,12 @@ class TestConnectErrorWrapping:
         with pytest.raises(StorageError):
             SqliteItemStore(tmp_path)  # the path IS a directory
 
-    def test_project_log_readback_is_wrapped(
+    def test_project_log_read_is_wrapped(
         self, projects: SqliteProjectStore, log: SqliteProjectLogStore
     ) -> None:
-        """The read-back that follows the insert is a storage read like
-        any other."""
-        project = projects.create(ProjectName("p"), Description(""))
+        """Reading a project's log is a storage read like any other."""
+        project = add_project(projects, "p", description="")
+        log_project_update(projects, log, project.id, "hello")
         real_conn = log._conn
 
         class _Proxy:
@@ -207,7 +208,7 @@ class TestConnectErrorWrapping:
 
         log._conn = _Proxy()  # type: ignore[assignment]
         with pytest.raises(StorageError):
-            log.append(project.id, UpdateBody("hello"))
+            log.entries_for(project.id)
 
 
 class TestUndecodableRowWrapping:
@@ -218,7 +219,7 @@ class TestUndecodableRowWrapping:
     def _poison(self, tmp_path: Path, column: str, value: str) -> Path:
         path = tmp_path / "db.db"
         items = SqliteItemStore(path)
-        add_todo(items, "x")
+        add_todo(items, NewItem(title="x"))
         items.close()
         conn = sqlite3.connect(str(path))
         conn.execute(f"UPDATE todos SET {column} = ?", (value,))
@@ -229,7 +230,7 @@ class TestUndecodableRowWrapping:
     def test_bad_priority_enum_raises_storage_error(self, tmp_path: Path) -> None:
         path = self._poison(tmp_path, "priority", "p1")
         with pytest.raises(StorageError):
-            SqliteItemStore(path).find(ItemQuery())
+            SqliteItemStore(path).find(ItemFilter())
 
     def test_bad_timestamp_raises_storage_error(self, tmp_path: Path) -> None:
         path = self._poison(tmp_path, "created_at", "not-a-timestamp")
@@ -239,7 +240,7 @@ class TestUndecodableRowWrapping:
     def test_bad_project_row_raises_storage_error(self, tmp_path: Path) -> None:
         path = tmp_path / "db.db"
         projects = SqliteProjectStore(path)
-        project = projects.create(ProjectName("p"), Description(""))
+        project = add_project(projects, "p", description="")
         projects.close()
         conn = sqlite3.connect(str(path))
         conn.execute("UPDATE projects SET status = ?", ("bogus",))

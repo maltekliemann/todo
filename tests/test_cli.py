@@ -5,15 +5,17 @@ import json
 import pytest
 from click.testing import CliRunner
 
+from tests.factory import (
+    NewItem,
+    add_blocker,
+    add_todo,
+    delete_todo,
+    remove_blocker,
+)
 from todo.adapters.sqlite_dependency_store import SqliteDependencyStore
 from todo.adapters.sqlite_item_store import SqliteItemStore
 from todo.adapters.sqlite_project_log_store import SqliteProjectLogStore
-from todo.application.commands import block_todo, delete_todo, unblock_todo
-from todo.application.dependencies import Dependencies
-from todo.domain.body import Body
-from todo.domain.priority import Priority
 from todo.domain.status import Status
-from todo.domain.title import Title
 from todo.exceptions import DependencyError, NotFoundError
 from todo.infra.cli.main import main
 
@@ -983,164 +985,99 @@ class TestBlockStorage:
     def test_add_and_query_relation(
         self, items: SqliteItemStore, dependencies: SqliteDependencyStore
     ) -> None:
-        a = items.create(
-            title=Title("Blocker"),
-            body=Body(""),
-            priority=Priority.MEDIUM,
-            status=Status.TODO,
-        )
-        b = items.create(
-            title=Title("Blocked"),
-            body=Body(""),
-            priority=Priority.MEDIUM,
-            status=Status.TODO,
-        )
+        a = add_todo(items, NewItem(title="Blocker"))
+        b = add_todo(items, NewItem(title="Blocked"))
 
-        block_todo(items, dependencies, b.id, a.id)
+        add_blocker(items, dependencies, b.id, [a.id])
 
-        deps = Dependencies.load(items, dependencies)
-        assert deps.blockers_of(b.id) == [a.id]
-        assert deps.is_blocked(b.id) is True
-        assert deps.dependents_of(a.id) == [b.id]
+        graph = dependencies.load()
+        done = items.done_ids()
+        assert graph.blockers_of(b.id) == [a.id]
+        assert graph.is_blocked(b.id, done) is True
+        assert graph.dependents_of(a.id) == [b.id]
 
     def test_list_no_n_plus_one_context(
         self, items: SqliteItemStore, dependencies: SqliteDependencyStore
     ) -> None:
-        a = items.create(
-            title=Title("Blocker"),
-            body=Body(""),
-            priority=Priority.MEDIUM,
-            status=Status.TODO,
-        )
-        b = items.create(
-            title=Title("Blocked"),
-            body=Body(""),
-            priority=Priority.MEDIUM,
-            status=Status.TODO,
-        )
-        block_todo(items, dependencies, b.id, a.id)
+        a = add_todo(items, NewItem(title="Blocker"))
+        b = add_todo(items, NewItem(title="Blocked"))
+        add_blocker(items, dependencies, b.id, [a.id])
 
-        deps = Dependencies.load(items, dependencies)
-        assert deps.blockers_of(b.id) == [a.id]
-        assert deps.is_blocked(b.id) is True
-        assert deps.dependents_of(a.id) == [b.id]
+        graph = dependencies.load()
+        done = items.done_ids()
+        assert graph.blockers_of(b.id) == [a.id]
+        assert graph.is_blocked(b.id, done) is True
+        assert graph.dependents_of(a.id) == [b.id]
 
     def test_self_block_raises(
         self, items: SqliteItemStore, dependencies: SqliteDependencyStore
     ) -> None:
-        a = items.create(
-            title=Title("Item"),
-            body=Body(""),
-            priority=Priority.MEDIUM,
-            status=Status.TODO,
-        )
+        a = add_todo(items, NewItem(title="Item"))
         with pytest.raises(DependencyError):
-            block_todo(items, dependencies, a.id, a.id)
+            add_blocker(items, dependencies, a.id, [a.id])
 
     def test_cycle_raises(
         self, items: SqliteItemStore, dependencies: SqliteDependencyStore
     ) -> None:
-        a = items.create(
-            title=Title("One"),
-            body=Body(""),
-            priority=Priority.MEDIUM,
-            status=Status.TODO,
-        )
-        b = items.create(
-            title=Title("Two"),
-            body=Body(""),
-            priority=Priority.MEDIUM,
-            status=Status.TODO,
-        )
-        block_todo(items, dependencies, b.id, a.id)
+        a = add_todo(items, NewItem(title="One"))
+        b = add_todo(items, NewItem(title="Two"))
+        add_blocker(items, dependencies, b.id, [a.id])
         with pytest.raises(DependencyError):
-            block_todo(items, dependencies, a.id, b.id)
+            add_blocker(items, dependencies, a.id, [b.id])
 
     def test_block_missing_raises(
         self, items: SqliteItemStore, dependencies: SqliteDependencyStore
     ) -> None:
-        a = items.create(
-            title=Title("Item"),
-            body=Body(""),
-            priority=Priority.MEDIUM,
-            status=Status.TODO,
-        )
+        a = add_todo(items, NewItem(title="Item"))
         with pytest.raises(NotFoundError):
-            block_todo(items, dependencies, a.id, 999)
+            add_blocker(items, dependencies, a.id, [999])
 
     def test_done_blocker_flips_is_blocked(
         self, items: SqliteItemStore, dependencies: SqliteDependencyStore
     ) -> None:
-        a = items.create(
-            title=Title("Blocker"),
-            body=Body(""),
-            priority=Priority.MEDIUM,
-            status=Status.TODO,
-        )
-        b = items.create(
-            title=Title("Blocked"),
-            body=Body(""),
-            priority=Priority.MEDIUM,
-            status=Status.TODO,
-        )
-        block_todo(items, dependencies, b.id, a.id)
+        a = add_todo(items, NewItem(title="Blocker"))
+        b = add_todo(items, NewItem(title="Blocked"))
+        add_blocker(items, dependencies, b.id, [a.id])
 
         blocker = items.get(a.id)
         blocker.set_status(Status.DONE)
         items.save(blocker)
 
-        deps = Dependencies.load(items, dependencies)
-        assert deps.blockers_of(b.id) == [a.id]
-        assert deps.is_blocked(b.id) is False
+        graph = dependencies.load()
+        done = items.done_ids()
+        assert graph.blockers_of(b.id) == [a.id]
+        assert graph.is_blocked(b.id, done) is False
 
     def test_delete_cascades(
         self, items: SqliteItemStore, dependencies: SqliteDependencyStore
     ) -> None:
-        a = items.create(
-            title=Title("Blocker"),
-            body=Body(""),
-            priority=Priority.MEDIUM,
-            status=Status.TODO,
-        )
-        b = items.create(
-            title=Title("Blocked"),
-            body=Body(""),
-            priority=Priority.MEDIUM,
-            status=Status.TODO,
-        )
-        block_todo(items, dependencies, b.id, a.id)
+        a = add_todo(items, NewItem(title="Blocker"))
+        b = add_todo(items, NewItem(title="Blocked"))
+        add_blocker(items, dependencies, b.id, [a.id])
 
         # Through the command: dropping the edges that named a deleted
         # item is a rule spanning two aggregates, so it lives there and
         # not in a foreign key.
         delete_todo(items, dependencies, a.id)
 
-        deps = Dependencies.load(items, dependencies)
-        assert deps.blockers_of(b.id) == []
-        assert deps.is_blocked(b.id) is False
+        graph = dependencies.load()
+        done = items.done_ids()
+        assert graph.blockers_of(b.id) == []
+        assert graph.is_blocked(b.id, done) is False
 
     def test_unblock_removes_relation(
         self, items: SqliteItemStore, dependencies: SqliteDependencyStore
     ) -> None:
-        a = items.create(
-            title=Title("Blocker"),
-            body=Body(""),
-            priority=Priority.MEDIUM,
-            status=Status.TODO,
-        )
-        b = items.create(
-            title=Title("Blocked"),
-            body=Body(""),
-            priority=Priority.MEDIUM,
-            status=Status.TODO,
-        )
-        block_todo(items, dependencies, b.id, a.id)
+        a = add_todo(items, NewItem(title="Blocker"))
+        b = add_todo(items, NewItem(title="Blocked"))
+        add_blocker(items, dependencies, b.id, [a.id])
 
-        unblock_todo(items, dependencies, b.id, a.id)
+        remove_blocker(items, dependencies, b.id, [a.id])
 
-        deps = Dependencies.load(items, dependencies)
-        assert deps.blockers_of(b.id) == []
-        assert deps.is_blocked(b.id) is False
+        graph = dependencies.load()
+        done = items.done_ids()
+        assert graph.blockers_of(b.id) == []
+        assert graph.is_blocked(b.id, done) is False
 
 
 class TestFullWorkflow:
