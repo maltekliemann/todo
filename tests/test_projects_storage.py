@@ -67,8 +67,8 @@ class TestProjectCrud:
         project = storage.add_project("p")
         add_todo(storage, "Task")
         item = storage.get(ItemId(1))
-        item.file_under(project)
+        item.set_project(project)
         assigned = storage.save(item)
         assert assigned.project is not None and assigned.project.name == "p"
-        item.unfile()
+        item.set_project(None)
         assert storage.save(item).project is None

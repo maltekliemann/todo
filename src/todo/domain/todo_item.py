@@ -21,9 +21,11 @@ def _now() -> datetime:
 class TodoItem:
     """One item, and everything that may be done to it.
 
-    State is private and readable, never assignable: a caller cannot set a
-    status, and cannot set `updated_at` at all — that moves because
-    something else did, which is the only thing it means.
+    State is private and readable, never assignable. Where a change is
+    only a change, the setter says so; where it carries a rule, the method
+    is named for the act — move_to decides the completion stamp. There is
+    no setter for `updated_at` at all: it moves because something else
+    did, which is the only thing it means.
 
     Dependencies are not here. An edge belongs to neither item it joins,
     so what this waits on, what waits on it, and whether it is held up are
@@ -120,15 +122,15 @@ class TodoItem:
 
     # --- what may be done to it -----------------------------------------
 
-    def rename(self, title: Title) -> None:
+    def set_title(self, title: Title) -> None:
         self._title = title
         self._touch()
 
-    def describe(self, body: Body) -> None:
+    def set_body(self, body: Body) -> None:
         self._body = body
         self._touch()
 
-    def prioritize(self, priority: Priority) -> None:
+    def set_priority(self, priority: Priority) -> None:
         self._priority = priority
         self._touch()
 
@@ -146,18 +148,13 @@ class TodoItem:
         self._status = status
         self._touch()
 
-    def schedule(self, deadline: Deadline) -> None:
-        """Give it a due date.
+    def set_deadline(self, deadline: Deadline | None) -> None:
+        """Give it a due date, or None for none.
 
         A date in the past is allowed: recording that something was due
         last week is a thing people do.
         """
         self._deadline = deadline
-        self._touch()
-
-    def unschedule(self) -> None:
-        """No longer due on any particular day."""
-        self._deadline = None
         self._touch()
 
     def add_tag(self, tag: Tag) -> None:
@@ -171,13 +168,9 @@ class TodoItem:
         self._tags = self._tags - {tag}
         self._touch()
 
-    def file_under(self, project: Project) -> None:
+    def set_project(self, project: Project | None) -> None:
+        """File it under a project, or None for none."""
         self._project = project
-        self._touch()
-
-    def unfile(self) -> None:
-        """Belongs to no project."""
-        self._project = None
         self._touch()
 
     def _touch(self) -> None:

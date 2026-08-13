@@ -178,7 +178,7 @@ class TestMigration:
             ProjectName("infra"), description=Description("Infra work")
         )
         item = storage.get(ItemId(1))
-        item.file_under(project)
+        item.set_project(project)
         storage.save(item)
         filed = storage.get(1)
         assert filed.project is not None and filed.project.name == "infra"

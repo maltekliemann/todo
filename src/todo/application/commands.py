@@ -151,21 +151,19 @@ def _tracked_update(
         blocked_before = deps.blocked_ids() if completing and deps else set()
 
         if title is not None:
-            item.rename(Title(title))
+            item.set_title(Title(title))
         if body is not None:
-            item.describe(Body(body))
+            item.set_body(Body(body))
         if priority is not None:
-            item.prioritize(priority)
+            item.set_priority(priority)
         if not isinstance(deadline, Unset):
-            due = _to_deadline(deadline)
-            item.schedule(due) if due else item.unschedule()
+            item.set_deadline(_to_deadline(deadline))
         if tags is not None:
             _retag(item, _to_tags(tags) or [])
         if not isinstance(project_id, Unset):
-            if project_id is None:
-                item.unfile()
-            else:
-                item.file_under(storage.get_project(project_id))
+            item.set_project(
+                storage.get_project(project_id) if project_id is not None else None
+            )
         if status is not None:
             item.move_to(status)
 
