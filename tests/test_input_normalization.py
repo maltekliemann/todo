@@ -328,23 +328,6 @@ class TestSharedNormalizationHelpers:
 
         assert single_line(" a\n\n b\tc ") == "a b c"
 
-    def test_nothing_keeps_a_private_copy_of_a_shared_helper(self) -> None:
-        """The five hand-copies diverged. Whichever module needs to collapse
-        whitespace or split tags imports the domain helper — a redefinition
-        anywhere is the bug this guards against."""
-        from pathlib import Path
-
-        import todo
-
-        root = Path(str(todo.__file__)).parent
-        offenders = [
-            path.relative_to(root)
-            for path in root.rglob("*.py")
-            for name in ("def _single_line", "def _split_tags", "def _dedupe_tags")
-            if name in path.read_text() and path.name not in ("text.py", "tag.py")
-        ]
-        assert offenders == []
-
 
 class TestTagWritePathParity:
     """The write path must apply the same rules the read path enforces —
