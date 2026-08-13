@@ -29,12 +29,29 @@ _(none)_
 5. **A `Deps` column on every row** — `←#2,#3` for what it waits on (ids,
    capped at two then `+n`), `→3` for how many wait on it. `cb718f5`.
 
+## review of this round
+
+Eight defects, every one introduced by the five commits above, every one
+reproduced by hand before and after the fix. All fixed in `431e1f7`.
+
+The picker was the problem: **bare Enter committed whatever sorted first**
+(so opening it to *read* what an item waits on destroyed that relation),
+the `-3` shorthand **hijacked any dash-prefixed search** and removed a
+different blocker than the one on screen, `int()` on anything `isdigit()`
+accepted **crashed the app** on `-²`, a **typed id lost to a title match**,
+a **mouse click left the dialog inert**, a **stale error stayed pinned**
+under the next candidate, and the fixed-height list pushed that error
+**off-screen below ~22 rows**. Separately, the new Deps column **named
+blockers that were already done**, contradicting the 🚧 marker on the same
+row.
+
 ## notes
 
 - **`PRD.md` is now stale in one place** and I did not edit your spec: it
   describes `b` as "a dialog to add a blocker to the selected item by id
-  (a `-` prefix removes it)". The `-id` form still works, but the dialog
-  is a searchable picker now.
+  (a `-` prefix removes it)". The dialog is a searchable picker, and the
+  `-id` form is gone — it collided with the search box badly enough to
+  delete the wrong relation. Removal is choosing the marked candidate.
 - **Self-blocking is unreachable rather than rejected.** The picker never
   offers the item itself, so the inline "an item cannot block itself"
   error no longer appears in the TUI. The domain rule is unchanged and
