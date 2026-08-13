@@ -413,8 +413,8 @@ class TodoListView(Widget):
         if item_id is None:
             return
 
-        def after(result: str | None) -> None:
-            if result is not None:
+        def after(changed: bool | None) -> None:
+            if changed:
                 self._refresh_list()
 
         self.app.push_screen(BlockDialog(self._storage, item_id), after)

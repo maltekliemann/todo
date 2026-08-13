@@ -11,15 +11,24 @@ from textual.binding import Binding
 from textual.containers import Container, Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
-from textual.widgets import Input, Label, Select, Static
+from textual.widgets import Input, Label, OptionList, Select, Static
+from textual.widgets.option_list import Option
 
 from todo.application.commands import add_todo, block_todo, unblock_todo
 from todo.application.contracts.storage import StorageProtocol
+from todo.application.queries import list_todos, show_todo
 from todo.domain.enums import Priority
 from todo.domain.models import TodoItem
 from todo.domain.tags import split_tags
 from todo.exceptions import TodoError
 from todo.tui.render import escape_markup, meta_lines
+
+
+def _matches_item(item: TodoItem, query: str) -> bool:
+    """Search matches the title or the id, with or without the '#'."""
+    if not query:
+        return True
+    return query in item.title.casefold() or query.lstrip("#") == str(item.id)
 
 
 class ConfirmDialog(ModalScreen[bool]):
@@ -284,51 +293,123 @@ class SearchDialog(ModalScreen[str | None]):
         self.dismiss(None)
 
 
-class BlockDialog(ModalScreen[str | None]):
-    """Prompt for a blocker id and add or remove the blocking relation.
+class BlockDialog(ModalScreen[bool]):
+    """Pick what an item waits on, from a searchable list.
 
-    A plain id adds a blocker; an id prefixed with ``-`` removes one. The
-    command call happens here so validation/dependency errors can be shown
-    inline while keeping the dialog open. Dismisses with the entered string
-    on success, or ``None`` on cancel.
+    Every other item is a candidate; the ones already blocking this item
+    are marked and sorted first, and choosing one toggles the relation.
+    Typing narrows by title or id — nobody should have to remember the
+    number of the thing that blocks them.
+
+    Choosing applies the change and closes, as it always has. The command
+    call happens here so validation, cycle and storage errors show inline
+    instead of closing the dialog on the user's work.
     """
 
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("down", "highlight_next", show=False),
+        Binding("up", "highlight_previous", show=False),
+    ]
 
     def __init__(self, storage: StorageProtocol, blocked_id: int) -> None:
         super().__init__()
         self._storage = storage
         self._blocked_id = blocked_id
+        self._candidates: list[TodoItem] = []
+        self._blocker_ids: set[int] = set()
+        self._shown_ids: list[int] = []
 
     def compose(self) -> ComposeResult:
         with Vertical(id="block-container"):
-            yield Label(f"Block #{self._blocked_id} by (item id, -id removes):")
-            yield Input(id="block-input", placeholder="e.g. 3 to add, -3 to remove")
+            yield Label(f"What does #{self._blocked_id} wait on?", id="block-title")
+            yield Input(id="block-search", placeholder="Search by title or id")
+            yield OptionList(id="block-options")
             yield Label("", id="block-error")
+            yield Label("Enter toggles · ↑↓ moves · Esc closes", id="block-hint")
 
     def on_mount(self) -> None:
-        self.query_one("#block-input", Input).focus()
+        self._load()
+        self.query_one("#block-search", Input).focus()
 
-    @on(Input.Submitted, "#block-input")
-    def on_submit(self) -> None:
-        value = self.query_one("#block-input", Input).value.strip()
-        error_w = self.query_one("#block-error", Label)
+    def _load(self) -> None:
+        """Read the candidates, degrading a storage failure to the inline
+        error — an unreadable database must not close the dialog."""
         try:
-            blocker_id = int(value)
-            if blocker_id < 0:
-                unblock_todo(self._storage, self._blocked_id, -blocker_id)
+            item = show_todo(self._storage, self._blocked_id)
+            self._blocker_ids = set(item.blocked_by)
+            self._candidates = [
+                i
+                for i in list_todos(self._storage, include_done=True)
+                if i.id != self._blocked_id
+            ]
+        except TodoError as exc:
+            self._candidates = []
+            self._blocker_ids = set()
+            self._show_error(exc)
+        self._populate()
+
+    def _populate(self) -> None:
+        query = self.query_one("#block-search", Input).value.strip().casefold()
+        matches = [i for i in self._candidates if _matches_item(i, query)]
+        # Current blockers first: they are what you came to remove.
+        matches.sort(key=lambda i: i.id not in self._blocker_ids)
+
+        options = self.query_one("#block-options", OptionList)
+        options.clear_options()
+        self._shown_ids = [i.id for i in matches]
+        for i in matches:
+            mark = "✓" if i.id in self._blocker_ids else " "
+            # Text, never markup: titles are user-controlled.
+            options.add_option(Option(Text(f"{mark} #{i.id}  {i.title}")))
+        if self._shown_ids:
+            options.highlighted = 0
+
+    def _show_error(self, exc: Exception) -> None:
+        # Error text can echo raw user input; never render it as markup.
+        self.query_one("#block-error", Label).update(
+            Text(str(exc) or "Could not change the blocker")
+        )
+
+    @on(Input.Changed, "#block-search")
+    def on_search_changed(self) -> None:
+        self._populate()
+
+    def action_highlight_next(self) -> None:
+        self.query_one("#block-options", OptionList).action_cursor_down()
+
+    def action_highlight_previous(self) -> None:
+        self.query_one("#block-options", OptionList).action_cursor_up()
+
+    @on(Input.Submitted, "#block-search")
+    def on_submit(self) -> None:
+        value = self.query_one("#block-search", Input).value.strip()
+        # "-3" still removes blocker #3 outright, as it always has.
+        if value.startswith("-") and value[1:].isdigit():
+            self._toggle(int(value[1:]), removing=True)
+            return
+        options = self.query_one("#block-options", OptionList)
+        index = options.highlighted
+        if index is None or not (0 <= index < len(self._shown_ids)):
+            return
+        blocker_id = self._shown_ids[index]
+        self._toggle(blocker_id, removing=blocker_id in self._blocker_ids)
+
+    def _toggle(self, blocker_id: int, *, removing: bool) -> None:
+        try:
+            if removing:
+                unblock_todo(self._storage, self._blocked_id, blocker_id)
             else:
                 block_todo(self._storage, self._blocked_id, blocker_id)
-        except (TodoError, ValueError) as exc:
-            # Covers bad ids, cycles, AND storage-level failures (e.g. a
-            # locked database) — the dialog reports inline, never crashes.
-            # Error text can echo raw user input; never render it as markup.
-            error_w.update(Text(str(exc) if str(exc) else "Invalid blocker id"))
+        except TodoError as exc:
+            # Cycles, unknown ids, AND storage-level failures (e.g. a locked
+            # database): report inline, never crash, never close.
+            self._show_error(exc)
             return
-        self.dismiss(value)
+        self.dismiss(True)
 
     def action_cancel(self) -> None:
-        self.dismiss(None)
+        self.dismiss(False)
 
 
 class InspectDialog(ModalScreen[None]):

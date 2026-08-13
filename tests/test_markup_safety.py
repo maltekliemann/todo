@@ -206,21 +206,31 @@ class TestTuiMarkupSafety:
     async def test_block_dialog_hostile_input(
         self, hostile_storage: SqliteStorage
     ) -> None:
+        """The dialog is a search box over a list of user-written titles:
+        hostile text must survive both as a query and as a rendered
+        candidate, verbatim and without crashing."""
+        from textual.widgets import OptionList
+
+        from todo.tui.dialogs import BlockDialog
+
         app = TodoApp(storage=hostile_storage)
         async with app.run_test() as pilot:
             await pilot.pause()
             await pilot.press("b")
             await pilot.pause()
+
+            options = app.screen.query_one("#block-options", OptionList)
+            rendered = [str(o.prompt) for o in options._options]
+            assert any("Blocker [bold title" in r for r in rendered), rendered
+
             for ch in "[/]":
                 await pilot.press(ch)
             await pilot.press("enter")
             await pilot.pause()
-            from todo.tui.dialogs import BlockDialog
 
-            # Dialog stays open showing the (safe) error, no crash.
+            # No crash, and nothing chosen from an empty result.
+            assert app.is_running
             assert isinstance(app.screen, BlockDialog)
-            error = str(app.screen.query_one("#block-error", Label).render())
-            assert error != ""
 
 
 class TestShowProjectHostileEndToEnd:

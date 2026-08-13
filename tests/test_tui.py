@@ -169,6 +169,142 @@ class TestPrdKeyBindings:
                 assert not is_separator(key)
 
 
+class TestBlockerPicker:
+    """Choosing a blocker must not require remembering an id: the dialog
+    lists the candidates and the search box narrows them."""
+
+    @pytest.fixture()
+    def several(self, db_path: Path) -> SqliteStorage:
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Write the migration")
+        add_todo(storage, "Deploy the gateway")
+        add_todo(storage, "Rotate the certificates")
+        add_todo(storage, "Deploy the frontend")
+        return storage
+
+    @staticmethod
+    def _options(app) -> list[str]:
+        from textual.widgets import OptionList
+
+        option_list = app.screen.query_one("#block-options", OptionList)
+        return [str(option.prompt) for option in option_list._options]
+
+    async def test_lists_every_other_item(self, several: SqliteStorage) -> None:
+        app = TodoApp(storage=several)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("b")
+            await pilot.pause()
+            options = self._options(app)
+            assert len(options) == 3
+            assert all("Write the migration" not in o for o in options), options
+            assert any("Deploy the gateway" in o for o in options)
+
+    async def test_search_narrows_the_list(self, several: SqliteStorage) -> None:
+        app = TodoApp(storage=several)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("b")
+            await pilot.pause()
+            for ch in "deploy":
+                await pilot.press(ch)
+            await pilot.pause()
+            options = self._options(app)
+            assert len(options) == 2
+            assert all("Deploy" in o for o in options), options
+
+    async def test_search_also_matches_the_id(self, several: SqliteStorage) -> None:
+        app = TodoApp(storage=several)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("b")
+            await pilot.pause()
+            await pilot.press("3")
+            await pilot.pause()
+            options = self._options(app)
+            assert len(options) == 1
+            assert "Rotate the certificates" in options[0]
+
+    async def test_enter_on_the_highlighted_candidate_blocks(
+        self, several: SqliteStorage
+    ) -> None:
+        app = TodoApp(storage=several)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("b")
+            await pilot.pause()
+            for ch in "gateway":
+                await pilot.press(ch)
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert several.get(1).blocked_by == [2]
+
+    async def test_down_moves_the_highlight_before_choosing(
+        self, several: SqliteStorage
+    ) -> None:
+        app = TodoApp(storage=several)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("b")
+            await pilot.pause()
+            for ch in "deploy":
+                await pilot.press(ch)
+            await pilot.pause()
+            await pilot.press("down")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert several.get(1).blocked_by == [4]
+
+    async def test_choosing_an_existing_blocker_removes_it(
+        self, several: SqliteStorage
+    ) -> None:
+        several.add_blocker(1, 2)
+        app = TodoApp(storage=several)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("b")
+            await pilot.pause()
+            options = self._options(app)
+            assert options[0].startswith("✓"), options
+            await pilot.press("enter")
+            await pilot.pause()
+            assert several.get(1).blocked_by == []
+
+    async def test_current_blockers_sort_first(self, several: SqliteStorage) -> None:
+        several.add_blocker(1, 4)
+        app = TodoApp(storage=several)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("b")
+            await pilot.pause()
+            options = self._options(app)
+            assert "Deploy the frontend" in options[0]
+            assert options[0].startswith("✓")
+            assert not any(o.startswith("✓") for o in options[1:])
+
+    async def test_a_cycle_reports_inline_and_stays_open(
+        self, several: SqliteStorage
+    ) -> None:
+        from todo.tui.dialogs import BlockDialog
+
+        several.add_blocker(2, 1)  # #2 already waits on #1
+        app = TodoApp(storage=several)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("b")  # blockers of #1
+            await pilot.pause()
+            for ch in "gateway":
+                await pilot.press(ch)
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, BlockDialog)
+            error = str(app.screen.query_one("#block-error", Label).render())
+            assert error
+            assert several.get(1).blocked_by == []
+
+
 class TestDepsColumn:
     """Dependencies belong on the row, not only in the detail pane: '←' is
     what this item waits on, '→' is how many wait on it."""
@@ -1260,26 +1396,32 @@ class TestBlocking:
 
             assert not isinstance(app.screen, BlockDialog)
 
-    async def test_b_block_dialog_shows_error_and_stays_open(
+    async def test_b_block_dialog_never_offers_the_item_itself(
         self, seeded_storage: SqliteStorage
     ) -> None:
-        """A self-block keeps the dialog open and shows the error message."""
+        """Self-blocking used to be typed, rejected, and reported inline.
+        The picker cannot offer it at all — the domain rule still stands
+        (tests/test_query_amplification.py), it is simply unreachable."""
+        from textual.widgets import OptionList
+
         from todo.tui.dialogs import BlockDialog
 
         app = TodoApp(storage=seeded_storage)
         async with app.run_test() as pilot:
             await pilot.pause()
-            # Cursor on item #1; try to block it by itself.
+            # Cursor on item #1; search for it by its own id.
             await pilot.press("b")
             await pilot.pause()
             await pilot.press("1")
-            await pilot.press("enter")
             await pilot.pause()
 
             assert isinstance(app.screen, BlockDialog)
-            error_label = app.screen.query_one("#block-error", Label)
-            assert "itself" in str(error_label.render()).lower()
-            # No relation was created.
+            options = app.screen.query_one("#block-options", OptionList)
+            assert [str(o.prompt) for o in options._options] == []
+
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, BlockDialog)  # nothing to choose
             assert seeded_storage.get(1).blocked_by == []
 
     async def test_b_block_dialog_negative_id_removes_relation(

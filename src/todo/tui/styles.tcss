@@ -112,9 +112,26 @@ BlockDialog > #block-container {
     border: thick $primary;
 }
 
+#block-title {
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+#block-options {
+    height: 12;
+    margin-top: 1;
+    border: none;
+    background: $surface;
+}
+
 #block-error {
     color: $error;
     height: auto;
+    margin-top: 1;
+}
+
+#block-hint {
+    color: $text-muted;
     margin-top: 1;
 }
 
