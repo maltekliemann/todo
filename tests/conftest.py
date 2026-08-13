@@ -5,7 +5,11 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from todo.adapters.sqlite_storage import SqliteStorage
+from todo.adapters.sqlite_change_feed import SqliteChangeFeed
+from todo.adapters.sqlite_dependency_store import SqliteDependencyStore
+from todo.adapters.sqlite_item_store import SqliteItemStore
+from todo.adapters.sqlite_project_log_store import SqliteProjectLogStore
+from todo.adapters.sqlite_project_store import SqliteProjectStore
 from todo.infra.cli.main import main
 
 
@@ -15,8 +19,28 @@ def db_path(tmp_path: Path) -> Path:
 
 
 @pytest.fixture()
-def storage(db_path: Path) -> SqliteStorage:
-    return SqliteStorage(db_path)
+def items(db_path: Path) -> SqliteItemStore:
+    return SqliteItemStore(db_path)
+
+
+@pytest.fixture()
+def projects(db_path: Path) -> SqliteProjectStore:
+    return SqliteProjectStore(db_path)
+
+
+@pytest.fixture()
+def dependencies(db_path: Path) -> SqliteDependencyStore:
+    return SqliteDependencyStore(db_path)
+
+
+@pytest.fixture()
+def log(db_path: Path) -> SqliteProjectLogStore:
+    return SqliteProjectLogStore(db_path)
+
+
+@pytest.fixture()
+def changes(db_path: Path) -> SqliteChangeFeed:
+    return SqliteChangeFeed(db_path)
 
 
 @pytest.fixture()

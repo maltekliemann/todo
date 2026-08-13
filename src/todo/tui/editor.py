@@ -14,7 +14,8 @@ import shlex
 import shutil
 
 from todo.application.commands import CompletionResult, edit_todo
-from todo.application.contracts.storage import StorageProtocol
+from todo.application.contracts.dependency_store import DependencyStore
+from todo.application.contracts.item_store import ItemStore
 from todo.domain.item_id import ItemId
 
 
@@ -42,7 +43,10 @@ def editor_command(editor_value: str, path: str) -> list[str]:
 
 
 def apply_body_edit(
-    storage: StorageProtocol, item_id: ItemId, edited: str
+    items: ItemStore,
+    dependencies: DependencyStore,
+    item_id: ItemId,
+    edited: str,
 ) -> CompletionResult:
     """Store an edited buffer as the item's body.
 
@@ -50,4 +54,4 @@ def apply_body_edit(
     whitespace is content (pasted code) and is kept verbatim. A buffer
     saved empty clears the body, which is the only way to say so.
     """
-    return edit_todo(storage, item_id, body=edited.removesuffix("\n"))
+    return edit_todo(items, dependencies, item_id, body=edited.removesuffix("\n"))

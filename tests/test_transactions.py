@@ -1,54 +1,69 @@
-"""Storage transactions: dependency-graph mutations are atomic units."""
+"""A store write is one unit: all of it happens, or none of it does.
+
+The application never asks for a transaction — it has no word for one.
+What it relies on is that keeping an aggregate is a single act, which is
+the store's promise to make good on.
+"""
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from todo.adapters.sqlite_storage import SqliteStorage
-from todo.application.commands import add_todo, block_todo, complete_todo
+from todo.adapters.sqlite_dependency_store import SqliteDependencyStore
+from todo.adapters.sqlite_item_store import SqliteItemStore
+from todo.adapters.sqlite_project_store import SqliteProjectStore
+from todo.application.commands import (
+    add_todo,
+    block_todo,
+    block_todo_batch,
+    complete_todo,
+)
+from todo.application.dependencies import Dependencies
+from todo.domain.item_id import ItemId
+from todo.domain.todo_item import TodoItem
+from todo.exceptions import NotFoundError, StorageError
 
 
-class TestTransactionPrimitive:
-    def test_commit_on_success(self, storage: SqliteStorage) -> None:
-        with storage.transaction():
-            add_todo(storage, "inside")
-        assert storage.get(1).title == "inside"
-
-    def test_rollback_on_error(self, storage: SqliteStorage) -> None:
-        with pytest.raises(RuntimeError):
-            with storage.transaction():
-                add_todo(storage, "doomed")
-                raise RuntimeError("boom")
-        assert storage.list(include_done=True) == []
-
-    def test_reentrant_joins_outer(self, storage: SqliteStorage) -> None:
-        with pytest.raises(RuntimeError):
-            with storage.transaction():
-                add_todo(storage, "outer")
-                with storage.transaction():
-                    add_todo(storage, "inner")
-                raise RuntimeError("boom")
-        assert storage.list(include_done=True) == []
-
-    def test_writes_after_transaction_still_commit(
-        self, storage: SqliteStorage
+class TestGraphWritesAreOneUnit:
+    def test_a_refused_batch_leaves_the_graph_untouched(
+        self, items: SqliteItemStore, dependencies: SqliteDependencyStore
     ) -> None:
-        with storage.transaction():
-            add_todo(storage, "first")
-        add_todo(storage, "second")
-        assert len(storage.list(include_done=True)) == 2
+        for title in ("a", "b", "c"):
+            add_todo(items, title)
+        block_todo(items, dependencies, 1, 2)
+
+        with pytest.raises(NotFoundError):
+            block_todo_batch(items, dependencies, 1, [3, 999])
+
+        # Neither the valid half of the batch nor the pre-existing edge
+        # is disturbed: the graph is written once, after every addition
+        # has been allowed.
+        assert dependencies.load().blockers_of(ItemId(1)) == [ItemId(2)]
+
+    def test_saving_a_graph_replaces_it_wholesale(
+        self, items: SqliteItemStore, dependencies: SqliteDependencyStore
+    ) -> None:
+        for title in ("a", "b", "c"):
+            add_todo(items, title)
+        block_todo(items, dependencies, 1, 2)
+        graph = dependencies.load()
+
+        dependencies.save(graph.without_edges([(ItemId(2), ItemId(1))]))
+        assert dependencies.load().edges == frozenset()
 
 
-class _DepVanishesStorage(SqliteStorage):
+class _DepVanishesStore(SqliteItemStore):
     """Simulates a concurrent 'todo rm' of a dependent between the
     completing save and the unblock-reporting reads."""
 
-    def __init__(self, *a: object, **k: object) -> None:
-        super().__init__(*a, **k)  # type: ignore[arg-type]
-        self.vanish_id: int | None = None
+    def __init__(self, path: Path) -> None:
+        super().__init__(path)
+        self.vanish_id: ItemId | None = None
 
-    def save(self, item: object):  # type: ignore[override]
-        result = super().save(item)  # type: ignore[arg-type]
+    def save(self, item: TodoItem) -> TodoItem:
+        result = super().save(item)
         if self.vanish_id is not None:
             victim, self.vanish_id = self.vanish_id, None
             super().delete(victim)
@@ -56,59 +71,87 @@ class _DepVanishesStorage(SqliteStorage):
 
 
 class TestCompletionInvariant:
-    def test_vanished_dependent_does_not_fail_completion(self, db_path) -> None:
+    def test_vanished_dependent_does_not_fail_completion(
+        self, dependencies: SqliteDependencyStore, db_path: Path
+    ) -> None:
         """Completing an item must not report failure after mutating just
         because a dependent disappeared concurrently."""
-        storage = _DepVanishesStorage(db_path)
-        add_todo(storage, "Blocker")
-        add_todo(storage, "Waiting")
-        block_todo(storage, 2, 1)
+        store = _DepVanishesStore(db_path)
+        add_todo(store, "Blocker")
+        add_todo(store, "Waiting")
+        block_todo(store, dependencies, ItemId(2), ItemId(1))
 
-        storage.vanish_id = 2  # rm the dependent right after the UPDATE
-        result = complete_todo(storage, 1)
+        store.vanish_id = ItemId(2)  # rm the dependent right after the UPDATE
+        result = complete_todo(store, dependencies, ItemId(1))
         assert result.item.is_done
         assert result.unblocked == []  # vanished dep simply omitted
 
 
 class TestStorageErrorWrapping:
-    def test_transaction_failure_is_a_todo_error(self, db_path) -> None:
-        """sqlite-level failures surface as StorageError (a TodoError), so
-        the TUI's single error guard can catch them like the CLI does."""
-        from todo.exceptions import StorageError
+    """sqlite-level failures surface as StorageError (a TodoError), so the
+    TUI's single error guard catches them like the CLI does."""
 
-        storage = SqliteStorage(db_path)
-        storage.close()
+    def test_a_failed_write_is_a_todo_error(self, items: SqliteItemStore) -> None:
+        add_todo(items, "x")
+        item = items.get(ItemId(1))
+        items.close()
         with pytest.raises(StorageError):
-            with storage.transaction():
-                pass  # BEGIN on a closed connection fails at sqlite level
+            items.save(item)
 
-
-class _NoGetStorage(SqliteStorage):
-    """Bypasses the existence check so delete hits SQL on a closed conn."""
-
-    def get(self, item_id: int):  # type: ignore[override]
-        class _Stub:
-            blocking: list[int] = []
-
-        return _Stub()
-
-    def get_project(self, project_id: int):  # type: ignore[override]
-        return None
-
-
-class TestDeleteErrorWrapping:
-    def test_delete_wraps_sqlite_errors(self, db_path) -> None:
-        from todo.exceptions import StorageError
-
-        storage = _NoGetStorage(db_path)
-        storage._conn.close()
+    def test_delete_wraps_sqlite_errors(self, items: SqliteItemStore) -> None:
+        add_todo(items, "x")
+        items.close()
         with pytest.raises(StorageError):
-            storage.delete(1)
+            items.delete(ItemId(1))
 
-    def test_delete_project_wraps_sqlite_errors(self, db_path) -> None:
-        from todo.exceptions import StorageError
-
-        storage = _NoGetStorage(db_path)
-        storage._conn.close()
+    def test_delete_project_wraps_sqlite_errors(
+        self, projects: SqliteProjectStore
+    ) -> None:
+        projects.close()
         with pytest.raises(StorageError):
-            storage.delete_project(1)
+            projects.delete(1)  # type: ignore[arg-type]
+
+    def test_graph_save_wraps_sqlite_errors(
+        self, items: SqliteItemStore, dependencies: SqliteDependencyStore
+    ) -> None:
+        add_todo(items, "a")
+        graph = dependencies.load()
+        dependencies.close()
+        with pytest.raises(StorageError):
+            dependencies.save(graph)
+
+
+class TestTheGapBetweenTwoWrites:
+    """Two aggregates cannot be written in one go. What makes that
+    survivable is that the state in between is a state the domain calls
+    legal — not that the window is small."""
+
+    def test_edges_left_behind_by_a_crash_read_as_nothing(
+        self, items: SqliteItemStore, dependencies: SqliteDependencyStore
+    ) -> None:
+        add_todo(items, "blocker")
+        add_todo(items, "waiting")
+        block_todo(items, dependencies, ItemId(2), ItemId(1))
+
+        # Exactly what a crash between delete_todo's two writes leaves:
+        # the item gone, its edges still stored.
+        items.delete(ItemId(1))
+        assert dependencies.load().blockers_of(ItemId(2)) == [ItemId(1)]
+
+        deps = Dependencies.load(items, dependencies)
+        assert deps.blockers_of(ItemId(2)) == []
+        assert deps.is_blocked(ItemId(2)) is False
+
+    def test_the_next_write_clears_them(
+        self, items: SqliteItemStore, dependencies: SqliteDependencyStore
+    ) -> None:
+        add_todo(items, "blocker")
+        add_todo(items, "waiting")
+        block_todo(items, dependencies, ItemId(2), ItemId(1))
+        items.delete(ItemId(1))
+
+        add_todo(items, "third")
+        block_todo(items, dependencies, ItemId(3), ItemId(2))
+        # The graph is saved as it was read — for the items that exist —
+        # so the stale edge does not come back with it.
+        assert dependencies.load().edges == frozenset({(ItemId(2), ItemId(3))})

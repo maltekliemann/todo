@@ -6,11 +6,17 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from todo.adapters.sqlite_storage import SqliteStorage
+from todo.adapters.sqlite_dependency_store import SqliteDependencyStore
+from todo.adapters.sqlite_item_store import SqliteItemStore
+from todo.adapters.sqlite_project_store import SqliteProjectStore
 from todo.application.queries import list_todos, parse_since, resolve_project
 from todo.domain.deadline import Deadline
+from todo.domain.description import Description
 from todo.domain.priority import Priority
 from todo.domain.project import Project
+from todo.domain.project_id import ProjectId
+from todo.domain.project_name import ProjectName
+from todo.domain.project_status import ProjectStatus
 from todo.domain.status import Status
 from todo.domain.tag import Tag
 from todo.domain.title import Title
@@ -60,16 +66,16 @@ class TestEnums:
 
 
 class TestModels:
-    def test_project_is_archived(self) -> None:
+    def test_a_project_that_has_ended(self) -> None:
         project = Project(
-            id=1,
-            name="p",
-            description="",
-            archived=True,
+            id=ProjectId(1),
+            name=ProjectName("p"),
+            description=Description(""),
+            status=ProjectStatus.DONE,
             created_at=_NOW,
             updated_at=_NOW,
         )
-        assert project.archived is True
+        assert project.ended is True
 
     def test_done_item_never_overdue_or_urgent(self) -> None:
         item = TodoItem(
@@ -89,59 +95,65 @@ class TestModels:
 
 
 class TestQueryHelpers:
-    def test_blocked_and_ready_mutually_exclusive(self, storage: SqliteStorage) -> None:
+    def test_blocked_and_ready_mutually_exclusive(
+        self, items: SqliteItemStore, dependencies: SqliteDependencyStore
+    ) -> None:
         with pytest.raises(ValueError, match="mutually exclusive"):
-            list_todos(storage, blocked=True, ready=True)
+            list_todos(items, dependencies, blocked=True, ready=True)
 
     def test_resolve_project_numeric_ref_prefers_id(
-        self, storage: SqliteStorage
+        self, projects: SqliteProjectStore
     ) -> None:
         """Round-1 asserted name-first here; round-2 confirmed that lets a
         numerically-named project shadow another project's id in every
         command including `project rm`. Numeric refs now mean the id shown
         in `project list`; names win only for non-numeric refs."""
-        first = storage.add_project("something")  # id 1
+        first = projects.create(ProjectName("something"), Description(""))  # id 1
         second_id = first.id + 1
-        storage.add_project(str(first.id))  # id 2, literally named "1"
+        projects.create(
+            ProjectName(str(first.id)), Description("")
+        )  # id 2, literally named "1"
         # "1" is numeric -> resolves to project id 1, not the one named "1".
-        assert resolve_project(storage, str(first.id)).name == "something"
+        assert resolve_project(projects, str(first.id)).name == "something"
         # The numerically-named project stays reachable by its id.
-        assert resolve_project(storage, str(second_id)).name == str(first.id)
+        assert resolve_project(projects, str(second_id)).name == str(first.id)
 
     def test_resolve_project_numeric_name_fallback(
-        self, storage: SqliteStorage
+        self, projects: SqliteProjectStore
     ) -> None:
         """A numeric ref that matches no id still finds a project named so."""
-        storage.add_project("77")  # id 1, named "77"
-        assert resolve_project(storage, "77").name == "77"
+        projects.create(ProjectName("77"), Description(""))  # id 1, named "77"
+        assert resolve_project(projects, "77").name == "77"
 
-    def test_resolve_project_falls_back_to_id(self, storage: SqliteStorage) -> None:
-        project = storage.add_project("named")
-        assert resolve_project(storage, str(project.id)).name == "named"
+    def test_resolve_project_falls_back_to_id(
+        self, projects: SqliteProjectStore
+    ) -> None:
+        project = projects.create(ProjectName("named"), Description(""))
+        assert resolve_project(projects, str(project.id)).name == "named"
 
-    def test_resolve_project_unknown_raises(self, storage: SqliteStorage) -> None:
+    def test_resolve_project_unknown_raises(self, projects: SqliteProjectStore) -> None:
         with pytest.raises(ProjectNotFoundError):
-            resolve_project(storage, "ghost")
+            resolve_project(projects, "ghost")
 
     def test_resolve_project_superscript_digit_is_clean_not_found(
-        self, storage: SqliteStorage
+        self, projects: SqliteProjectStore
     ) -> None:
         """'²'.isdigit() is True but int('²') raises — must not traceback."""
         with pytest.raises(ProjectNotFoundError):
-            resolve_project(storage, "²")
+            resolve_project(projects, "²")
 
     def test_resolve_project_huge_numeric_ref_is_clean_not_found(
-        self, storage: SqliteStorage
+        self, projects: SqliteProjectStore
     ) -> None:
         """Ids beyond SQLite's 64-bit range must not raise OverflowError."""
         with pytest.raises(ProjectNotFoundError):
-            resolve_project(storage, "99999999999999999999")
+            resolve_project(projects, "99999999999999999999")
 
     def test_resolve_project_huge_numeric_name_still_found(
-        self, storage: SqliteStorage
+        self, projects: SqliteProjectStore
     ) -> None:
-        storage.add_project("99999999999999999999")
-        assert resolve_project(storage, "99999999999999999999").id == 1
+        projects.create(ProjectName("99999999999999999999"), Description(""))
+        assert resolve_project(projects, "99999999999999999999").id == 1
 
     def test_parse_since_weeks_and_months(self) -> None:
         assert parse_since("2 weeks") < parse_since("1 week")
@@ -175,11 +187,10 @@ class TestTag:
         with pytest.raises(ValueError, match="[Tt]ag cannot be empty"):
             Tag("  ")
 
-    def test_a_comma_cannot_be_constructed(self) -> None:
-        """Tags are stored comma-joined, so one containing a comma would
-        come back as two phantom tags."""
-        with pytest.raises(ValueError, match="comma"):
-            Tag("a,b")
+    def test_a_comma_is_just_a_character(self) -> None:
+        """What a tag may contain is the domain's business, and the domain
+        has no reason to care about commas."""
+        assert Tag("a,b") == "a,b"
 
 
 class TestDeadline:

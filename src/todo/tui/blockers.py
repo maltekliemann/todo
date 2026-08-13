@@ -20,7 +20,8 @@ from textual.widgets import Input, Label, OptionList
 from textual.widgets.option_list import Option
 
 from todo.application.commands import block_todo, unblock_todo
-from todo.application.contracts.storage import StorageProtocol
+from todo.application.contracts.dependency_store import DependencyStore
+from todo.application.contracts.item_store import ItemStore
 from todo.application.dependencies import Dependencies
 from todo.application.queries import list_todos, show_todo
 from todo.domain.item_id import ItemId
@@ -69,12 +70,14 @@ class BlockDialog(ModalScreen[bool]):
 
     def __init__(
         self,
-        storage: StorageProtocol,
+        items: ItemStore,
+        dependencies: DependencyStore,
         item_id: ItemId,
         relation: Relation = Relation.WAITS_ON,
     ) -> None:
         super().__init__()
-        self._storage = storage
+        self._items = items
+        self._dependencies = dependencies
         self._item_id = item_id
         self._relation = relation
         self._candidates: list[TodoItem] = []
@@ -132,8 +135,8 @@ class BlockDialog(ModalScreen[bool]):
         """Read the candidates, degrading a storage failure to the inline
         error — an unreadable database must not close the dialog."""
         try:
-            show_todo(self._storage, self._item_id)  # raises if it is gone
-            deps = Dependencies.load(self._storage)
+            show_todo(self._items, self._item_id)  # raises if it is gone
+            deps = Dependencies.load(self._items, self._dependencies)
             self._related_ids = set(
                 deps.blockers_of(self._item_id)
                 if self._relation is Relation.WAITS_ON
@@ -141,7 +144,7 @@ class BlockDialog(ModalScreen[bool]):
             )
             self._candidates = [
                 i
-                for i in list_todos(self._storage, include_done=True)
+                for i in list_todos(self._items, self._dependencies, include_done=True)
                 if i.id != self._item_id
             ]
         except TodoError as exc:
@@ -216,9 +219,9 @@ class BlockDialog(ModalScreen[bool]):
             blocked_id, blocker_id = other_id, self._item_id
         try:
             if removing:
-                unblock_todo(self._storage, blocked_id, blocker_id)
+                unblock_todo(self._items, self._dependencies, blocked_id, blocker_id)
             else:
-                block_todo(self._storage, blocked_id, blocker_id)
+                block_todo(self._items, self._dependencies, blocked_id, blocker_id)
         except TodoError as exc:
             # Cycles, unknown ids, AND storage-level failures (e.g. a locked
             # database): report inline, never crash, never close.

@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from todo.domain.description import Description
 from todo.domain.project_id import ProjectId
 from todo.domain.project_name import ProjectName
+from todo.domain.project_status import ProjectStatus
 
 
 def _now() -> datetime:
@@ -20,15 +21,16 @@ class Project:
     through methods, and `updated_at` has no setter because it moves when
     something else does.
 
-    Archived is a flag, not a status: there is no third thing a project
-    can be, and nothing branches on it except "show this one or not".
+    A project has a life of its own — not started, in progress, cancelled,
+    done — which is not the same question as whether its items are
+    finished.
     """
 
     __slots__ = (
         "_id",
         "_name",
         "_description",
-        "_archived",
+        "_status",
         "_created_at",
         "_updated_at",
     )
@@ -41,12 +43,17 @@ class Project:
         description: Description,
         created_at: datetime,
         updated_at: datetime,
-        archived: bool = False,
+        status: ProjectStatus = ProjectStatus.NOT_STARTED,
     ) -> None:
         self._id = id
         self._name = name
         self._description = description
-        self._archived = archived
+        self._status = status
+        if updated_at < created_at:
+            raise ValueError(
+                f"An project cannot have been updated before it existed: "
+                f"{updated_at.isoformat()} < {created_at.isoformat()}."
+            )
         self._created_at = created_at
         self._updated_at = updated_at
 
@@ -63,8 +70,8 @@ class Project:
         return self._description
 
     @property
-    def archived(self) -> bool:
-        return self._archived
+    def status(self) -> ProjectStatus:
+        return self._status
 
     @property
     def created_at(self) -> datetime:
@@ -82,17 +89,19 @@ class Project:
         self._description = description
         self._touch()
 
-    def archive(self) -> None:
-        """Idempotent: an archived project is already archived."""
-        self._archived = True
-        self._touch()
-
-    def unarchive(self) -> None:
-        self._archived = False
+    def set_status(self, status: ProjectStatus) -> None:
+        self._status = status
         self._touch()
 
     def _touch(self) -> None:
-        self._updated_at = _now()
+        # Never backwards: a clock that jumps must not make this look
+        # older than the change that already happened to it.
+        self._updated_at = max(_now(), self._updated_at)
+
+    @property
+    def ended(self) -> bool:
+        """Cancelled or done — the two that stop it being current."""
+        return self._status.ended
 
     def __eq__(self, other: object) -> bool:
         return isinstance(other, Project) and other._id == self._id

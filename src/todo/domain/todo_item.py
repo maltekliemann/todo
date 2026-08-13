@@ -8,7 +8,7 @@ from todo.domain.body import Body
 from todo.domain.deadline import Deadline
 from todo.domain.item_id import ItemId
 from todo.domain.priority import Priority
-from todo.domain.project import Project
+from todo.domain.project_id import ProjectId
 from todo.domain.status import Status
 from todo.domain.tag import Tag
 from todo.domain.title import Title
@@ -43,7 +43,7 @@ class TodoItem:
         "_done_at",
         "_deadline",
         "_tags",
-        "_project",
+        "_project_id",
     )
 
     def __init__(
@@ -59,19 +59,24 @@ class TodoItem:
         done_at: datetime | None = None,
         deadline: Deadline | None = None,
         tags: frozenset[Tag] = frozenset(),
-        project: Project | None = None,
+        project_id: ProjectId | None = None,
     ) -> None:
         self._id = id
         self._title = title
         self._body = body
         self._priority = priority
         self._status = status
+        if updated_at < created_at:
+            raise ValueError(
+                f"An item cannot have been updated before it existed: "
+                f"{updated_at.isoformat()} < {created_at.isoformat()}."
+            )
         self._created_at = created_at
         self._updated_at = updated_at
         self._done_at = done_at
         self._deadline = deadline
         self._tags = frozenset(tags)
-        self._project = project
+        self._project_id = project_id
 
     # --- what it is -----------------------------------------------------
 
@@ -117,8 +122,14 @@ class TodoItem:
         return self._tags
 
     @property
-    def project(self) -> Project | None:
-        return self._project
+    def project_id(self) -> ProjectId | None:
+        """Which project it is filed under, by identity.
+
+        The project itself is another aggregate with its own life; an
+        item that carried a copy of it would be holding something that
+        goes out of date the moment the project is renamed.
+        """
+        return self._project_id
 
     # --- what may be done to it -----------------------------------------
 
@@ -154,9 +165,9 @@ class TodoItem:
         self._deadline = deadline
         self._touch()
 
-    def set_project(self, project: Project | None) -> None:
+    def set_project_id(self, project_id: ProjectId | None) -> None:
         """File it under a project, or None for none."""
-        self._project = project
+        self._project_id = project_id
         self._touch()
 
     def add_tag(self, tag: Tag) -> None:
@@ -171,7 +182,9 @@ class TodoItem:
         self._touch()
 
     def _touch(self) -> None:
-        self._updated_at = _now()
+        # Never backwards: a clock that jumps must not make this look
+        # older than the change that already happened to it.
+        self._updated_at = max(_now(), self._updated_at)
 
     # --- what follows from it -------------------------------------------
 

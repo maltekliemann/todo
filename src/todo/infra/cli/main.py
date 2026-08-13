@@ -6,53 +6,74 @@ from datetime import date
 import click
 
 from todo.adapters.output import create_output
-from todo.adapters.sqlite_storage import SqliteStorage
+from todo.adapters.sqlite_dependency_store import SqliteDependencyStore
+from todo.adapters.sqlite_item_store import SqliteItemStore
+from todo.adapters.sqlite_project_log_store import SqliteProjectLogStore
+from todo.adapters.sqlite_project_store import SqliteProjectStore
 from todo.application.commands import (
     add_project,
     add_todo,
-    archive_project,
     block_todo_batch,
     complete_todo,
     delete_project,
+    delete_project_update,
     delete_todo,
     edit_project,
     edit_todo,
     log_project_update,
     move_todo,
+    set_project_status,
     unblock_todo_batch,
 )
-from todo.application.contracts.storage import UNSET, Unset
 from todo.application.dependencies import Dependencies
 from todo.application.queries import (
     count_tags,
     list_projects,
     list_todos,
     project_detail,
+    project_names,
     resolve_project,
     show_project,
     show_todo,
     summary,
 )
+from todo.application.unset import UNSET, Unset
 from todo.config import get_db_path
 from todo.domain.item_id import ItemId
 from todo.domain.priority import Priority
 from todo.domain.project import Project
+from todo.domain.project_id import ProjectId
+from todo.domain.project_status import ProjectStatus
 from todo.domain.status import Status
 from todo.domain.todo_item import TodoItem
+from todo.domain.update_id import UpdateId
 from todo.exceptions import (
     DependencyError,
     DuplicateProjectError,
     NotFoundError,
     ProjectNotFoundError,
     StorageError,
+    UpdateNotFoundError,
 )
 
 _PRIORITY_CHOICES = [p.value for p in Priority]
 _STATUS_CHOICES = [s.value for s in Status]
 
 
-def _storage() -> SqliteStorage:
-    return SqliteStorage(get_db_path())
+def _items() -> SqliteItemStore:
+    return SqliteItemStore(get_db_path())
+
+
+def _projects() -> SqliteProjectStore:
+    return SqliteProjectStore(get_db_path())
+
+
+def _dependencies() -> SqliteDependencyStore:
+    return SqliteDependencyStore(get_db_path())
+
+
+def _log() -> SqliteProjectLogStore:
+    return SqliteProjectLogStore(get_db_path())
 
 
 def _warn_unblocked(unblocked: list[TodoItem]) -> None:
@@ -68,16 +89,16 @@ def _parse_deadline_or_exit(value: str) -> date:
         sys.exit(1)
 
 
-def _resolve_project_obj_or_exit(storage: SqliteStorage, ref: str) -> Project:
+def _resolve_project_obj_or_exit(projects: SqliteProjectStore, ref: str) -> Project:
     try:
-        return resolve_project(storage, ref)
+        return resolve_project(projects, ref)
     except ProjectNotFoundError as e:
         click.echo(str(e), err=True)
         sys.exit(1)
 
 
-def _resolve_project_or_exit(storage: SqliteStorage, ref: str) -> int:
-    return _resolve_project_obj_or_exit(storage, ref).id
+def _resolve_project_or_exit(projects: SqliteProjectStore, ref: str) -> ProjectId:
+    return _resolve_project_obj_or_exit(projects, ref).id
 
 
 class _SafeGroup(click.Group):
@@ -130,17 +151,19 @@ def add(
     as_json: bool,
 ) -> None:
     """Add a new todo item."""
-    storage = _storage()
+    items = _items()
+    dependencies = _dependencies()
+    projects = _projects()
     out = create_output()
     dl = _parse_deadline_or_exit(deadline) if deadline else None
     project_id = (
-        _resolve_project_or_exit(storage, project_ref)
+        _resolve_project_or_exit(projects, project_ref)
         if project_ref is not None
         else None
     )
     try:
         item = add_todo(
-            storage,
+            items,
             title,
             body=body,
             priority=Priority.from_string(priority),
@@ -152,10 +175,11 @@ def add(
     except ValueError as e:
         click.echo(str(e), err=True)
         sys.exit(1)
+    deps = Dependencies.load(items, dependencies)
     if as_json:
-        out.print_json_item(item, Dependencies.load(storage))
+        out.print_json_item(item, deps, project_names(projects))
     else:
-        out.print_item(item, Dependencies.load(storage))
+        out.print_item(item, deps, project_names(projects))
 
 
 @main.command("list")
@@ -194,16 +218,19 @@ def list_cmd(
     """List todo items."""
     if blocked and ready:
         raise click.UsageError("--blocked and --ready are mutually exclusive.")
-    storage = _storage()
+    items = _items()
+    dependencies = _dependencies()
+    projects = _projects()
     out = create_output()
     project_id = (
-        _resolve_project_or_exit(storage, project_ref)
+        _resolve_project_or_exit(projects, project_ref)
         if project_ref is not None
         else None
     )
     try:
-        items = list_todos(
-            storage,
+        found = list_todos(
+            items,
+            dependencies,
             status=Status.from_string(status) if status else None,
             priority=Priority.from_string(priority) if priority else None,
             tags=list(tag) if tag else None,
@@ -216,10 +243,11 @@ def list_cmd(
     except ValueError as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
+    deps = Dependencies.load(items, dependencies)
     if as_json:
-        out.print_json_list(items, Dependencies.load(storage))
+        out.print_json_list(found, deps, project_names(projects))
     else:
-        out.print_list(items, Dependencies.load(storage))
+        out.print_list(found, deps)
 
 
 @main.command()
@@ -227,17 +255,20 @@ def list_cmd(
 @click.option("--json", "as_json", is_flag=True, help="Output JSON")
 def show(item_id: int, as_json: bool) -> None:
     """Show details for a todo item."""
-    storage = _storage()
+    items = _items()
+    dependencies = _dependencies()
+    projects = _projects()
     out = create_output()
     try:
-        item = show_todo(storage, ItemId(item_id))
+        item = show_todo(items, ItemId(item_id))
     except NotFoundError as e:
         click.echo(str(e), err=True)
         sys.exit(1)
+    deps = Dependencies.load(items, dependencies)
     if as_json:
-        out.print_json_item(item, Dependencies.load(storage))
+        out.print_json_item(item, deps, project_names(projects))
     else:
-        out.print_item(item, Dependencies.load(storage))
+        out.print_item(item, deps, project_names(projects))
 
 
 @main.command()
@@ -279,7 +310,9 @@ def edit(
     as_json: bool,
 ) -> None:
     """Edit a todo item."""
-    storage = _storage()
+    items = _items()
+    dependencies = _dependencies()
+    projects = _projects()
     out = create_output()
 
     dl: date | None | Unset = UNSET
@@ -289,12 +322,12 @@ def edit(
         else:
             dl = _parse_deadline_or_exit(deadline)
 
-    project_id: int | None | Unset = UNSET
+    project_id: ProjectId | None | Unset = UNSET
     if project_ref is not None:
         if project_ref.lower() == "none":
             project_id = None
         else:
-            project_id = _resolve_project_or_exit(storage, project_ref)
+            project_id = _resolve_project_or_exit(projects, project_ref)
 
     # 'none' clears, like --deadline and --project. Omitting --tag leaves
     # tags untouched; a blank tag is an error, so this sentinel is the
@@ -305,7 +338,8 @@ def edit(
 
     try:
         result = edit_todo(
-            storage,
+            items,
+            dependencies,
             ItemId(item_id),
             title=title,
             body=body,
@@ -319,10 +353,11 @@ def edit(
         click.echo(str(e), err=True)
         sys.exit(1)
     _warn_unblocked(result.unblocked)
+    deps = Dependencies.load(items, dependencies)
     if as_json:
-        out.print_json_item(result.item, Dependencies.load(storage))
+        out.print_json_item(result.item, deps, project_names(projects))
     else:
-        out.print_item(result.item, Dependencies.load(storage))
+        out.print_item(result.item, deps, project_names(projects))
 
 
 @main.command()
@@ -331,18 +366,23 @@ def edit(
 @click.option("--json", "as_json", is_flag=True, help="Output JSON")
 def mv(item_id: int, status: str, as_json: bool) -> None:
     """Move a todo item to a new status."""
-    storage = _storage()
+    items = _items()
+    dependencies = _dependencies()
+    projects = _projects()
     out = create_output()
     try:
-        result = move_todo(storage, ItemId(item_id), Status.from_string(status))
+        result = move_todo(
+            items, dependencies, ItemId(item_id), Status.from_string(status)
+        )
     except NotFoundError as e:
         click.echo(str(e), err=True)
         sys.exit(1)
     _warn_unblocked(result.unblocked)
+    deps = Dependencies.load(items, dependencies)
     if as_json:
-        out.print_json_item(result.item, Dependencies.load(storage))
+        out.print_json_item(result.item, deps, project_names(projects))
     else:
-        out.print_item(result.item, Dependencies.load(storage))
+        out.print_item(result.item, deps, project_names(projects))
 
 
 @main.command()
@@ -350,28 +390,32 @@ def mv(item_id: int, status: str, as_json: bool) -> None:
 @click.option("--json", "as_json", is_flag=True, help="Output JSON")
 def done(item_id: int, as_json: bool) -> None:
     """Mark a todo item as done."""
-    storage = _storage()
+    items = _items()
+    dependencies = _dependencies()
+    projects = _projects()
     out = create_output()
     try:
-        result = complete_todo(storage, ItemId(item_id))
+        result = complete_todo(items, dependencies, ItemId(item_id))
     except NotFoundError as e:
         click.echo(str(e), err=True)
         sys.exit(1)
     _warn_unblocked(result.unblocked)
+    deps = Dependencies.load(items, dependencies)
     if as_json:
-        out.print_json_item(result.item, Dependencies.load(storage))
+        out.print_json_item(result.item, deps, project_names(projects))
     else:
-        out.print_item(result.item, Dependencies.load(storage))
+        out.print_item(result.item, deps, project_names(projects))
 
 
 @main.command()
 @click.argument("item_id", type=int)
 def rm(item_id: int) -> None:
     """Delete a todo item."""
-    storage = _storage()
+    items = _items()
+    dependencies = _dependencies()
     out = create_output()
     try:
-        unblocked = delete_todo(storage, ItemId(item_id))
+        unblocked = delete_todo(items, dependencies, ItemId(item_id))
     except NotFoundError as e:
         click.echo(str(e), err=True)
         sys.exit(1)
@@ -384,17 +428,20 @@ def rm(item_id: int) -> None:
 @click.option("--json", "as_json", is_flag=True, help="Output JSON")
 def summary_cmd(since: str, as_json: bool) -> None:
     """Show a summary of completed items."""
-    storage = _storage()
+    items = _items()
+    dependencies = _dependencies()
+    projects = _projects()
     out = create_output()
     try:
-        since_dt, items = summary(storage, since)
+        since_dt, done = summary(items, since)
     except ValueError as e:
         click.echo(str(e), err=True)
         sys.exit(1)
+    deps = Dependencies.load(items, dependencies)
     if as_json:
-        out.print_json_summary(since_dt, items, Dependencies.load(storage))
+        out.print_json_summary(since_dt, done, deps, project_names(projects))
     else:
-        out.print_summary(since_dt, items, Dependencies.load(storage))
+        out.print_summary(since_dt, done, deps)
 
 
 @main.command()
@@ -403,19 +450,22 @@ def summary_cmd(since: str, as_json: bool) -> None:
 @click.option("--json", "as_json", is_flag=True, help="Output JSON")
 def block(item_id: int, blocker_ids: tuple[int, ...], as_json: bool) -> None:
     """Mark ITEM_ID as blocked by the given blocker item(s), all-or-nothing."""
-    storage = _storage()
+    items = _items()
+    dependencies = _dependencies()
+    projects = _projects()
     out = create_output()
     try:
         item = block_todo_batch(
-            storage, ItemId(item_id), [ItemId(b) for b in blocker_ids]
+            items, dependencies, ItemId(item_id), [ItemId(b) for b in blocker_ids]
         )
     except (NotFoundError, DependencyError) as e:
         click.echo(str(e), err=True)
         sys.exit(1)
+    deps = Dependencies.load(items, dependencies)
     if as_json:
-        out.print_json_item(item, Dependencies.load(storage))
+        out.print_json_item(item, deps, project_names(projects))
     else:
-        out.print_item(item, Dependencies.load(storage))
+        out.print_item(item, deps, project_names(projects))
 
 
 @main.command()
@@ -424,19 +474,22 @@ def block(item_id: int, blocker_ids: tuple[int, ...], as_json: bool) -> None:
 @click.option("--json", "as_json", is_flag=True, help="Output JSON")
 def unblock(item_id: int, blocker_ids: tuple[int, ...], as_json: bool) -> None:
     """Remove the given blocker item(s) from ITEM_ID."""
-    storage = _storage()
+    items = _items()
+    dependencies = _dependencies()
+    projects = _projects()
     out = create_output()
     try:
         item = unblock_todo_batch(
-            storage, ItemId(item_id), [ItemId(b) for b in blocker_ids]
+            items, dependencies, ItemId(item_id), [ItemId(b) for b in blocker_ids]
         )
     except (NotFoundError, DependencyError) as e:
         click.echo(str(e), err=True)
         sys.exit(1)
+    deps = Dependencies.load(items, dependencies)
     if as_json:
-        out.print_json_item(item, Dependencies.load(storage))
+        out.print_json_item(item, deps, project_names(projects))
     else:
-        out.print_item(item, Dependencies.load(storage))
+        out.print_item(item, deps, project_names(projects))
 
 
 @main.group()
@@ -450,28 +503,33 @@ def project() -> None:
 @click.option("--json", "as_json", is_flag=True, help="Output JSON")
 def project_add(name: str, description: str, as_json: bool) -> None:
     """Create a new project."""
-    storage = _storage()
+    projects = _projects()
+    items = _items()
+    log = _log()
+    dependencies = _dependencies()
     out = create_output()
     try:
-        created = add_project(storage, name, description=description)
+        created = add_project(projects, name, description=description)
     except (DuplicateProjectError, ValueError) as e:
         click.echo(str(e), err=True)
         sys.exit(1)
-    detail = project_detail(storage, created)
+    detail = project_detail(items, log, created)
+    deps = Dependencies.load(items, dependencies)
     if as_json:
-        out.print_json_project(detail, Dependencies.load(storage))
+        out.print_json_project(detail, deps, project_names(projects))
     else:
-        out.print_project(detail, Dependencies.load(storage))
+        out.print_project(detail, deps, project_names(projects))
 
 
 @project.command("list")
-@click.option("--all", "include_archived", is_flag=True, help="Include archived")
+@click.option("--all", "include_ended", is_flag=True, help="Include cancelled and done")
 @click.option("--json", "as_json", is_flag=True, help="Output JSON")
-def project_list(include_archived: bool, as_json: bool) -> None:
+def project_list(include_ended: bool, as_json: bool) -> None:
     """List projects with open/done counts."""
-    storage = _storage()
+    projects = _projects()
+    items = _items()
     out = create_output()
-    summaries = list_projects(storage, include_archived=include_archived)
+    summaries = list_projects(projects, items, include_ended=include_ended)
     if as_json:
         out.print_json_projects(summaries)
     else:
@@ -483,17 +541,21 @@ def project_list(include_archived: bool, as_json: bool) -> None:
 @click.option("--json", "as_json", is_flag=True, help="Output JSON")
 def project_show(ref: str, as_json: bool) -> None:
     """Show a project (by name or id) and its items."""
-    storage = _storage()
+    projects = _projects()
+    items = _items()
+    log = _log()
+    dependencies = _dependencies()
     out = create_output()
     try:
-        detail = show_project(storage, ref)
+        detail = show_project(projects, items, log, ref)
     except ProjectNotFoundError as e:
         click.echo(str(e), err=True)
         sys.exit(1)
+    deps = Dependencies.load(items, dependencies)
     if as_json:
-        out.print_json_project(detail, Dependencies.load(storage))
+        out.print_json_project(detail, deps, project_names(projects))
     else:
-        out.print_project(detail, Dependencies.load(storage))
+        out.print_project(detail, deps, project_names(projects))
 
 
 @project.command("edit")
@@ -505,56 +567,106 @@ def project_edit(
     ref: str, name: str | None, description: str | None, as_json: bool
 ) -> None:
     """Edit a project's name or description."""
-    storage = _storage()
+    projects = _projects()
+    items = _items()
+    log = _log()
+    dependencies = _dependencies()
     out = create_output()
-    project_id = _resolve_project_or_exit(storage, ref)
+    project_id = _resolve_project_or_exit(projects, ref)
     try:
-        edited = edit_project(storage, project_id, name=name, description=description)
+        edited = edit_project(projects, project_id, name=name, description=description)
     except (DuplicateProjectError, ValueError) as e:
         click.echo(str(e), err=True)
         sys.exit(1)
-    detail = project_detail(storage, edited)
+    detail = project_detail(items, log, edited)
+    deps = Dependencies.load(items, dependencies)
     if as_json:
-        out.print_json_project(detail, Dependencies.load(storage))
+        out.print_json_project(detail, deps, project_names(projects))
     else:
-        out.print_project(detail, Dependencies.load(storage))
+        out.print_project(detail, deps, project_names(projects))
 
 
-@project.command("archive")
+@project.command("status")
 @click.argument("ref")
+@click.argument("status")
 @click.option("--json", "as_json", is_flag=True, help="Output JSON")
-def project_archive(ref: str, as_json: bool) -> None:
-    """Archive a project (hidden from default project list)."""
-    storage = _storage()
+def project_status_cmd(ref: str, status: str, as_json: bool) -> None:
+    """Set a project's status: not-started, in-progress, cancelled, done."""
+    projects = _projects()
+    items = _items()
+    log = _log()
+    dependencies = _dependencies()
     out = create_output()
-    project_id = _resolve_project_or_exit(storage, ref)
-    archived = archive_project(storage, project_id)
-    detail = project_detail(storage, archived)
+    project_id = _resolve_project_or_exit(projects, ref)
+    try:
+        new_status = ProjectStatus.from_string(status)
+    except ValueError as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
+    updated = set_project_status(projects, project_id, new_status)
+    detail = project_detail(items, log, updated)
+    deps = Dependencies.load(items, dependencies)
     if as_json:
-        out.print_json_project(detail, Dependencies.load(storage))
+        out.print_json_project(detail, deps, project_names(projects))
     else:
-        out.print_project(detail, Dependencies.load(storage))
+        out.print_project(detail, deps, project_names(projects))
 
 
-@project.command("log")
+@project.group("log")
+def project_log() -> None:
+    """Read and write a project's log."""
+
+
+@project_log.command("add")
 @click.argument("ref")
 @click.argument("text")
 @click.option("--json", "as_json", is_flag=True, help="Output JSON")
-def project_log(ref: str, text: str, as_json: bool) -> None:
+def project_log_add(ref: str, text: str, as_json: bool) -> None:
     """Append a timestamped update to a project's log."""
-    storage = _storage()
+    projects = _projects()
+    items = _items()
+    log = _log()
+    dependencies = _dependencies()
     out = create_output()
-    proj = _resolve_project_obj_or_exit(storage, ref)
+    proj = _resolve_project_obj_or_exit(projects, ref)
     try:
-        log_project_update(storage, proj.id, text)
+        log_project_update(log, proj.id, text)
     except ValueError as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
-    detail = project_detail(storage, proj)
+    detail = project_detail(items, log, proj)
+    deps = Dependencies.load(items, dependencies)
     if as_json:
-        out.print_json_project(detail, Dependencies.load(storage))
+        out.print_json_project(detail, deps, project_names(projects))
     else:
-        out.print_project(detail, Dependencies.load(storage))
+        out.print_project(detail, deps, project_names(projects))
+
+
+@project_log.command("rm")
+@click.argument("update_id", type=int)
+@click.option("--json", "as_json", is_flag=True, help="Output JSON")
+def project_log_rm(update_id: int, as_json: bool) -> None:
+    """Delete one log entry by the id shown in `project show`."""
+    projects = _projects()
+    items = _items()
+    log = _log()
+    dependencies = _dependencies()
+    out = create_output()
+    try:
+        # Read it first: which project to show afterwards is the entry's
+        # own answer, and it stops being available once it is gone.
+        entry = log.get(UpdateId(update_id))
+        delete_project_update(log, entry.id)
+    except UpdateNotFoundError as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
+    proj = projects.get(entry.project_id)
+    detail = project_detail(items, log, proj)
+    deps = Dependencies.load(items, dependencies)
+    if as_json:
+        out.print_json_project(detail, deps, project_names(projects))
+    else:
+        out.print_project(detail, deps, project_names(projects))
 
 
 @project.command("rm")
@@ -562,10 +674,12 @@ def project_log(ref: str, text: str, as_json: bool) -> None:
 @click.option("--json", "as_json", is_flag=True, help="Output JSON")
 def project_rm(ref: str, as_json: bool) -> None:
     """Delete a project; its items survive unassigned."""
-    storage = _storage()
+    projects = _projects()
+    items = _items()
+    log = _log()
     # Read the record before deleting it: --json reports what was removed.
-    project = _resolve_project_obj_or_exit(storage, ref)
-    delete_project(storage, project.id)
+    project = _resolve_project_obj_or_exit(projects, ref)
+    delete_project(projects, items, log, project.id)
     if as_json:
         create_output().print_json_deleted_project(project)
     else:
@@ -576,9 +690,9 @@ def project_rm(ref: str, as_json: bool) -> None:
 @click.option("--json", "as_json", is_flag=True, help="Output JSON")
 def tags(as_json: bool) -> None:
     """List all tags with usage counts."""
-    storage = _storage()
+    items = _items()
     out = create_output()
-    counts = count_tags(storage)
+    counts = count_tags(items)
     if as_json:
         out.print_json_tags(counts)
     else:

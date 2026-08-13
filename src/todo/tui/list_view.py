@@ -12,12 +12,17 @@ from todo.application.commands import (
     delete_todo,
     move_todo,
 )
-from todo.application.contracts.storage import StorageProtocol
+from todo.application.contracts.change_feed import ChangeFeed
+from todo.application.contracts.dependency_store import DependencyStore
+from todo.application.contracts.item_store import ItemStore
+from todo.application.contracts.project_store import ProjectStore
 from todo.application.dependencies import Dependencies
 from todo.application.queries import (
+    ProjectNames,
     count_tags,
     list_all_projects,
     list_todos,
+    project_names,
     show_todo,
 )
 from todo.domain.dependency_graph import DependencyGraph
@@ -85,17 +90,27 @@ class TodoListView(Widget):
 
     POLL_INTERVAL_SECONDS = 2.0
 
-    def __init__(self, storage: StorageProtocol) -> None:
+    def __init__(
+        self,
+        items: ItemStore,
+        dependencies: DependencyStore,
+        projects: ProjectStore,
+        changes: ChangeFeed,
+    ) -> None:
         super().__init__()
-        self._storage = storage
+        self._item_store = items
+        self._dependency_store = dependencies
+        self._project_store = projects
+        self._changes = changes
         self._items: list[TodoItem] = []
         self._item_by_id: dict[ItemId, TodoItem] = {}
         self._deps = Dependencies(
             graph=DependencyGraph(frozenset()), done_ids=frozenset()
         )
+        self._project_names: ProjectNames = {}
         self._filters = Filters()
         self._cursor_follows_item: bool = True
-        self._last_data_version: int = 0
+        self._last_revision: int = 0
         # One error toast per failure streak: a persistently broken
         # database must not stack a notification every poll tick.
         self._read_error_reported: bool = False
@@ -110,7 +125,7 @@ class TodoListView(Widget):
         table = self.query_one("#item-list", DataTable)
         table.add_columns(*COLUMNS)
         table.focus()
-        # _refresh_list_unguarded is the ONLY writer of _last_data_version:
+        # _refresh_list_unguarded is the ONLY writer of _last_revision:
         # recording a version without a successful refresh would make the
         # poll see "no change" forever and never retry after a failure.
         self._refresh_list()
@@ -118,12 +133,12 @@ class TodoListView(Widget):
 
     def _poll_for_external_changes(self) -> None:
         try:
-            version = self._storage.data_version()
+            revision = self._changes.revision()
         except TodoError as exc:
             # A broken database must not let the 2s timer kill the session.
             self._report_read_failure(exc, from_poll=True)
             return
-        if version != self._last_data_version:
+        if revision != self._last_revision:
             # No version bookkeeping here: only a successful refresh
             # records it, so a failed refresh is retried next tick.
             self._refresh_list(from_poll=True)
@@ -195,16 +210,15 @@ class TodoListView(Widget):
         return None if self._cursor_follows_item else self._successor_id(item_id)
 
     def _rows_for_refresh(self) -> tuple[int, list[TodoItem]]:
-        """Every storage read a refresh needs, plus the data_version read
-        BEFORE them.
+        """Every read a refresh needs, plus the revision read BEFORE them.
 
-        Reading the version first is what makes the poll safe: a commit
+        Reading the revision first is what makes the poll safe: a commit
         landing while these reads (and the ensuing table rebuild) are in
         flight is newer than the version we return, so the next tick still
         sees a change and displays it. A version read afterwards would
         record that concurrent write as already seen and lose it.
         """
-        version = self._storage.data_version()
+        revision = self._changes.revision()
 
         # Tag/priority/project filtering happens in SQL via list_todos; only
         # the search filter stays in Filters, because it also matches tag
@@ -214,7 +228,7 @@ class TodoListView(Widget):
             match = next(
                 (
                     p
-                    for p in list_all_projects(self._storage, include_archived=True)
+                    for p in list_all_projects(self._project_store, include_ended=True)
                     if p.id == project_id
                 ),
                 None,
@@ -222,14 +236,16 @@ class TodoListView(Widget):
             if match is None:
                 # Filtered project no longer exists: show nothing, but keep
                 # its remembered name — the last known name beats a bare '?'.
-                return version, []
+                return revision, []
             # Label from the live row, so a rename shows the new name.
             self._filters.project_name = match.name
 
+        self._project_names = project_names(self._project_store)
         return (
-            version,
+            revision,
             list_todos(
-                self._storage,
+                self._item_store,
+                self._dependency_store,
                 include_done=True,
                 tags=[self._filters.tag] if self._filters.tag is not None else None,
                 priority=self._filters.priority,
@@ -245,7 +261,7 @@ class TodoListView(Widget):
         # All storage reads happen BEFORE the table is touched: a degraded
         # (notified) read failure must leave the last good rows visible,
         # not wipe the list into a dead blank state.
-        version, items = self._rows_for_refresh()
+        revision, items = self._rows_for_refresh()
         self._items = self._filters.apply_search(items)
 
         # The detail pane renders from this cache instead of re-querying
@@ -255,7 +271,7 @@ class TodoListView(Widget):
 
         # One load for the whole refresh: the rows and the detail pane
         # must answer from the same graph.
-        self._deps = Dependencies.load(self._storage)
+        self._deps = Dependencies.load(self._item_store, self._dependency_store)
         row_index_of = table.populate(self._items, self._deps)
 
         if table.row_count > 0:
@@ -281,7 +297,7 @@ class TodoListView(Widget):
 
         # Record the version captured BEFORE the reads above, so a write
         # that landed during them is still pending for the next poll.
-        self._last_data_version = version
+        self._last_revision = revision
 
         search_status = self.query_one("#search-status", Static)
         parts = self._filters.status_parts()
@@ -310,11 +326,11 @@ class TodoListView(Widget):
         item = self._item_by_id.get(key)
         if item is None:
             try:
-                item = show_todo(self._storage, key)
+                item = show_todo(self._item_store, key)
             except TodoError:
                 return
 
-        pane.show(item, self._deps)
+        pane.show(item, self._deps, self._project_names)
 
     def _selected_item_id(self) -> ItemId | None:
         table = self.query_one("#item-list", DataTable)
@@ -340,7 +356,12 @@ class TodoListView(Widget):
                 self._refresh_list()
 
         self.app.push_screen(
-            NewItemDialog(self._storage, project_id=self._filters.project_id), after
+            NewItemDialog(
+                self._item_store,
+                self._project_store,
+                project_id=self._filters.project_id,
+            ),
+            after,
         )
 
     def action_done(self) -> None:
@@ -349,7 +370,7 @@ class TodoListView(Widget):
             return
         successor = self._successor_if_staying(item_id)
         try:
-            result = complete_todo(self._storage, item_id)
+            result = complete_todo(self._item_store, self._dependency_store, item_id)
         except TodoError as exc:
             # E.g. deleted by another process, or the database is locked.
             self.notify(escape_markup(str(exc)), severity="error")
@@ -373,7 +394,7 @@ class TodoListView(Widget):
         if item_id is None:
             return
         try:
-            item = show_todo(self._storage, item_id)
+            item = show_todo(self._item_store, item_id)
         except NotFoundError:
             return
         except TodoError as exc:
@@ -384,7 +405,12 @@ class TodoListView(Widget):
             if changed:
                 self._refresh_list()
 
-        self.app.push_screen(ItemScreen(self._storage, item), after)
+        self.app.push_screen(
+            ItemScreen(
+                self._item_store, self._dependency_store, self._project_store, item
+            ),
+            after,
+        )
 
     def action_delete(self) -> None:
         item_id = self._selected_item_id()
@@ -394,7 +420,9 @@ class TodoListView(Widget):
         def after(confirmed: bool | None) -> None:
             if confirmed:
                 try:
-                    unblocked = delete_todo(self._storage, item_id)
+                    unblocked = delete_todo(
+                        self._item_store, self._dependency_store, item_id
+                    )
                 except TodoError as exc:
                     # E.g. deleted by another process while the dialog was open.
                     self.notify(escape_markup(str(exc)), severity="error")
@@ -413,7 +441,9 @@ class TodoListView(Widget):
             if changed:
                 self._refresh_list()
 
-        self.app.push_screen(BlockDialog(self._storage, item_id), after)
+        self.app.push_screen(
+            BlockDialog(self._item_store, self._dependency_store, item_id), after
+        )
 
     def action_search(self) -> None:
         def after(query: str | None) -> None:
@@ -430,7 +460,7 @@ class TodoListView(Widget):
 
     def action_cycle_tag(self) -> None:
         try:
-            tags = [t for t, _ in count_tags(self._storage)]
+            tags = [t for t, _ in count_tags(self._item_store)]
         except TodoError as exc:
             self.notify(escape_markup(str(exc)), severity="error")
             return
@@ -439,7 +469,7 @@ class TodoListView(Widget):
 
     def action_cycle_project(self) -> None:
         try:
-            projects = list_all_projects(self._storage, include_archived=True)
+            projects = list_all_projects(self._project_store, include_ended=True)
         except TodoError as exc:
             self.notify(escape_markup(str(exc)), severity="error")
             return
@@ -472,7 +502,7 @@ class TodoListView(Widget):
         if item_id is None:
             return
         try:
-            item = show_todo(self._storage, item_id)
+            item = show_todo(self._item_store, item_id)
         except NotFoundError:
             return
         except TodoError as exc:
@@ -482,7 +512,9 @@ class TodoListView(Widget):
         if next_status is not None:
             successor = self._successor_if_staying(item_id)
             try:
-                result = move_todo(self._storage, item_id, next_status)
+                result = move_todo(
+                    self._item_store, self._dependency_store, item_id, next_status
+                )
             except TodoError as exc:
                 self.notify(escape_markup(str(exc)), severity="error")
                 self._refresh_list()
@@ -495,7 +527,7 @@ class TodoListView(Widget):
         if item_id is None:
             return
         try:
-            item = show_todo(self._storage, item_id)
+            item = show_todo(self._item_store, item_id)
         except NotFoundError:
             return
         except TodoError as exc:
@@ -505,7 +537,9 @@ class TodoListView(Widget):
         if prev_status is not None:
             successor = self._successor_if_staying(item_id)
             try:
-                move_todo(self._storage, item_id, prev_status)
+                move_todo(
+                    self._item_store, self._dependency_store, item_id, prev_status
+                )
             except TodoError as exc:
                 self.notify(escape_markup(str(exc)), severity="error")
                 self._refresh_list()

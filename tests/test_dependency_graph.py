@@ -87,3 +87,21 @@ class TestLoading:
 
     def test_the_empty_graph_is_valid(self) -> None:
         assert graph().edges == frozenset()
+
+
+class TestEdgesOutliveTheirItems:
+    """Deleting an item and pruning the edges that named it are two
+    writes. Between them the stored edges say something untrue, so the
+    graph must be read for the items that exist."""
+
+    def test_an_edge_naming_a_vanished_item_is_not_an_edge(self) -> None:
+        graph = DependencyGraph(
+            frozenset({(ItemId(1), ItemId(2)), (ItemId(3), ItemId(2))})
+        )
+        alive = graph.restricted_to({ItemId(2), ItemId(3)})
+        assert alive.blockers_of(ItemId(2)) == [ItemId(3)]
+
+    def test_a_vanished_blocker_does_not_hold_anything_up(self) -> None:
+        graph = DependencyGraph(frozenset({(ItemId(1), ItemId(2))}))
+        # #1 is gone: nobody can ever finish it, so #2 waits on nothing.
+        assert not graph.restricted_to({ItemId(2)}).is_blocked(ItemId(2), frozenset())

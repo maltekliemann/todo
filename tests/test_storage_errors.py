@@ -4,38 +4,76 @@ only catch the domain hierarchy."""
 
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
 
-from todo.adapters.sqlite_storage import SqliteStorage
-from todo.exceptions import StorageError
+from todo.adapters.sqlite_change_feed import SqliteChangeFeed
+from todo.adapters.sqlite_dependency_store import SqliteDependencyStore
+from todo.adapters.sqlite_item_store import SqliteItemStore
+from todo.adapters.sqlite_project_log_store import SqliteProjectLogStore
+from todo.adapters.sqlite_project_store import SqliteProjectStore
+from todo.application.commands import add_todo, block_todo
+from todo.application.contracts.item_store import ItemQuery
+from todo.domain.body import Body
+from todo.domain.description import Description
+from todo.domain.item_id import ItemId
+from todo.domain.priority import Priority
+from todo.domain.project_id import ProjectId
+from todo.domain.project_name import ProjectName
+from todo.domain.status import Status
+from todo.domain.title import Title
+from todo.domain.todo_item import TodoItem
+from todo.domain.update_body import UpdateBody
+from todo.exceptions import StorageError, TodoError
 from todo.infra.cli.main import main
 
 
-def _broken_storage(tmp_path: Path) -> tuple[SqliteStorage, int, int]:
-    """A storage whose connection dies mid-session (simulates corruption)."""
-    storage = SqliteStorage(tmp_path / "db.db")
-    item = storage.add("x")
-    project = storage.add_project("p")
-    storage._conn.close()
-    return storage, item.id, project.id
+@dataclass
+class _Stores:
+    items: SqliteItemStore
+    projects: SqliteProjectStore
+    log: SqliteProjectLogStore
+    dependencies: SqliteDependencyStore
+    changes: SqliteChangeFeed
+    item_id: ItemId
+    project_id: ProjectId
 
 
-_READ_CALLS: dict[str, Callable[[SqliteStorage, int, int], object]] = {
-    "get": lambda s, i, p: s.get(i),
-    "list": lambda s, i, p: s.list(),
-    "done_since": lambda s, i, p: s.done_since(__import__("datetime").datetime.now()),
-    "data_version": lambda s, i, p: s.data_version(),
-    "get_project": lambda s, i, p: s.get_project(p),
-    "get_project_by_name": lambda s, i, p: s.get_project_by_name("p"),
-    "list_projects": lambda s, i, p: s.list_projects(),
-    "project_counts": lambda s, i, p: s.project_counts(),
-    "dependency_edges": lambda s, i, p: s.dependency_edges(),
-    "item_tags": lambda s, i, p: s.item_tags(),
-    "list_project_updates": lambda s, i, p: s.list_project_updates(p),
+def _broken_stores(tmp_path: Path) -> _Stores:
+    """Stores whose connections die mid-session (simulates corruption)."""
+    path = tmp_path / "db.db"
+    items = SqliteItemStore(path)
+    projects = SqliteProjectStore(path)
+    log = SqliteProjectLogStore(path)
+    dependencies = SqliteDependencyStore(path)
+    changes = SqliteChangeFeed(path)
+    item = add_todo(items, "x")
+    project = projects.create(ProjectName("p"), Description(""))
+    for store in (items, projects, log, dependencies, changes):
+        store.close()
+    return _Stores(items, projects, log, dependencies, changes, item.id, project.id)
+
+
+_READ_CALLS: dict[str, Callable[[_Stores], object]] = {
+    "get": lambda s: s.items.get(s.item_id),
+    "find": lambda s: s.items.find(ItemQuery()),
+    "exists": lambda s: s.items.exists(s.item_id),
+    "done_since": lambda s: s.items.done_since(datetime.now(tz=timezone.utc)),
+    "done_ids": lambda s: s.items.done_ids(),
+    "tags_of_every_item": lambda s: s.items.tags_of_every_item(),
+    "counts_by_project": lambda s: s.items.counts_by_project(),
+    "revision": lambda s: s.changes.revision(),
+    "get_project": lambda s: s.projects.get(s.project_id),
+    "get_project_by_name": lambda s: s.projects.get_by_name(ProjectName("p")),
+    "find_all_projects": lambda s: s.projects.find_all(),
+    "load_dependencies": lambda s: s.dependencies.load(),
+    "entries_for": lambda s: s.log.entries_for(s.project_id),
 }
 
 
@@ -44,9 +82,9 @@ class TestReadPathErrorWrapping:
     def test_read_raises_storage_error_when_connection_breaks(
         self, tmp_path: Path, name: str
     ) -> None:
-        storage, item_id, project_id = _broken_storage(tmp_path)
+        stores = _broken_stores(tmp_path)
         with pytest.raises(StorageError):
-            _READ_CALLS[name](storage, item_id, project_id)
+            _READ_CALLS[name](stores)
 
 
 class TestInitErrorWrapping:
@@ -56,7 +94,7 @@ class TestInitErrorWrapping:
         blocker = tmp_path / "blocker"
         blocker.write_text("not a directory")
         with pytest.raises(StorageError):
-            SqliteStorage(blocker / "sub" / "todos.db")
+            SqliteItemStore(blocker / "sub" / "todos.db")
 
     def test_cli_reports_bad_db_path_cleanly(self, tmp_path: Path) -> None:
         blocker = tmp_path / "blocker"
@@ -77,27 +115,16 @@ class TestOversizedIds:
     time — outside the sqlite3.Error hierarchy, so they slipped past every
     guard. They must surface as the domain hierarchy like any other bad id."""
 
-    def test_get_with_oversized_id_raises_domain_error(self, tmp_path: Path) -> None:
-        from todo.exceptions import TodoError
-
-        storage = SqliteStorage(tmp_path / "db.db")
+    def test_get_with_oversized_id_raises_domain_error(
+        self, items: SqliteItemStore
+    ) -> None:
         with pytest.raises(TodoError):
-            storage.get(10**20)
-        storage.close()
+            items.get(ItemId(10**20))
 
-    def test_update_with_oversized_id_raises_domain_error(self, tmp_path: Path) -> None:
-        from datetime import datetime, timezone
-
-        from todo.domain.body import Body
-        from todo.domain.item_id import ItemId
-        from todo.domain.priority import Priority
-        from todo.domain.status import Status
-        from todo.domain.title import Title
-        from todo.domain.todo_item import TodoItem
-        from todo.exceptions import TodoError
-
+    def test_save_with_oversized_id_raises_domain_error(
+        self, items: SqliteItemStore
+    ) -> None:
         now = datetime.now(tz=timezone.utc)
-        storage = SqliteStorage(tmp_path / "db.db")
         oversized = TodoItem(
             id=ItemId(10**20),
             title=Title("x"),
@@ -108,19 +135,14 @@ class TestOversizedIds:
             updated_at=now,
         )
         with pytest.raises(TodoError):
-            storage.save(oversized)
-        storage.close()
+            items.save(oversized)
 
-    def test_add_blocker_with_oversized_id_raises_domain_error(
-        self, tmp_path: Path
+    def test_blocking_an_oversized_id_raises_domain_error(
+        self, items: SqliteItemStore, dependencies: SqliteDependencyStore
     ) -> None:
-        from todo.exceptions import TodoError
-
-        storage = SqliteStorage(tmp_path / "db.db")
-        storage.add("a")
+        add_todo(items, "a")
         with pytest.raises(TodoError):
-            storage.add_blocker(1, 10**20)
-        storage.close()
+            block_todo(items, dependencies, ItemId(1), ItemId(10**20))
 
     def test_cli_show_oversized_id_errors_cleanly(self, tmp_path: Path) -> None:
         runner = CliRunner()
@@ -156,7 +178,7 @@ class TestInitSqliteErrorWrapping:
         bad = tmp_path / "corrupt.db"
         bad.write_bytes(b"this is not a sqlite database at all --------")
         with pytest.raises(StorageError):
-            SqliteStorage(bad)
+            SqliteItemStore(bad)
 
 
 class TestConnectErrorWrapping:
@@ -164,16 +186,15 @@ class TestConnectErrorWrapping:
         """sqlite3.connect failures are init-time database failures like
         any other and must wrap as StorageError."""
         with pytest.raises(StorageError):
-            SqliteStorage(tmp_path)  # the path IS a directory
+            SqliteItemStore(tmp_path)  # the path IS a directory
 
-    def test_project_log_readback_is_wrapped(self, tmp_path: Path) -> None:
-        """The post-commit read-back in add_project_update is a storage
-        read like any other."""
-        import sqlite3
-
-        storage = SqliteStorage(tmp_path / "db.db")
-        project = storage.add_project("p")
-        real_conn = storage._conn
+    def test_project_log_readback_is_wrapped(
+        self, projects: SqliteProjectStore, log: SqliteProjectLogStore
+    ) -> None:
+        """The read-back that follows the insert is a storage read like
+        any other."""
+        project = projects.create(ProjectName("p"), Description(""))
+        real_conn = log._conn
 
         class _Proxy:
             def __getattr__(self, name: str) -> object:
@@ -184,9 +205,9 @@ class TestConnectErrorWrapping:
                     raise sqlite3.OperationalError("disk I/O error")
                 return real_conn.execute(sql, *args)
 
-        storage._conn = _Proxy()  # type: ignore[assignment]
+        log._conn = _Proxy()  # type: ignore[assignment]
         with pytest.raises(StorageError):
-            storage.add_project_update(project.id, "hello")
+            log.append(project.id, UpdateBody("hello"))
 
 
 class TestUndecodableRowWrapping:
@@ -194,47 +215,43 @@ class TestUndecodableRowWrapping:
     other: it must surface as StorageError, not a raw ValueError that
     both frontends' guards miss."""
 
-    def _poison(self, tmp_path: Path, column: str, value: str) -> SqliteStorage:
-        storage = SqliteStorage(tmp_path / "db.db")
-        storage.add("x")
-        storage._conn.execute(f"UPDATE todos SET {column} = ?", (value,))
-        storage._conn.commit()
-        return storage
+    def _poison(self, tmp_path: Path, column: str, value: str) -> Path:
+        path = tmp_path / "db.db"
+        items = SqliteItemStore(path)
+        add_todo(items, "x")
+        items.close()
+        conn = sqlite3.connect(str(path))
+        conn.execute(f"UPDATE todos SET {column} = ?", (value,))
+        conn.commit()
+        conn.close()
+        return path
 
     def test_bad_priority_enum_raises_storage_error(self, tmp_path: Path) -> None:
-        storage = self._poison(tmp_path, "priority", "p1")
+        path = self._poison(tmp_path, "priority", "p1")
         with pytest.raises(StorageError):
-            storage.get(1)
-        with pytest.raises(StorageError):
-            storage.list()
-        storage.close()
+            SqliteItemStore(path).find(ItemQuery())
 
     def test_bad_timestamp_raises_storage_error(self, tmp_path: Path) -> None:
-        storage = self._poison(tmp_path, "created_at", "not-a-timestamp")
+        path = self._poison(tmp_path, "created_at", "not-a-timestamp")
         with pytest.raises(StorageError):
-            storage.get(1)
-        storage.close()
+            SqliteItemStore(path).get(ItemId(1))
 
     def test_bad_project_row_raises_storage_error(self, tmp_path: Path) -> None:
-        storage = SqliteStorage(tmp_path / "db.db")
-        project = storage.add_project("p")
-        storage._conn.execute("UPDATE projects SET status = 'bogus'")
-        storage._conn.commit()
+        path = tmp_path / "db.db"
+        projects = SqliteProjectStore(path)
+        project = projects.create(ProjectName("p"), Description(""))
+        projects.close()
+        conn = sqlite3.connect(str(path))
+        conn.execute("UPDATE projects SET status = ?", ("bogus",))
+        conn.commit()
+        conn.close()
         with pytest.raises(StorageError):
-            storage.get_project(project.id)
-        with pytest.raises(StorageError):
-            storage.list_projects(include_archived=True)
-        storage.close()
+            SqliteProjectStore(path).get(project.id)
 
     def test_cli_reports_undecodable_row_cleanly(self, tmp_path: Path) -> None:
-        db = tmp_path / "t.db"
-        storage = SqliteStorage(db)
-        storage.add("x")
-        storage._conn.execute("UPDATE todos SET priority = 'p1'")
-        storage._conn.commit()
-        storage.close()
+        path = self._poison(tmp_path, "priority", "p1")
         runner = CliRunner()
-        result = runner.invoke(main, ["show", "1"], env={"TODO_DB": str(db)})
+        result = runner.invoke(main, ["list"], env={"TODO_DB": str(path)})
         assert result.exit_code == 1
-        assert "Database error" in result.stderr
+        assert "Database error:" in result.stderr
         assert "Traceback" not in result.stderr

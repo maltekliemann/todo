@@ -5,10 +5,15 @@ import json
 import pytest
 from click.testing import CliRunner
 
-from todo.adapters.sqlite_storage import SqliteStorage
-from todo.application.commands import block_todo, unblock_todo
+from todo.adapters.sqlite_dependency_store import SqliteDependencyStore
+from todo.adapters.sqlite_item_store import SqliteItemStore
+from todo.adapters.sqlite_project_log_store import SqliteProjectLogStore
+from todo.application.commands import block_todo, delete_todo, unblock_todo
 from todo.application.dependencies import Dependencies
+from todo.domain.body import Body
+from todo.domain.priority import Priority
 from todo.domain.status import Status
+from todo.domain.title import Title
 from todo.exceptions import DependencyError, NotFoundError
 from todo.infra.cli.main import main
 
@@ -50,12 +55,12 @@ class TestAdd:
 
 
 class TestList:
-    def test_empty(self, cli: CliRunner) -> None:
+    def test_empty(self, items: SqliteItemStore, cli: CliRunner) -> None:
         result = cli.invoke(main, ["list"])
         assert result.exit_code == 0
         assert "No items" in result.output
 
-    def test_shows_items(self, cli: CliRunner) -> None:
+    def test_shows_items(self, items: SqliteItemStore, cli: CliRunner) -> None:
         cli.invoke(main, ["add", "Task A"])
         cli.invoke(main, ["add", "Task B"])
         result = cli.invoke(main, ["list"])
@@ -221,12 +226,12 @@ class TestSummary:
         assert "Done task" in result.output
         assert "1 item completed" in result.output
 
-    def test_empty_summary(self, cli: CliRunner) -> None:
+    def test_empty_summary(self, items: SqliteItemStore, cli: CliRunner) -> None:
         result = cli.invoke(main, ["summary", "--since", "7 days"])
         assert result.exit_code == 0
         assert "No items completed" in result.output
 
-    def test_json_output(self, cli: CliRunner) -> None:
+    def test_json_output(self, items: SqliteItemStore, cli: CliRunner) -> None:
         cli.invoke(main, ["add", "Done"])
         cli.invoke(main, ["done", "1"])
         result = cli.invoke(main, ["summary", "--since", "7 days", "--json"])
@@ -552,7 +557,7 @@ class TestBadInput:
 
 
 class TestProjectCli:
-    def test_add_and_show(self, invoke) -> None:
+    def test_add_and_show(self, items: SqliteItemStore, invoke) -> None:
         result = invoke("project add infra -D Infrastructure")
         assert result.exit_code == 0
         assert "infra" in result.output
@@ -560,7 +565,7 @@ class TestProjectCli:
         data = json.loads(invoke("project show infra --json").output)
         assert data["name"] == "infra"
         assert data["description"] == "Infrastructure"
-        assert data["status"] == "active"
+        assert data["status"] == "not-started"
         assert data["items"] == []
 
     def test_show_by_id(self, invoke) -> None:
@@ -589,12 +594,12 @@ class TestProjectCli:
         assert data[0]["open_count"] == 1
         assert data[0]["done_count"] == 1
 
-    def test_archive_hides_from_default_list(self, invoke) -> None:
+    def test_an_ended_project_leaves_the_default_list(self, invoke) -> None:
         invoke("project add old")
-        invoke("project archive old")
+        invoke("project status old done")
         assert json.loads(invoke("project list --json").output) == []
         data = json.loads(invoke("project list --all --json").output)
-        assert data[0]["status"] == "archived"
+        assert data[0]["status"] == "done"
 
     def test_edit_renames(self, invoke) -> None:
         invoke("project add old")
@@ -641,13 +646,17 @@ class TestProjectCli:
         data = json.loads(invoke("list --project infra --json").output)
         assert [i["title"] for i in data] == ["In-project"]
 
-    def test_project_log_appends_and_shows(self, cli: CliRunner) -> None:
+    def test_project_log_appends_and_shows(
+        self, log: SqliteProjectLogStore, cli: CliRunner
+    ) -> None:
         cli.invoke(main, ["project", "add", "infra"])
-        result = cli.invoke(main, ["project", "log", "infra", "Kickoff complete"])
+        result = cli.invoke(
+            main, ["project", "log", "add", "infra", "Kickoff complete"]
+        )
         assert result.exit_code == 0
         assert "Kickoff complete" in result.output
 
-        cli.invoke(main, ["project", "log", "infra", "Second update"])
+        cli.invoke(main, ["project", "log", "add", "infra", "Second update"])
         data = json.loads(
             cli.invoke(main, ["project", "show", "infra", "--json"]).output
         )
@@ -657,14 +666,38 @@ class TestProjectCli:
             "Kickoff complete",
         ]
 
-    def test_project_log_unknown_project_fails(self, cli: CliRunner) -> None:
-        result = cli.invoke(main, ["project", "log", "nope", "text"])
+    def test_project_log_rm_deletes_one_entry(self, invoke) -> None:
+        invoke("project add infra")
+        invoke("project log add infra first")
+        invoke("project log add infra second")
+        data = json.loads(invoke("project show infra --json").output)
+        victim = next(u for u in data["updates"] if u["body"] == "first")
+
+        result = invoke(f"project log rm {victim['id']}")
+        assert result.exit_code == 0
+        bodies = [
+            u["body"]
+            for u in json.loads(invoke("project show infra --json").output)["updates"]
+        ]
+        assert bodies == ["second"]
+
+    def test_project_log_rm_unknown_entry_fails(self, invoke) -> None:
+        result = invoke("project log rm 999")
+        assert result.exit_code == 1
+        assert "not found" in result.output
+
+    def test_project_log_unknown_project_fails(
+        self, log: SqliteProjectLogStore, cli: CliRunner
+    ) -> None:
+        result = cli.invoke(main, ["project", "log", "add", "nope", "text"])
         assert result.exit_code == 1
         assert "not found" in result.stderr
 
-    def test_project_rm_removes_its_log(self, cli: CliRunner) -> None:
+    def test_project_rm_removes_its_log(
+        self, log: SqliteProjectLogStore, cli: CliRunner
+    ) -> None:
         cli.invoke(main, ["project", "add", "doomed"])
-        cli.invoke(main, ["project", "log", "doomed", "note"])
+        cli.invoke(main, ["project", "log", "add", "doomed", "note"])
         cli.invoke(main, ["project", "rm", "doomed"])
         cli.invoke(main, ["project", "add", "doomed"])  # fresh, same name
         data = json.loads(
@@ -693,7 +726,9 @@ class TestProjectCli:
         result = invoke("show 1")
         assert "Project: infra" in result.output
 
-    def test_numeric_project_name_does_not_hijack_output(self, cli: CliRunner) -> None:
+    def test_numeric_project_name_does_not_hijack_output(
+        self, log: SqliteProjectLogStore, cli: CliRunner
+    ) -> None:
         """Commands that know the project id must not re-resolve by name."""
         cli.invoke(main, ["project", "add", "2"])  # project id 1, named "2"
         result = cli.invoke(main, ["project", "add", "foo", "--json"])
@@ -707,15 +742,17 @@ class TestProjectCli:
         )
         assert json.loads(result.output)["name"] == "foo"
 
-        result = cli.invoke(main, ["project", "archive", "foo", "--json"])
+        result = cli.invoke(main, ["project", "status", "foo", "done", "--json"])
         assert json.loads(result.output)["name"] == "foo"
 
-        result = cli.invoke(main, ["project", "log", "foo", "note", "--json"])
+        result = cli.invoke(main, ["project", "log", "add", "foo", "note", "--json"])
         data = json.loads(result.output)
         assert data["name"] == "foo"
         assert data["updates"][0]["body"] == "note"
 
-    def test_summary_json_includes_dependency_fields(self, cli: CliRunner) -> None:
+    def test_summary_json_includes_dependency_fields(
+        self, items: SqliteItemStore, cli: CliRunner
+    ) -> None:
         """Summary items must report the same dependency data as show/list."""
         cli.invoke(main, ["add", "Blocker"])
         cli.invoke(main, ["add", "Waiting"])
@@ -736,7 +773,7 @@ class TestProjectCli:
         assert lines, result.output
         assert "\U0001f6a7" not in lines[0]
 
-    def test_project_show_lists_its_items(self, invoke) -> None:
+    def test_project_show_lists_its_items(self, items: SqliteItemStore, invoke) -> None:
         invoke("project add infra")
         invoke("add Task --project infra")
         invoke("add Other")
@@ -943,76 +980,165 @@ class TestListBlockedReady:
 class TestBlockStorage:
     """Application + storage layer behavior, bypassing the CLI."""
 
-    def test_add_and_query_relation(self, storage: SqliteStorage) -> None:
-        a = storage.add("Blocker")
-        b = storage.add("Blocked")
+    def test_add_and_query_relation(
+        self, items: SqliteItemStore, dependencies: SqliteDependencyStore
+    ) -> None:
+        a = items.create(
+            title=Title("Blocker"),
+            body=Body(""),
+            priority=Priority.MEDIUM,
+            status=Status.TODO,
+        )
+        b = items.create(
+            title=Title("Blocked"),
+            body=Body(""),
+            priority=Priority.MEDIUM,
+            status=Status.TODO,
+        )
 
-        block_todo(storage, b.id, a.id)
+        block_todo(items, dependencies, b.id, a.id)
 
-        deps = Dependencies.load(storage)
+        deps = Dependencies.load(items, dependencies)
         assert deps.blockers_of(b.id) == [a.id]
         assert deps.is_blocked(b.id) is True
         assert deps.dependents_of(a.id) == [b.id]
 
-    def test_list_no_n_plus_one_context(self, storage: SqliteStorage) -> None:
-        a = storage.add("Blocker")
-        b = storage.add("Blocked")
-        block_todo(storage, b.id, a.id)
+    def test_list_no_n_plus_one_context(
+        self, items: SqliteItemStore, dependencies: SqliteDependencyStore
+    ) -> None:
+        a = items.create(
+            title=Title("Blocker"),
+            body=Body(""),
+            priority=Priority.MEDIUM,
+            status=Status.TODO,
+        )
+        b = items.create(
+            title=Title("Blocked"),
+            body=Body(""),
+            priority=Priority.MEDIUM,
+            status=Status.TODO,
+        )
+        block_todo(items, dependencies, b.id, a.id)
 
-        deps = Dependencies.load(storage)
+        deps = Dependencies.load(items, dependencies)
         assert deps.blockers_of(b.id) == [a.id]
         assert deps.is_blocked(b.id) is True
         assert deps.dependents_of(a.id) == [b.id]
 
-    def test_self_block_raises(self, storage: SqliteStorage) -> None:
-        a = storage.add("Item")
+    def test_self_block_raises(
+        self, items: SqliteItemStore, dependencies: SqliteDependencyStore
+    ) -> None:
+        a = items.create(
+            title=Title("Item"),
+            body=Body(""),
+            priority=Priority.MEDIUM,
+            status=Status.TODO,
+        )
         with pytest.raises(DependencyError):
-            block_todo(storage, a.id, a.id)
+            block_todo(items, dependencies, a.id, a.id)
 
-    def test_cycle_raises(self, storage: SqliteStorage) -> None:
-        a = storage.add("One")
-        b = storage.add("Two")
-        block_todo(storage, b.id, a.id)
+    def test_cycle_raises(
+        self, items: SqliteItemStore, dependencies: SqliteDependencyStore
+    ) -> None:
+        a = items.create(
+            title=Title("One"),
+            body=Body(""),
+            priority=Priority.MEDIUM,
+            status=Status.TODO,
+        )
+        b = items.create(
+            title=Title("Two"),
+            body=Body(""),
+            priority=Priority.MEDIUM,
+            status=Status.TODO,
+        )
+        block_todo(items, dependencies, b.id, a.id)
         with pytest.raises(DependencyError):
-            block_todo(storage, a.id, b.id)
+            block_todo(items, dependencies, a.id, b.id)
 
-    def test_block_missing_raises(self, storage: SqliteStorage) -> None:
-        a = storage.add("Item")
+    def test_block_missing_raises(
+        self, items: SqliteItemStore, dependencies: SqliteDependencyStore
+    ) -> None:
+        a = items.create(
+            title=Title("Item"),
+            body=Body(""),
+            priority=Priority.MEDIUM,
+            status=Status.TODO,
+        )
         with pytest.raises(NotFoundError):
-            block_todo(storage, a.id, 999)
+            block_todo(items, dependencies, a.id, 999)
 
-    def test_done_blocker_flips_is_blocked(self, storage: SqliteStorage) -> None:
-        a = storage.add("Blocker")
-        b = storage.add("Blocked")
-        block_todo(storage, b.id, a.id)
+    def test_done_blocker_flips_is_blocked(
+        self, items: SqliteItemStore, dependencies: SqliteDependencyStore
+    ) -> None:
+        a = items.create(
+            title=Title("Blocker"),
+            body=Body(""),
+            priority=Priority.MEDIUM,
+            status=Status.TODO,
+        )
+        b = items.create(
+            title=Title("Blocked"),
+            body=Body(""),
+            priority=Priority.MEDIUM,
+            status=Status.TODO,
+        )
+        block_todo(items, dependencies, b.id, a.id)
 
-        blocker = storage.get(a.id)
+        blocker = items.get(a.id)
         blocker.set_status(Status.DONE)
-        storage.save(blocker)
+        items.save(blocker)
 
-        deps = Dependencies.load(storage)
+        deps = Dependencies.load(items, dependencies)
         assert deps.blockers_of(b.id) == [a.id]
         assert deps.is_blocked(b.id) is False
 
-    def test_delete_cascades(self, storage: SqliteStorage) -> None:
-        a = storage.add("Blocker")
-        b = storage.add("Blocked")
-        block_todo(storage, b.id, a.id)
+    def test_delete_cascades(
+        self, items: SqliteItemStore, dependencies: SqliteDependencyStore
+    ) -> None:
+        a = items.create(
+            title=Title("Blocker"),
+            body=Body(""),
+            priority=Priority.MEDIUM,
+            status=Status.TODO,
+        )
+        b = items.create(
+            title=Title("Blocked"),
+            body=Body(""),
+            priority=Priority.MEDIUM,
+            status=Status.TODO,
+        )
+        block_todo(items, dependencies, b.id, a.id)
 
-        storage.delete(a.id)
+        # Through the command: dropping the edges that named a deleted
+        # item is a rule spanning two aggregates, so it lives there and
+        # not in a foreign key.
+        delete_todo(items, dependencies, a.id)
 
-        deps = Dependencies.load(storage)
+        deps = Dependencies.load(items, dependencies)
         assert deps.blockers_of(b.id) == []
         assert deps.is_blocked(b.id) is False
 
-    def test_unblock_removes_relation(self, storage: SqliteStorage) -> None:
-        a = storage.add("Blocker")
-        b = storage.add("Blocked")
-        block_todo(storage, b.id, a.id)
+    def test_unblock_removes_relation(
+        self, items: SqliteItemStore, dependencies: SqliteDependencyStore
+    ) -> None:
+        a = items.create(
+            title=Title("Blocker"),
+            body=Body(""),
+            priority=Priority.MEDIUM,
+            status=Status.TODO,
+        )
+        b = items.create(
+            title=Title("Blocked"),
+            body=Body(""),
+            priority=Priority.MEDIUM,
+            status=Status.TODO,
+        )
+        block_todo(items, dependencies, b.id, a.id)
 
-        unblock_todo(storage, b.id, a.id)
+        unblock_todo(items, dependencies, b.id, a.id)
 
-        deps = Dependencies.load(storage)
+        deps = Dependencies.load(items, dependencies)
         assert deps.blockers_of(b.id) == []
         assert deps.is_blocked(b.id) is False
 
@@ -1020,7 +1146,7 @@ class TestBlockStorage:
 class TestFullWorkflow:
     """End-to-end workflow simulating AI + human usage."""
 
-    def test_ai_workflow(self, cli: CliRunner) -> None:
+    def test_ai_workflow(self, items: SqliteItemStore, cli: CliRunner) -> None:
         # AI adds items while working
         r = cli.invoke(
             main,
@@ -1094,7 +1220,9 @@ class TestOverdueSorting:
     """README and the query's own comment promise overdue items sort to
     the top; the ORDER BY had no deadline term at all."""
 
-    def test_overdue_items_sort_above_non_overdue(self, cli: CliRunner) -> None:
+    def test_overdue_items_sort_above_non_overdue(
+        self, items: SqliteItemStore, cli: CliRunner
+    ) -> None:
         cli.invoke(main, ["add", "Renew SSL cert", "-p", "low", "-d", "2020-01-01"])
         cli.invoke(main, ["add", "Ship feature", "-p", "urgent"])
         cli.invoke(main, ["add", "Pay invoice", "-p", "medium", "-d", "2021-06-01"])

@@ -14,8 +14,10 @@ from textual.screen import ModalScreen
 from textual.widgets import Input, Label, Select
 
 from todo.application.commands import add_todo
-from todo.application.contracts.storage import StorageProtocol
+from todo.application.contracts.item_store import ItemStore
+from todo.application.contracts.project_store import ProjectStore
 from todo.domain.priority import Priority
+from todo.domain.project_id import ProjectId
 from todo.domain.todo_item import TodoItem
 from todo.exceptions import TodoError
 from todo.tui.tag_input import parse_tag_input
@@ -115,9 +117,15 @@ class NewItemDialog(ModalScreen[TodoItem | None]):
         Binding("up", "field_retreat", show=False),
     ]
 
-    def __init__(self, storage: StorageProtocol, project_id: int | None = None) -> None:
+    def __init__(
+        self,
+        items: ItemStore,
+        projects: ProjectStore,
+        project_id: ProjectId | None = None,
+    ) -> None:
         super().__init__()
-        self._storage = storage
+        self._items = items
+        self._projects = projects
         # The list's active project filter. Creating an item while a
         # filter is on used to store it unfiled, so it never appeared and
         # the user re-added it — inheriting the filter matches intent.
@@ -246,7 +254,7 @@ class NewItemDialog(ModalScreen[TodoItem | None]):
 
         try:
             item = add_todo(
-                self._storage,
+                self._items,
                 title,
                 priority=priority,
                 deadline=deadline,

@@ -1,19 +1,47 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from textual.app import App, ComposeResult
 
-from todo.adapters.sqlite_storage import SqliteStorage
+from todo.adapters.sqlite_change_feed import SqliteChangeFeed
+from todo.adapters.sqlite_dependency_store import SqliteDependencyStore
+from todo.adapters.sqlite_item_store import SqliteItemStore
+from todo.adapters.sqlite_project_store import SqliteProjectStore
+from todo.application.contracts.change_feed import ChangeFeed
+from todo.application.contracts.dependency_store import DependencyStore
+from todo.application.contracts.item_store import ItemStore
+from todo.application.contracts.project_store import ProjectStore
 from todo.config import get_db_path
 from todo.tui.list_view import TodoListView
 
 
 class TodoApp(App[None]):
+    """Where the TUI is wired: the adapters are chosen here and nowhere
+    else, and what is handed down is what each screen needs."""
+
     CSS_PATH = "styles.tcss"
     TITLE = "Todo"
 
-    def __init__(self, storage: SqliteStorage | None = None) -> None:
+    def __init__(
+        self,
+        db_path: Path | None = None,
+        *,
+        items: ItemStore | None = None,
+        projects: ProjectStore | None = None,
+        dependencies: DependencyStore | None = None,
+        changes: ChangeFeed | None = None,
+    ) -> None:
+        """SQLite by default; any of the four may be handed in instead,
+        which is the whole point of them being contracts."""
         super().__init__()
-        self._storage = storage or SqliteStorage(get_db_path())
+        path = db_path or get_db_path()
+        self._items = items or SqliteItemStore(path)
+        self._projects = projects or SqliteProjectStore(path)
+        self._dependencies = dependencies or SqliteDependencyStore(path)
+        self._changes = changes or SqliteChangeFeed(path)
 
     def compose(self) -> ComposeResult:
-        yield TodoListView(self._storage)
+        yield TodoListView(
+            self._items, self._dependencies, self._projects, self._changes
+        )

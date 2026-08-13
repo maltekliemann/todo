@@ -14,19 +14,26 @@ import pytest
 from textual.widgets import DataTable, Label, Static
 
 from todo.adapters.output import RichOutput
-from todo.adapters.sqlite_storage import SqliteStorage
+from todo.adapters.sqlite_dependency_store import SqliteDependencyStore
+from todo.adapters.sqlite_item_store import SqliteItemStore
+from todo.adapters.sqlite_project_log_store import SqliteProjectLogStore
+from todo.adapters.sqlite_project_store import SqliteProjectStore
 from todo.application.commands import add_todo, block_todo
 from todo.application.dependencies import Dependencies
 from todo.application.queries import ProjectDetail, ProjectSummary, show_project
 from todo.domain.dependency_graph import DependencyGraph
+from todo.domain.description import Description
 from todo.domain.item_id import ItemId
 from todo.domain.priority import Priority
 from todo.domain.project import Project
 from todo.domain.project_id import ProjectId
 from todo.domain.project_name import ProjectName
+from todo.domain.project_status import ProjectStatus
 from todo.domain.project_update import ProjectUpdate
 from todo.domain.status import Status
 from todo.domain.todo_item import TodoItem
+from todo.domain.update_body import UpdateBody
+from todo.domain.update_id import UpdateId
 from todo.tui.app import TodoApp
 
 HOSTILE = "Fix [/] thing"
@@ -61,10 +68,10 @@ def _item(**overrides: object) -> TodoItem:
 
 def _project(**overrides: object) -> Project:
     defaults: dict[str, object] = {
-        "id": ItemId(1),
-        "name": "proj [/] name",
-        "description": "desc [/] here",
-        "archived": False,
+        "id": ProjectId(1),
+        "name": ProjectName("proj [/] name"),
+        "description": Description("desc [/] here"),
+        "status": ProjectStatus.IN_PROGRESS,
         "created_at": _NOW,
         "updated_at": _NOW,
     }
@@ -93,7 +100,7 @@ class TestRichOutputMarkupSafety:
         assert HOSTILE in capsys.readouterr().out
 
     def test_print_item_hostile(self, rich_out: RichOutput, capsys) -> None:
-        rich_out.print_item(_item(), _deps())
+        rich_out.print_item(_item(), _deps(), {})
         out = capsys.readouterr().out
         assert "[/]" in out
 
@@ -113,7 +120,9 @@ class TestRichOutputMarkupSafety:
             ProjectSummary(project=_project(), open_count=1, done_count=0),
             ProjectSummary(
                 project=_project(
-                    id=ProjectId(2), name=ProjectName("arch [/]"), archived=True
+                    id=ProjectId(2),
+                    name=ProjectName("arch [/]"),
+                    status=ProjectStatus.DONE,
                 ),
                 open_count=0,
                 done_count=0,
@@ -125,16 +134,21 @@ class TestRichOutputMarkupSafety:
         assert "arch [/]" in out
 
     def test_print_project_hostile_description_and_log(
-        self, rich_out: RichOutput, capsys
+        self, log: SqliteProjectLogStore, rich_out: RichOutput, capsys
     ) -> None:
         detail = ProjectDetail(
             project=_project(),
             items=[_item()],
             updates=[
-                ProjectUpdate(id=1, project_id=1, body="log [/] body", created_at=_NOW)
+                ProjectUpdate(
+                    id=UpdateId(1),
+                    project_id=ProjectId(1),
+                    body=UpdateBody("log [/] body"),
+                    created_at=_NOW,
+                )
             ],
         )
-        rich_out.print_project(detail, _deps())
+        rich_out.print_project(detail, _deps(), {})
         out = capsys.readouterr().out
         assert "desc [/] here" in out
         assert "log [/] body" in out
@@ -142,24 +156,29 @@ class TestRichOutputMarkupSafety:
 
 class TestTuiMarkupSafety:
     @pytest.fixture()
-    def hostile_storage(self, db_path: Path) -> SqliteStorage:
-        storage = SqliteStorage(db_path)
-        project = storage.add_project("proj [/] name", description="desc [/] here")
+    def hostile_storage(
+        self,
+        items: SqliteItemStore,
+        dependencies: SqliteDependencyStore,
+        projects: SqliteProjectStore,
+        db_path: Path,
+    ) -> Path:
+        project = projects.create(
+            ProjectName("proj [/] name"), Description("desc [/] here")
+        )
         add_todo(
-            storage,
+            items,
             HOSTILE,
             body="body with [/] markup",
             tags=["[/]"],
             project_id=project.id,
         )
-        add_todo(storage, "Blocker [bold title")
-        block_todo(storage, 1, 2)
-        return storage
+        add_todo(items, "Blocker [bold title")
+        block_todo(items, dependencies, 1, 2)
+        return db_path
 
-    async def test_tui_launches_with_hostile_items(
-        self, hostile_storage: SqliteStorage
-    ) -> None:
-        app = TodoApp(storage=hostile_storage)
+    async def test_tui_launches_with_hostile_items(self, hostile_storage: Path) -> None:
+        app = TodoApp(hostile_storage)
         async with app.run_test() as pilot:
             await pilot.pause()
             table = app.query_one("#item-list", DataTable)
@@ -168,8 +187,8 @@ class TestTuiMarkupSafety:
             meta = str(app.query_one("#detail-meta", Static).render())
             assert "[/]" in meta
 
-    async def test_item_screen_hostile(self, hostile_storage: SqliteStorage) -> None:
-        app = TodoApp(storage=hostile_storage)
+    async def test_item_screen_hostile(self, hostile_storage: Path) -> None:
+        app = TodoApp(hostile_storage)
         async with app.run_test() as pilot:
             await pilot.pause()
             await pilot.press("i")
@@ -180,10 +199,8 @@ class TestTuiMarkupSafety:
             await pilot.press("escape")
             await pilot.pause()
 
-    async def test_search_status_hostile_query(
-        self, hostile_storage: SqliteStorage
-    ) -> None:
-        app = TodoApp(storage=hostile_storage)
+    async def test_search_status_hostile_query(self, hostile_storage: Path) -> None:
+        app = TodoApp(hostile_storage)
         async with app.run_test() as pilot:
             await pilot.pause()
             await pilot.press("slash")
@@ -196,9 +213,9 @@ class TestTuiMarkupSafety:
             assert "[/]" in status
 
     async def test_filter_status_hostile_tag_and_project(
-        self, hostile_storage: SqliteStorage
+        self, hostile_storage: Path
     ) -> None:
-        app = TodoApp(storage=hostile_storage)
+        app = TodoApp(hostile_storage)
         async with app.run_test() as pilot:
             await pilot.pause()
             await pilot.press("t")  # tag filter: "[/]"
@@ -208,9 +225,9 @@ class TestTuiMarkupSafety:
             assert "[/]" in status
 
     async def test_unblock_notification_hostile_title(
-        self, hostile_storage: SqliteStorage
+        self, hostile_storage: Path
     ) -> None:
-        app = TodoApp(storage=hostile_storage)
+        app = TodoApp(hostile_storage)
         async with app.run_test() as pilot:
             await pilot.pause()
             # Cursor is on #1 (hostile title, blocked by #2). Move to #2 and
@@ -220,9 +237,7 @@ class TestTuiMarkupSafety:
             await pilot.press("d")
             await pilot.pause()
 
-    async def test_block_dialog_hostile_input(
-        self, hostile_storage: SqliteStorage
-    ) -> None:
+    async def test_block_dialog_hostile_input(self, hostile_storage: Path) -> None:
         """The dialog is a search box over a list of user-written titles:
         hostile text must survive both as a query and as a rendered
         candidate, verbatim and without crashing."""
@@ -230,7 +245,7 @@ class TestTuiMarkupSafety:
 
         from todo.tui.blockers import BlockDialog
 
-        app = TodoApp(storage=hostile_storage)
+        app = TodoApp(hostile_storage)
         async with app.run_test() as pilot:
             await pilot.pause()
             await pilot.press("b")
@@ -251,11 +266,16 @@ class TestTuiMarkupSafety:
 
 
 class TestShowProjectHostileEndToEnd:
-    def test_cli_pipeline_survives_hostile_text(self, storage: SqliteStorage) -> None:
-        project = storage.add_project("p [/] q", description="d [/] e")
-        add_todo(storage, HOSTILE, project_id=project.id)
-        storage.add_project_update(project.id, "u [/] v")
-        detail = show_project(storage, "p [/] q")
+    def test_cli_pipeline_survives_hostile_text(
+        self,
+        items: SqliteItemStore,
+        projects: SqliteProjectStore,
+        log: SqliteProjectLogStore,
+    ) -> None:
+        project = projects.create(ProjectName("p [/] q"), Description("d [/] e"))
+        add_todo(items, HOSTILE, project_id=project.id)
+        log.append(project.id, "u [/] v")
+        detail = show_project(projects, items, log, "p [/] q")
         assert detail.updates[0].body == "u [/] v"
 
 
@@ -272,14 +292,14 @@ class TestTextualMarkupEscaping:
         for hostile in ("[WIP] refactor", "[Red]x", "[$VAR] y", "[/] z", "[b]lower"):
             assert Content.from_markup(escape_markup(hostile)).plain == hostile
 
-    async def test_detail_pane_keeps_bracketed_title(self, db_path: Path) -> None:
-        from todo.adapters.sqlite_storage import SqliteStorage
+    async def test_detail_pane_keeps_bracketed_title(
+        self, items: SqliteItemStore, db_path: Path
+    ) -> None:
         from todo.application.commands import add_todo
         from todo.tui.app import TodoApp
 
-        storage = SqliteStorage(db_path)
-        add_todo(storage, "[WIP] refactor auth", tags=["[Red]tag"])
-        app = TodoApp(storage=storage)
+        add_todo(items, "[WIP] refactor auth", tags=["[Red]tag"])
+        app = TodoApp(db_path)
         async with app.run_test() as pilot:
             await pilot.pause()
             title = str(app.query_one("#detail-title", Static).render())
@@ -287,17 +307,17 @@ class TestTextualMarkupEscaping:
             assert "[WIP] refactor auth" in title
             assert "[Red]tag" in meta
 
-    async def test_item_screen_keeps_bracketed_title(self, db_path: Path) -> None:
+    async def test_item_screen_keeps_bracketed_title(
+        self, items: SqliteItemStore, db_path: Path
+    ) -> None:
         from rich.text import Text
         from textual.widgets import OptionList
 
-        from todo.adapters.sqlite_storage import SqliteStorage
         from todo.application.commands import add_todo
         from todo.tui.app import TodoApp
 
-        storage = SqliteStorage(db_path)
-        add_todo(storage, "[WIP] refactor auth")
-        app = TodoApp(storage=storage)
+        add_todo(items, "[WIP] refactor auth")
+        app = TodoApp(db_path)
         async with app.run_test() as pilot:
             await pilot.pause()
             await pilot.press("i")
@@ -309,15 +329,15 @@ class TestTextualMarkupEscaping:
             assert isinstance(row.prompt, Text)
             assert "[WIP] refactor auth" in str(row.prompt)
 
-    async def test_filter_bar_keeps_bracketed_search(self, db_path: Path) -> None:
-        from todo.adapters.sqlite_storage import SqliteStorage
+    async def test_filter_bar_keeps_bracketed_search(
+        self, items: SqliteItemStore, db_path: Path
+    ) -> None:
         from todo.application.commands import add_todo
         from todo.tui.app import TodoApp
         from todo.tui.list_view import TodoListView
 
-        storage = SqliteStorage(db_path)
-        add_todo(storage, "plain")
-        app = TodoApp(storage=storage)
+        add_todo(items, "plain")
+        app = TodoApp(db_path)
         async with app.run_test() as pilot:
             await pilot.pause()
             view = app.query_one(TodoListView)
@@ -339,14 +359,14 @@ class TestBackslashAndLiteralHints:
         for hostile in (r"C:\Users\alice", r"a\[b] c", "back\\\\slash", r"\needle"):
             assert Content.from_markup(escape_markup(hostile)).plain == hostile
 
-    async def test_windows_path_title_renders_once(self, db_path: Path) -> None:
-        from todo.adapters.sqlite_storage import SqliteStorage
+    async def test_windows_path_title_renders_once(
+        self, items: SqliteItemStore, db_path: Path
+    ) -> None:
         from todo.application.commands import add_todo
         from todo.tui.app import TodoApp
 
-        storage = SqliteStorage(db_path)
-        add_todo(storage, r"Sync C:\Users\alice\notes", tags=[r"win\path"])
-        app = TodoApp(storage=storage)
+        add_todo(items, r"Sync C:\Users\alice\notes", tags=[r"win\path"])
+        app = TodoApp(db_path)
         async with app.run_test() as pilot:
             await pilot.pause()
             title = str(app.query_one("#detail-title", Static).render())
@@ -355,16 +375,16 @@ class TestBackslashAndLiteralHints:
             assert r"\\Users" not in title
             assert r"win\path" in meta
 
-    async def test_confirm_dialog_shows_key_hints(self, db_path: Path) -> None:
+    async def test_confirm_dialog_shows_key_hints(
+        self, items: SqliteItemStore, db_path: Path
+    ) -> None:
         """The app's own literal '[y] Yes   [n] No' hint was being eaten as
         markup, so the user saw no key labels at all."""
-        from todo.adapters.sqlite_storage import SqliteStorage
         from todo.application.commands import add_todo
         from todo.tui.app import TodoApp
 
-        storage = SqliteStorage(db_path)
-        add_todo(storage, "item")
-        app = TodoApp(storage=storage)
+        add_todo(items, "item")
+        app = TodoApp(db_path)
         async with app.run_test() as pilot:
             await pilot.pause()
             await pilot.press("x")

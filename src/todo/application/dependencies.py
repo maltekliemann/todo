@@ -10,7 +10,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from todo.application.contracts.storage import StorageProtocol
+from todo.application.contracts.dependency_store import DependencyStore
+from todo.application.contracts.item_store import ItemStore
 from todo.domain.dependency_graph import DependencyGraph
 from todo.domain.item_id import ItemId
 
@@ -21,10 +22,19 @@ class Dependencies:
     done_ids: frozenset[ItemId]
 
     @classmethod
-    def load(cls, storage: StorageProtocol) -> Dependencies:
+    def load(cls, items: ItemStore, dependencies: DependencyStore) -> Dependencies:
+        """Every half at once: whether an item is held up is a question
+        about the edges, about which items still exist, and about what is
+        finished — and no one store can answer it alone.
+
+        The graph is read as it stands for the items that are there. An
+        item and the edges that named it are deleted by two separate
+        writes, so the stored edges can outlive the item; read this way
+        they mean nothing, which is exactly right.
+        """
         return cls(
-            graph=DependencyGraph(frozenset(storage.dependency_edges())),
-            done_ids=frozenset(storage.done_ids()),
+            graph=dependencies.load().restricted_to(items.all_ids()),
+            done_ids=items.done_ids(),
         )
 
     def blockers_of(self, item_id: ItemId) -> list[ItemId]:

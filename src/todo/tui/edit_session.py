@@ -16,7 +16,8 @@ from textual.app import SuspendNotSupported
 from textual.widget import Widget
 
 from todo.application.commands import CompletionResult
-from todo.application.contracts.storage import StorageProtocol
+from todo.application.contracts.dependency_store import DependencyStore
+from todo.application.contracts.item_store import ItemStore
 from todo.domain.item_id import ItemId
 from todo.domain.todo_item import TodoItem
 from todo.exceptions import TodoError
@@ -27,9 +28,12 @@ from todo.tui.render import escape_markup
 class EditorSession:
     """One $EDITOR round trip, driven by the widget that owns the screen."""
 
-    def __init__(self, view: Widget, storage: StorageProtocol) -> None:
+    def __init__(
+        self, view: Widget, items: ItemStore, dependencies: DependencyStore
+    ) -> None:
         self._view = view
-        self._storage = storage
+        self._items = items
+        self._dependencies = dependencies
 
     def run(self, item: TodoItem) -> CompletionResult | None:
         """Edit an item's body in $EDITOR. Returns the result of a real
@@ -121,7 +125,7 @@ class EditorSession:
             return None
 
         try:
-            result = apply_body_edit(self._storage, item_id, edited)
+            result = apply_body_edit(self._items, self._dependencies, item_id, edited)
         except (ValueError, TodoError) as exc:
             self._error(
                 f"Edit rejected: {escape_markup(str(exc))} — "

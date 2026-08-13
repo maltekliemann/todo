@@ -4,12 +4,11 @@ from __future__ import annotations
 
 
 class Tag(str):
-    """A single-line, non-empty, comma-free label.
+    """A single-line, non-empty label.
 
-    The comma rule is not taste: tags are stored comma-joined, so a tag
-    containing one cannot round-trip — it would come back as two phantom
-    tags. Rejecting it is the only way to keep the stored form and the
-    parsed form the same.
+    Whitespace runs collapse to single spaces, so a tag is the same tag
+    however it was typed. That is the whole of it: what a tag may contain
+    is not a question anything outside the domain gets a say in.
     """
 
     __slots__ = ()
@@ -18,6 +17,4 @@ class Tag(str):
         normalized = " ".join(value.split())
         if not normalized:
             raise ValueError("Tag cannot be empty.")
-        if "," in normalized:
-            raise ValueError(f"Tag '{normalized}' contains a comma; use separate tags.")
         return super().__new__(cls, normalized)

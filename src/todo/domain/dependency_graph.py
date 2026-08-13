@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Container
+from collections.abc import Container, Iterable
 from dataclasses import dataclass
 
 from todo.domain.item_id import ItemId
@@ -56,6 +56,38 @@ class DependencyGraph:
         if self._reaches(blocked, blocker):
             raise DependencyError("Adding this blocker would create a cycle.")
         return DependencyGraph(self.edges | {(blocker, blocked)})
+
+    def restricted_to(self, item_ids: Container[ItemId]) -> DependencyGraph:
+        """This graph as it stands for those items.
+
+        A dependency between items where one of them does not exist is
+        not a dependency — there is nothing left to wait for. It cannot
+        be otherwise: an edge names two items and the graph cannot write
+        them, so an item can always vanish out from under an edge, and a
+        graph that took such an edge at face value would report a blocker
+        nobody can ever finish.
+
+        This is what makes the gap legal. Deleting an item and pruning
+        the edges that named it are two writes, so between them the
+        stored edges say something that is no longer true. Read through
+        here, that state means what it should, and the pruning is
+        housekeeping rather than the thing correctness rests on.
+        """
+        return DependencyGraph(
+            frozenset(
+                (blocker, blocked)
+                for blocker, blocked in self.edges
+                if blocker in item_ids and blocked in item_ids
+            )
+        )
+
+    def without_edges(self, edges: Iterable[Edge]) -> DependencyGraph:
+        """This graph less those edges.
+
+        Nothing to check: taking a dependency away cannot close a loop,
+        and an edge that was not there was already not there.
+        """
+        return DependencyGraph(self.edges - frozenset(edges))
 
     def blockers_of(self, item_id: ItemId) -> list[ItemId]:
         """What this item waits on."""

@@ -1,5 +1,6 @@
-"""Titles are single-line and tags are comma-free — enforced at the
-application boundary so every storage/render format can rely on it."""
+"""Titles are single-line and tags collapse their whitespace — enforced
+at the application boundary so every storage/render format can rely on
+it."""
 
 from __future__ import annotations
 
@@ -8,19 +9,24 @@ import json
 import pytest
 from click.testing import CliRunner
 
-from todo.adapters.sqlite_storage import SqliteStorage
+from todo.adapters.sqlite_dependency_store import SqliteDependencyStore
+from todo.adapters.sqlite_item_store import SqliteItemStore
+from todo.adapters.sqlite_project_log_store import SqliteProjectLogStore
+from todo.adapters.sqlite_project_store import SqliteProjectStore
 from todo.application.commands import add_todo, edit_todo
 from todo.infra.cli.main import main
 
 
 class TestTitleNormalization:
-    def test_newlines_collapsed_on_add(self, storage: SqliteStorage) -> None:
-        item = add_todo(storage, "line one\nline two\r\nline three")
+    def test_newlines_collapsed_on_add(self, items: SqliteItemStore) -> None:
+        item = add_todo(items, "line one\nline two\r\nline three")
         assert item.title == "line one line two line three"
 
-    def test_newlines_collapsed_on_edit(self, storage: SqliteStorage) -> None:
-        add_todo(storage, "ok")
-        result = edit_todo(storage, 1, title="new\ntitle")
+    def test_newlines_collapsed_on_edit(
+        self, items: SqliteItemStore, dependencies: SqliteDependencyStore
+    ) -> None:
+        add_todo(items, "ok")
+        result = edit_todo(items, dependencies, 1, title="new\ntitle")
         assert result.item.title == "new title"
 
     def test_cli_add_multiline_title(self, cli: CliRunner) -> None:
@@ -29,11 +35,13 @@ class TestTitleNormalization:
         assert "\n" not in data["title"]
         assert data["title"] == "Fix login see ticket 42"
 
-    def test_empty_title_rejected(self, storage: SqliteStorage) -> None:
+    def test_empty_title_rejected(self, items: SqliteItemStore) -> None:
         with pytest.raises(ValueError, match="[Tt]itle"):
-            add_todo(storage, "   \n  ")
+            add_todo(items, "   \n  ")
 
-    def test_plain_list_one_line_per_item(self, cli: CliRunner) -> None:
+    def test_plain_list_one_line_per_item(
+        self, items: SqliteItemStore, cli: CliRunner
+    ) -> None:
         cli.invoke(main, ["add", "multi\nline"])
         cli.invoke(main, ["add", "single"])
         result = cli.invoke(main, ["list"])
@@ -48,22 +56,26 @@ class TestTitleNormalization:
 
 
 class TestTagValidation:
-    def test_comma_tag_rejected_on_add(self, storage: SqliteStorage) -> None:
-        with pytest.raises(ValueError, match="comma"):
-            add_todo(storage, "Task", tags=frozenset({"a,b"}))
+    def test_a_comma_tag_round_trips(self, items: SqliteItemStore) -> None:
+        """Tags are rows, so a comma is just a character in one."""
+        item = add_todo(items, "Task", tags=frozenset({"a,b"}))
+        assert item.tags == frozenset({"a,b"})
+        assert items.get(item.id).tags == frozenset({"a,b"})
 
-    def test_comma_tag_rejected_on_edit(self, storage: SqliteStorage) -> None:
-        add_todo(storage, "Task")
-        with pytest.raises(ValueError, match="comma"):
-            edit_todo(storage, 1, tags=frozenset({"x,y"}))
+    def test_a_comma_tag_round_trips_through_edit(
+        self, items: SqliteItemStore, dependencies: SqliteDependencyStore
+    ) -> None:
+        add_todo(items, "Task")
+        result = edit_todo(items, dependencies, 1, tags=frozenset({"x,y"}))
+        assert result.item.tags == frozenset({"x,y"})
 
-    def test_cli_comma_tag_errors_cleanly(self, cli: CliRunner) -> None:
-        result = cli.invoke(main, ["add", "Task", "-t", "a,b"])
-        assert result.exit_code == 1
-        assert "comma" in result.stderr
+    def test_cli_accepts_a_comma_tag(self, cli: CliRunner) -> None:
+        result = cli.invoke(main, ["add", "Task", "-t", "a,b", "--json"])
+        assert result.exit_code == 0
+        assert json.loads(result.output)["tags"] == ["a,b"]
 
-    def test_whitespace_tag_normalized(self, storage: SqliteStorage) -> None:
-        item = add_todo(storage, "Task", tags=frozenset({"  spaced  ", "ok"}))
+    def test_whitespace_tag_normalized(self, items: SqliteItemStore) -> None:
+        item = add_todo(items, "Task", tags=frozenset({"  spaced  ", "ok"}))
         assert item.tags == frozenset({"spaced", "ok"})
 
     def test_no_phantom_tags_roundtrip(self, cli: CliRunner) -> None:
@@ -74,25 +86,27 @@ class TestTagValidation:
 
 
 class TestProjectNameNormalization:
-    def test_multiline_project_name_collapsed(self, storage: SqliteStorage) -> None:
+    def test_multiline_project_name_collapsed(
+        self, projects: SqliteProjectStore
+    ) -> None:
         from todo.application.commands import add_project
 
-        project = add_project(storage, "sprint\n42")
+        project = add_project(projects, "sprint\n42")
         assert project.name == "sprint 42"
 
-    def test_project_name_stripped(self, storage: SqliteStorage) -> None:
+    def test_project_name_stripped(self, projects: SqliteProjectStore) -> None:
         from todo.application.commands import add_project
         from todo.exceptions import DuplicateProjectError
 
-        add_project(storage, "work")
+        add_project(projects, "work")
         with pytest.raises(DuplicateProjectError):
-            add_project(storage, "  work ")
+            add_project(projects, "  work ")
 
-    def test_rename_normalized_too(self, storage: SqliteStorage) -> None:
+    def test_rename_normalized_too(self, projects: SqliteProjectStore) -> None:
         from todo.application.commands import add_project, edit_project
 
-        project = add_project(storage, "old")
-        renamed = edit_project(storage, project.id, name="new\nname")
+        project = add_project(projects, "old")
+        renamed = edit_project(projects, project.id, name="new\nname")
         assert renamed.name == "new name"
 
 
@@ -127,76 +141,86 @@ class TestEmptyProjectRef:
 
 
 class TestTagDeduplication:
-    def test_duplicate_tags_deduped_on_add(self, storage: SqliteStorage) -> None:
-        item = add_todo(storage, "x", tags=frozenset({"a", "a", "b", " a "}))
+    def test_duplicate_tags_deduped_on_add(self, items: SqliteItemStore) -> None:
+        item = add_todo(items, "x", tags=frozenset({"a", "a", "b", " a "}))
         assert item.tags == frozenset({"a", "b"})
 
-    def test_duplicate_tags_deduped_on_edit(self, storage: SqliteStorage) -> None:
-        add_todo(storage, "x")
-        result = edit_todo(storage, 1, tags=frozenset({"dup", "dup"}))
+    def test_duplicate_tags_deduped_on_edit(
+        self, items: SqliteItemStore, dependencies: SqliteDependencyStore
+    ) -> None:
+        add_todo(items, "x")
+        result = edit_todo(items, dependencies, 1, tags=frozenset({"dup", "dup"}))
         assert result.item.tags == frozenset({"dup"})
 
     def test_tag_counts_count_items_not_occurrences(
-        self, storage: SqliteStorage
+        self, items: SqliteItemStore
     ) -> None:
         from todo.application.queries import count_tags
 
-        add_todo(storage, "x", tags=frozenset({"a", "a"}))
-        assert count_tags(storage) == [("a", 1)]
+        add_todo(items, "x", tags=frozenset({"a", "a"}))
+        assert count_tags(items) == [("a", 1)]
 
 
 class TestProjectDescriptionNormalization:
     def test_multiline_description_collapsed_on_add(
-        self, storage: SqliteStorage
+        self, projects: SqliteProjectStore
     ) -> None:
         """project list is one row per project — a newline in the
         description would break that contract just like one in the name."""
         from todo.application.commands import add_project
 
-        project = add_project(storage, "p", description="line1\nline2")
+        project = add_project(projects, "p", description="line1\nline2")
         assert project.description == "line1 line2"
 
     def test_multiline_description_collapsed_on_edit(
-        self, storage: SqliteStorage
+        self, projects: SqliteProjectStore
     ) -> None:
         from todo.application.commands import add_project, edit_project
 
-        project = add_project(storage, "p")
-        updated = edit_project(storage, project.id, description="a\n\nb")
+        project = add_project(projects, "p")
+        updated = edit_project(projects, project.id, description="a\n\nb")
         assert updated.description == "a b"
 
-    def test_empty_description_still_allowed(self, storage: SqliteStorage) -> None:
+    def test_empty_description_still_allowed(
+        self, projects: SqliteProjectStore
+    ) -> None:
         from todo.application.commands import add_project
 
-        assert add_project(storage, "p", description="").description == ""
+        assert add_project(projects, "p", description="").description == ""
 
 
 class TestProjectLogNormalization:
-    def test_empty_log_body_rejected(self, storage: SqliteStorage) -> None:
+    def test_empty_log_body_rejected(
+        self, projects: SqliteProjectStore, log: SqliteProjectLogStore
+    ) -> None:
         """An empty update would render as a dangling timestamp-only log
         line the user can never remove."""
         from todo.application.commands import add_project, log_project_update
 
-        project = add_project(storage, "p")
+        project = add_project(projects, "p")
         with pytest.raises(ValueError, match="[Bb]ody|[Uu]pdate"):
-            log_project_update(storage, project.id, "   ")
+            log_project_update(log, project.id, "   ")
 
-    def test_multiline_log_body_collapsed(self, storage: SqliteStorage) -> None:
+    def test_multiline_log_body_collapsed(
+        self, projects: SqliteProjectStore, log: SqliteProjectLogStore
+    ) -> None:
         from todo.application.commands import add_project, log_project_update
 
-        project = add_project(storage, "p")
-        update = log_project_update(storage, project.id, "shipped\nthe thing")
+        project = add_project(projects, "p")
+        update = log_project_update(log, project.id, "shipped\nthe thing")
         assert update.body == "shipped the thing"
 
-    def test_cli_empty_log_errors_cleanly(self, cli: CliRunner) -> None:
+    def test_cli_empty_log_errors_cleanly(
+        self, log: SqliteProjectLogStore, cli: CliRunner
+    ) -> None:
         cli.invoke(main, ["project", "add", "p"])
-        result = cli.invoke(main, ["project", "log", "p", "   "])
+        result = cli.invoke(main, ["project", "log", "add", "p", "   "])
         assert result.exit_code != 0
 
 
 class TestTagFilterNormalization:
     def test_cli_tag_filter_with_incidental_whitespace_matches(
-        self, cli: CliRunner
+        self, items: SqliteItemStore, cli: CliRunner
     ) -> None:
         """Write path strips tags before storing; the read path must apply
         the same normalization or the same input silently matches nothing."""
@@ -205,13 +229,15 @@ class TestTagFilterNormalization:
         assert "x" in result.output
         assert "No items." not in result.output
 
-    def test_query_layer_normalizes_filter_tags(self, storage: SqliteStorage) -> None:
+    def test_query_layer_normalizes_filter_tags(
+        self, items: SqliteItemStore, dependencies: SqliteDependencyStore
+    ) -> None:
         from todo.application.queries import list_todos
 
-        add_todo(storage, "x", tags=frozenset({"foo"}))
-        assert [i.title for i in list_todos(storage, tags=frozenset({" foo "}))] == [
-            "x"
-        ]
+        add_todo(items, "x", tags=frozenset({"foo"}))
+        assert [
+            i.title for i in list_todos(items, dependencies, tags=frozenset({" foo "}))
+        ] == ["x"]
 
 
 class TestTagFilterValidation:
@@ -228,22 +254,22 @@ class TestTagFilterValidation:
             assert result.exit_code == 1
             assert "Two" not in result.output
 
-    def test_comma_tag_filter_errors_like_add_does(self, cli: CliRunner) -> None:
-        cli.invoke(main, ["add", "one", "-t", "a", "-t", "b", "-t", "c"])
+    def test_a_comma_tag_filter_matches_that_exact_tag(self, cli: CliRunner) -> None:
+        """It is one tag, not two: an item tagged 'a' and 'b' is not it."""
+        cli.invoke(main, ["add", "separate", "-t", "a", "-t", "b"])
+        cli.invoke(main, ["add", "joined", "-t", "a,b"])
         result = cli.invoke(main, ["list", "-t", "a,b"])
-        assert result.exit_code == 1
-        assert "comma" in (result.output + result.stderr)
+        assert "joined" in result.output
+        assert "separate" not in result.output
 
-    def test_query_layer_rejects_blank_and_comma_filters(
-        self, storage: SqliteStorage
+    def test_query_layer_rejects_a_blank_filter(
+        self, items: SqliteItemStore, dependencies: SqliteDependencyStore
     ) -> None:
         from todo.application.queries import list_todos
 
-        add_todo(storage, "x", tags=frozenset({"a"}))
+        add_todo(items, "x", tags=frozenset({"a"}))
         with pytest.raises(ValueError, match="[Tt]ag"):
-            list_todos(storage, tags=frozenset({" "}))
-        with pytest.raises(ValueError, match="comma"):
-            list_todos(storage, tags=frozenset({"a,b"}))
+            list_todos(items, dependencies, tags=frozenset({" "}))
 
 
 class TestParseSinceNegative:
@@ -276,12 +302,14 @@ class TestProjectRefNormalization:
         result = cli.invoke(main, ["add", "x", "--project", "myproj "])
         assert result.exit_code == 0
 
-    def test_padded_numeric_ref_resolves_as_id(self, storage: SqliteStorage) -> None:
+    def test_padded_numeric_ref_resolves_as_id(
+        self, projects: SqliteProjectStore
+    ) -> None:
         from todo.application.commands import add_project
         from todo.application.queries import resolve_project
 
-        project = add_project(storage, "anything")
-        assert resolve_project(storage, f" {project.id} ").id == project.id
+        project = add_project(projects, "anything")
+        assert resolve_project(projects, f" {project.id} ").id == project.id
 
 
 class TestMatchingSemantics:
@@ -315,25 +343,10 @@ class TestMatchingSemantics:
         assert "unrelated" not in result.output
 
 
-class TestTagColumnCodec:
-    """The comma-joined column is the adapter's encoding, and the codec
-    that reads it lives with the schema that chose it."""
-
-    def test_decode_drops_blank_segments_and_normalizes(self) -> None:
-        from todo.adapters.tag_column import decode_tags
-
-        assert decode_tags(" a , ,b, a ") == ["a", "b", "a"]
-        assert decode_tags("") == []
-
-    def test_encode_decode_round_trips(self) -> None:
-        from todo.adapters.tag_column import decode_tags, encode_tags
-        from todo.domain.tag import Tag
-
-        tags = frozenset({Tag("work"), Tag("two words")})
-        assert frozenset(decode_tags(encode_tags(tags))) == tags
-        # Sorted on the way out, so the stored string is a function of the
-        # tags and not of iteration order.
-        assert encode_tags(tags) == "two words,work"
+class TestTagInputConvention:
+    """One box, commas between, is the TUI's way of taking several tags.
+    It is a convention of that widget and of nothing else — the store
+    keeps tags as rows, and a tag may contain a comma."""
 
     def test_the_tui_field_splits_the_same_way(self) -> None:
         """Different layer, same convention: one box, commas between."""
@@ -354,25 +367,27 @@ class TestTagWritePathParity:
         data = json.loads(cli.invoke(main, ["show", "1", "--json"]).output)
         assert data["tags"] == ["urgent", "work"]  # nothing lost (a set, sorted)
 
-    def test_empty_tag_rejected_on_add(self, storage: SqliteStorage) -> None:
+    def test_empty_tag_rejected_on_add(self, items: SqliteItemStore) -> None:
         with pytest.raises(ValueError, match="[Tt]ag"):
-            add_todo(storage, "x", tags=frozenset({"ok", "  "}))
+            add_todo(items, "x", tags=frozenset({"ok", "  "}))
 
     def test_clearing_tags_still_possible_with_empty_list(
-        self, storage: SqliteStorage
+        self, items: SqliteItemStore, dependencies: SqliteDependencyStore
     ) -> None:
         """An explicit empty list still clears — only blank strings error."""
         from todo.application.commands import edit_todo
 
-        add_todo(storage, "x", tags=frozenset({"work"}))
-        assert edit_todo(storage, 1, tags=frozenset()).item.tags == frozenset()
+        add_todo(items, "x", tags=frozenset({"work"}))
+        assert (
+            edit_todo(items, dependencies, 1, tags=frozenset()).item.tags == frozenset()
+        )
 
     def test_tag_with_newline_normalized_to_one_line(
-        self, storage: SqliteStorage
+        self, items: SqliteItemStore
     ) -> None:
         """Tags share the single_line contract of every other field, or
         plain output stops being one line per field."""
-        item = add_todo(storage, "x", tags=frozenset({"urgent\nreview"}))
+        item = add_todo(items, "x", tags=frozenset({"urgent\nreview"}))
         assert item.tags == frozenset({"urgent review"})
 
     def test_multiline_tag_keeps_plain_output_one_line(self, cli: CliRunner) -> None:
@@ -400,10 +415,10 @@ class TestTagClearSentinel:
         data = json.loads(cli.invoke(main, ["show", "1", "--json"]).output)
         assert data["tags"] == ["work"]
 
-    def test_none_is_a_reserved_tag_name(self, storage: SqliteStorage) -> None:
+    def test_none_is_a_reserved_tag_name(self, items: SqliteItemStore) -> None:
         """Reserved so a real tag can never be shadowed by the sentinel."""
         with pytest.raises(ValueError, match="reserved"):
-            add_todo(storage, "x", tags=frozenset({"none"}))
+            add_todo(items, "x", tags=frozenset({"none"}))
 
     def test_omitting_tag_flag_still_leaves_tags_untouched(
         self, cli: CliRunner
@@ -424,8 +439,7 @@ class TestTagFilterMatchesWritePath:
         result = cli.invoke(main, ["list", "-t", "deep  work"])
         assert "Task A" in result.output
 
-    def test_migration_form_matches_write_path_form(self) -> None:
-        from todo.adapters.sqlite_migrations import normalize_tag_string
-
-        assert normalize_tag_string("my  tag") == "my tag"
-        assert normalize_tag_string("a\tb, c") == "a b,c"
+    def test_stored_form_matches_write_path_form(self, items: SqliteItemStore) -> None:
+        """What comes back is what Tag made of what went in."""
+        item = add_todo(items, "x", tags=frozenset({"my  tag", "a\tb"}))
+        assert items.get(item.id).tags == frozenset({"my tag", "a b"})

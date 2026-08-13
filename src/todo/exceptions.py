@@ -32,3 +32,11 @@ class DuplicateProjectError(TodoError):
     def __init__(self, name: str) -> None:
         super().__init__(f"Project '{name}' already exists")
         self.name = name
+
+
+class UpdateNotFoundError(TodoError):
+    """Raised when a project log entry is not found."""
+
+    def __init__(self, update_id: int) -> None:
+        super().__init__(f"Log entry #{update_id} not found")
+        self.update_id = update_id

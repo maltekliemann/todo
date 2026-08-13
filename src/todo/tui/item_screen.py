@@ -24,10 +24,18 @@ from textual.widgets import Label, OptionList, Static
 from textual.widgets.option_list import Option
 
 from todo.application.commands import CompletionResult, edit_todo
-from todo.application.contracts.storage import StorageProtocol
+from todo.application.contracts.dependency_store import DependencyStore
+from todo.application.contracts.item_store import ItemStore
+from todo.application.contracts.project_store import ProjectStore
 from todo.application.dependencies import Dependencies
-from todo.application.queries import list_all_projects, show_todo
+from todo.application.queries import (
+    ProjectNames,
+    list_all_projects,
+    project_names,
+    show_todo,
+)
 from todo.domain.priority import Priority
+from todo.domain.project_id import ProjectId
 from todo.domain.status import Status
 from todo.domain.todo_item import TodoItem
 from todo.exceptions import NotFoundError, TodoError
@@ -64,7 +72,9 @@ def body_summary(body: str) -> str:
     return f"{lines} line{'' if lines == 1 else 's'}"
 
 
-def field_value(item: TodoItem, key: str, deps: Dependencies) -> str:
+def field_value(
+    item: TodoItem, key: str, deps: Dependencies, names: ProjectNames
+) -> str:
     """The current value of one field, as the row shows it."""
     if key == "title":
         return item.title
@@ -77,7 +87,7 @@ def field_value(item: TodoItem, key: str, deps: Dependencies) -> str:
     if key == "tags":
         return ", ".join(sorted(item.tags)) or EMPTY
     if key == "project":
-        return item.project.name if item.project else EMPTY
+        return names.get(item.project_id, EMPTY) if item.project_id else EMPTY
     if key == "blocked_by":
         return ", ".join(i.label for i in deps.blockers_of(item.id)) or EMPTY
     if key == "blocking":
@@ -103,9 +113,17 @@ class ItemScreen(ModalScreen[bool]):
 
     BINDINGS = [Binding("escape", "close", "Close")]
 
-    def __init__(self, storage: StorageProtocol, item: TodoItem) -> None:
+    def __init__(
+        self,
+        items: ItemStore,
+        dependencies: DependencyStore,
+        projects: ProjectStore,
+        item: TodoItem,
+    ) -> None:
         super().__init__()
-        self._storage = storage
+        self._items = items
+        self._dependencies = dependencies
+        self._projects = projects
         self._item = item
         self._changed = False
 
@@ -128,7 +146,8 @@ class ItemScreen(ModalScreen[bool]):
     def _show_item(self) -> None:
         item = self._item
         # Reloaded with the item: an edge changed by the picker has to show.
-        deps = Dependencies.load(self._storage)
+        deps = Dependencies.load(self._items, self._dependencies)
+        names = project_names(self._projects)
 
         heading = Text(item.id.label, style="bold")
         heading.append(
@@ -146,7 +165,7 @@ class ItemScreen(ModalScreen[bool]):
         highlighted = options.highlighted
         options.clear_options()
         for key, label in FIELDS:
-            options.add_option(Option(_row(label, field_value(item, key, deps))))
+            options.add_option(Option(_row(label, field_value(item, key, deps, names))))
         options.highlighted = 0 if highlighted is None else highlighted
 
         self.query_one("#item-body", Static).update(
@@ -170,7 +189,7 @@ class ItemScreen(ModalScreen[bool]):
         """Re-read the item after a write, so every row shows what is
         actually stored rather than what we think we just set."""
         try:
-            self._item = show_todo(self._storage, self._item.id)
+            self._item = show_todo(self._items, self._item.id)
         except NotFoundError:
             # Deleted underneath us: there is nothing left to show, and
             # the list needs to hear about it.
@@ -252,19 +271,31 @@ class ItemScreen(ModalScreen[bool]):
     def _save_title(self, value: str | None) -> None:
         if value is None:
             return
-        self._apply(lambda: edit_todo(self._storage, self._item.id, title=value))
+        self._apply(
+            lambda: edit_todo(
+                self._items, self._dependencies, self._item.id, title=value
+            )
+        )
 
     def _save_priority(self, value: str | None) -> None:
         if value is None:
             return
         priority = Priority.from_string(value)
-        self._apply(lambda: edit_todo(self._storage, self._item.id, priority=priority))
+        self._apply(
+            lambda: edit_todo(
+                self._items, self._dependencies, self._item.id, priority=priority
+            )
+        )
 
     def _save_status(self, value: str | None) -> None:
         if value is None:
             return
         status = Status.from_string(value)
-        self._apply(lambda: edit_todo(self._storage, self._item.id, status=status))
+        self._apply(
+            lambda: edit_todo(
+                self._items, self._dependencies, self._item.id, status=status
+            )
+        )
 
     def _save_deadline(self, value: str | None) -> None:
         if value is None:
@@ -279,22 +310,28 @@ class ItemScreen(ModalScreen[bool]):
                 # never silently ignored.
                 self._show_message(f"Invalid date '{text}' — use YYYY-MM-DD")
                 return
-        self._apply(lambda: edit_todo(self._storage, self._item.id, deadline=deadline))
+        self._apply(
+            lambda: edit_todo(
+                self._items, self._dependencies, self._item.id, deadline=deadline
+            )
+        )
 
     def _save_tags(self, value: str | None) -> None:
         if value is None:
             return
         tags = parse_tag_input(value)
-        self._apply(lambda: edit_todo(self._storage, self._item.id, tags=tags))
+        self._apply(
+            lambda: edit_todo(self._items, self._dependencies, self._item.id, tags=tags)
+        )
 
     def _edit_project(self) -> None:
         try:
-            projects = list_all_projects(self._storage, include_archived=True)
+            projects = list_all_projects(self._projects, include_ended=True)
         except TodoError as exc:
             self._show_message(str(exc) or "Could not read the projects")
             return
         choices = [("", f"({EMPTY} none)")] + [(str(p.id), p.name) for p in projects]
-        current = str(self._item.project.id) if self._item.project else ""
+        current = str(self._item.project_id or "")
         self.app.push_screen(
             ChoicePrompt("Project", choices, current), self._save_project
         )
@@ -302,9 +339,11 @@ class ItemScreen(ModalScreen[bool]):
     def _save_project(self, value: str | None) -> None:
         if value is None:
             return
-        project_id = int(value) if value else None
+        project_id = ProjectId(int(value)) if value else None
         self._apply(
-            lambda: edit_todo(self._storage, self._item.id, project_id=project_id)
+            lambda: edit_todo(
+                self._items, self._dependencies, self._item.id, project_id=project_id
+            )
         )
 
     def _edit_dependencies(self, relation: Relation) -> None:
@@ -320,10 +359,13 @@ class ItemScreen(ModalScreen[bool]):
                 self._changed = True
                 self._reload()
 
-        self.app.push_screen(BlockDialog(self._storage, self._item.id, relation), after)
+        self.app.push_screen(
+            BlockDialog(self._items, self._dependencies, self._item.id, relation),
+            after,
+        )
 
     def _edit_body(self) -> None:
-        result = EditorSession(self, self._storage).run(self._item)
+        result = EditorSession(self, self._items, self._dependencies).run(self._item)
         if result is None:
             # Cancelled, unchanged, or already reported by the session.
             return

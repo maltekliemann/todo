@@ -9,6 +9,8 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 
 from todo.adapters.output import RichOutput
+from todo.adapters.sqlite_item_store import SqliteItemStore
+from todo.adapters.sqlite_project_store import SqliteProjectStore
 from todo.application.dependencies import Dependencies
 from todo.application.queries import ProjectDetail, ProjectSummary
 from todo.domain.deadline import Deadline
@@ -19,9 +21,12 @@ from todo.domain.priority import Priority
 from todo.domain.project import Project
 from todo.domain.project_id import ProjectId
 from todo.domain.project_name import ProjectName
+from todo.domain.project_status import ProjectStatus
 from todo.domain.project_update import ProjectUpdate
 from todo.domain.status import Status
 from todo.domain.todo_item import TodoItem
+from todo.domain.update_body import UpdateBody
+from todo.domain.update_id import UpdateId
 
 _NOW = datetime.now(tz=timezone.utc)
 
@@ -56,7 +61,7 @@ def _project(**overrides: object) -> Project:
         "id": ProjectId(1),
         "name": ProjectName("infra"),
         "description": Description("Infra work"),
-        "archived": False,
+        "status": ProjectStatus.IN_PROGRESS,
         "created_at": _NOW,
         "updated_at": _NOW,
     }
@@ -71,7 +76,9 @@ def rich_out(monkeypatch: pytest.MonkeyPatch) -> RichOutput:
 
 
 class TestRichLists:
-    def test_empty_list(self, rich_out: RichOutput, capsys) -> None:
+    def test_empty_list(
+        self, items: SqliteItemStore, rich_out: RichOutput, capsys
+    ) -> None:
         rich_out.print_list([], _deps())
         assert "No items" in capsys.readouterr().out
 
@@ -113,7 +120,7 @@ class TestRichLists:
             done_at=_NOW,
             status=Status.DONE,
         )
-        rich_out.print_item(item, _deps((7, 1), (1, 9)))
+        rich_out.print_item(item, _deps((7, 1), (1, 9)), {})
         out = capsys.readouterr().out
         assert "Everything" in out
         assert "Tags: a, b" in out
@@ -128,7 +135,9 @@ class TestRichLists:
         assert "Shipped" in out
         assert "1 item completed" in out
 
-    def test_summary_empty(self, rich_out: RichOutput, capsys) -> None:
+    def test_summary_empty(
+        self, items: SqliteItemStore, rich_out: RichOutput, capsys
+    ) -> None:
         rich_out.print_summary(_NOW - timedelta(days=7), [], _deps())
         assert "No items completed" in capsys.readouterr().out
 
@@ -170,17 +179,23 @@ class TestRichTagsProjects:
 
     def test_projects(self, rich_out: RichOutput, capsys) -> None:
         active = ProjectSummary(project=_project(), open_count=2, done_count=1)
-        archived = ProjectSummary(
-            project=_project(id=ProjectId(2), name=ProjectName("old"), archived=True),
+        finished = ProjectSummary(
+            project=_project(
+                id=ProjectId(2),
+                name=ProjectName("old"),
+                status=ProjectStatus.DONE,
+            ),
             open_count=0,
             done_count=5,
         )
-        rich_out.print_projects([active, archived])
+        rich_out.print_projects([active, finished])
         out = capsys.readouterr().out
         assert "infra" in out
-        assert "archived" in out
+        assert "done" in out
 
-    def test_projects_empty(self, rich_out: RichOutput, capsys) -> None:
+    def test_projects_empty(
+        self, projects: SqliteProjectStore, rich_out: RichOutput, capsys
+    ) -> None:
         rich_out.print_projects([])
         assert "No projects" in capsys.readouterr().out
 
@@ -190,10 +205,17 @@ class TestRichTagsProjects:
             _item(id=ItemId(2), title="Done one", status=Status.DONE, done_at=_NOW),
         ]
         updates = [
-            ProjectUpdate(id=1, project_id=1, body="Kickoff done", created_at=_NOW)
+            ProjectUpdate(
+                id=UpdateId(1),
+                project_id=ProjectId(1),
+                body=UpdateBody("Kickoff done"),
+                created_at=_NOW,
+            )
         ]
         rich_out.print_project(
-            ProjectDetail(project=_project(), items=items, updates=updates), _deps()
+            ProjectDetail(project=_project(), items=items, updates=updates),
+            _deps(),
+            {},
         )
         out = capsys.readouterr().out
         assert "infra" in out
@@ -201,11 +223,13 @@ class TestRichTagsProjects:
         assert "Infra work" in out
         assert "Kickoff done" in out
 
-    def test_json_helpers(self, rich_out: RichOutput, capsys) -> None:
+    def test_json_helpers(
+        self, items: SqliteItemStore, rich_out: RichOutput, capsys
+    ) -> None:
         import json as jsonlib
 
         detail = ProjectDetail(project=_project(), items=[_item()], updates=[])
-        rich_out.print_json_project(detail, _deps())
+        rich_out.print_json_project(detail, _deps(), {})
         data = jsonlib.loads(capsys.readouterr().out)
         assert data["name"] == "infra"
         assert len(data["items"]) == 1
