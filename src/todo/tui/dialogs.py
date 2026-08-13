@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date
 
 from rich.text import Text
-from textual import on
+from textual import events, on
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Vertical, VerticalScroll
@@ -305,21 +305,18 @@ class BlockDialog(ModalScreen[bool]):
     Typing narrows by title or id — nobody should have to remember the
     number of the thing that blocks them.
 
+    It is a menu you can search from: the list holds focus from the moment
+    it opens, with a row under the cursor. ↑↓ walk it, Enter chooses the
+    highlighted row, and typing filters in place. The search box displays
+    the filter and never takes focus — typing is a way to narrow the menu,
+    not the way into it.
+
     Choosing applies the change and closes, as it always has. The command
     call happens here so validation, cycle and storage errors show inline
     instead of closing the dialog on the user's work.
-
-    Nothing is highlighted until the user narrows or moves: this dialog is
-    also how you look at what an item waits on, and a reflexive Return over
-    a pre-selected first row deleted the very relation you opened it to
-    read.
     """
 
-    BINDINGS = [
-        Binding("escape", "cancel", "Cancel"),
-        Binding("down", "highlight_next", show=False),
-        Binding("up", "highlight_previous", show=False),
-    ]
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
     def __init__(self, storage: StorageProtocol, blocked_id: int) -> None:
         super().__init__()
@@ -332,14 +329,43 @@ class BlockDialog(ModalScreen[bool]):
     def compose(self) -> ComposeResult:
         with Vertical(id="block-container"):
             yield Label(f"What does #{self._blocked_id} wait on?", id="block-title")
-            yield Input(id="block-search", placeholder="Search by title or id")
+            search = Input(id="block-search", placeholder="Type to filter")
+            # A readout of the filter, not a destination: focus belongs to
+            # the menu, and Tab or a stray click must not move it here.
+            search.can_focus = False
+            yield search
             yield OptionList(id="block-options")
             yield Label("", id="block-error")
-            yield Label("Enter toggles · ↑↓ moves · Esc closes", id="block-hint")
+            yield Label(
+                "↑↓ move · Enter choose · type to filter · Esc close", id="block-hint"
+            )
 
     def on_mount(self) -> None:
         self._load()
-        self.query_one("#block-search", Input).focus()
+        self.query_one("#block-options", OptionList).focus()
+
+    def on_key(self, event: events.Key) -> None:
+        """Typing filters the menu without leaving it.
+
+        The list has focus, so printable keys arrive here unclaimed; they
+        edit the filter instead of falling on the floor. Keys the list
+        binds (↑↓, Enter, Home/End, page keys) never reach this handler.
+        """
+        if event.key == "backspace":
+            self._set_query(self._query[:-1])
+            event.stop()
+        elif event.character is not None and event.character.isprintable():
+            self._set_query(self._query + event.character)
+            event.stop()
+
+    @property
+    def _query(self) -> str:
+        return self.query_one("#block-search", Input).value
+
+    def _set_query(self, value: str) -> None:
+        # Writing the Input fires Input.Changed, which repopulates: one
+        # path from filter text to rows, whoever changed it.
+        self.query_one("#block-search", Input).value = value
 
     def _load(self) -> None:
         """Read the candidates, degrading a storage failure to the inline
@@ -381,8 +407,8 @@ class BlockDialog(ModalScreen[bool]):
         # A stale rejection under a fresh candidate reads as "this one is
         # no good either".
         self._clear_error()
-        # Only a narrowed list is safe to pre-select; see the class docstring.
-        options.highlighted = 0 if (query and self._shown_ids) else None
+        # A menu always has a row under the cursor.
+        options.highlighted = 0 if self._shown_ids else None
 
     def _show_error(self, exc: Exception) -> None:
         # Error text can echo raw user input; never render it as markup.
@@ -402,10 +428,6 @@ class BlockDialog(ModalScreen[bool]):
 
     def action_highlight_previous(self) -> None:
         self.query_one("#block-options", OptionList).action_cursor_up()
-
-    @on(Input.Submitted, "#block-search")
-    def on_submit(self) -> None:
-        self._choose(self.query_one("#block-options", OptionList).highlighted)
 
     @on(OptionList.OptionSelected, "#block-options")
     def on_option_selected(self, event: OptionList.OptionSelected) -> None:

@@ -267,7 +267,6 @@ class TestBlockerPicker:
             await pilot.pause()
             options = self._options(app)
             assert options[0].startswith("✓"), options
-            await pilot.press("down")  # nothing is preselected, by design
             await pilot.press("enter")
             await pilot.pause()
             assert several.get(1).blocked_by == []
@@ -284,21 +283,59 @@ class TestBlockerPicker:
             assert options[0].startswith("✓")
             assert not any(o.startswith("✓") for o in options[1:])
 
-    async def test_bare_enter_changes_nothing(self, several: SqliteStorage) -> None:
-        """Opening the picker to look, then pressing Return, must not
-        commit whatever happens to be first — that silently destroyed the
-        relation the user opened the dialog to read."""
-        several.add_blocker(1, 3)
-        app = TodoApp(storage=several)
-        async with app.run_test(size=(100, 30)) as pilot:
-            await pilot.pause()
-            await pilot.press("b")
-            await pilot.pause()
-            await pilot.press("enter")
-            await pilot.pause()
-            assert several.get(1).blocked_by == [3]
+    async def test_the_list_has_focus_and_a_highlighted_row(
+        self, several: SqliteStorage
+    ) -> None:
+        """It is a menu: it opens on the list, with a row under the cursor.
+        Searching is a filter, never the way in."""
+        from textual.widgets import OptionList
 
-    async def test_bare_enter_creates_nothing(self, several: SqliteStorage) -> None:
+        app = TodoApp(storage=several)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("b")
+            await pilot.pause()
+            options = app.screen.query_one("#block-options", OptionList)
+            assert app.focused is options
+            assert options.highlighted == 0
+
+    async def test_the_search_box_never_takes_focus(
+        self, several: SqliteStorage
+    ) -> None:
+        from textual.widgets import OptionList
+
+        app = TodoApp(storage=several)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("b")
+            await pilot.pause()
+            for ch in "deploy":
+                await pilot.press(ch)
+            await pilot.pause()
+            assert app.focused is app.screen.query_one("#block-options", OptionList)
+            assert app.screen.query_one("#block-search", Input).value == "deploy"
+
+    async def test_arrows_walk_the_menu_without_typing(
+        self, several: SqliteStorage
+    ) -> None:
+        from textual.widgets import OptionList
+
+        app = TodoApp(storage=several)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("b")
+            await pilot.pause()
+            options = app.screen.query_one("#block-options", OptionList)
+            await pilot.press("down")
+            await pilot.pause()
+            assert options.highlighted == 1
+            await pilot.press("up")
+            await pilot.pause()
+            assert options.highlighted == 0
+
+    async def test_enter_chooses_the_highlighted_row_with_no_typing(
+        self, several: SqliteStorage
+    ) -> None:
         app = TodoApp(storage=several)
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
@@ -306,7 +343,23 @@ class TestBlockerPicker:
             await pilot.pause()
             await pilot.press("enter")
             await pilot.pause()
-            assert several.get(1).blocked_by == []
+            assert several.get(1).blocked_by == [2]
+
+    async def test_backspace_widens_the_filter(self, several: SqliteStorage) -> None:
+        app = TodoApp(storage=several)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("b")
+            await pilot.pause()
+            for ch in "deploy":
+                await pilot.press(ch)
+            await pilot.pause()
+            assert len(self._options(app)) == 2
+            for _ in range(6):
+                await pilot.press("backspace")
+            await pilot.pause()
+            assert len(self._options(app)) == 3
+            assert app.screen.query_one("#block-search", Input).value == ""
 
     async def test_an_exactly_typed_id_wins_over_a_title_match(
         self, db_path: Path
@@ -1587,8 +1640,7 @@ class TestBlocking:
             await pilot.pause()
             await pilot.press("b")
             await pilot.pause()
-            await pilot.press("down")  # #2 is marked and sorted first
-            await pilot.press("enter")
+            await pilot.press("enter")  # #2 is marked and sorted first
             await pilot.pause()
 
             item = seeded_storage.get(1)
