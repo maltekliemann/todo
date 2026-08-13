@@ -9,13 +9,13 @@ from todo.domain.priority import Priority
 from todo.domain.project import Project
 from todo.domain.project_id import ProjectId
 from todo.domain.project_name import ProjectName
-from todo.domain.project_status import ProjectStatus
 from todo.domain.project_update import ProjectUpdate
 from todo.domain.status import Status
 from todo.domain.tag import Tag
 from todo.domain.title import Title
 from todo.domain.todo_item import TodoItem
 from todo.domain.update_body import UpdateBody
+from todo.domain.update_id import UpdateId
 
 __all__ = [
     "Body",
@@ -27,11 +27,11 @@ __all__ = [
     "Project",
     "ProjectId",
     "ProjectName",
-    "ProjectStatus",
     "ProjectUpdate",
     "Status",
     "Tag",
     "Title",
     "UpdateBody",
+    "UpdateId",
     "TodoItem",
 ]

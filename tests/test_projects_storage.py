@@ -6,8 +6,9 @@ import pytest
 
 from todo.adapters.sqlite_storage import SqliteStorage
 from todo.application.commands import add_todo
+from todo.domain.description import Description
 from todo.domain.item_id import ItemId
-from todo.domain.project_status import ProjectStatus
+from todo.domain.project_name import ProjectName
 from todo.exceptions import DuplicateProjectError, ProjectNotFoundError
 
 
@@ -16,7 +17,7 @@ class TestProjectCrud:
         project = storage.add_project("infra", description="Infra work")
         assert project.name == "infra"
         assert project.description == "Infra work"
-        assert project.status == ProjectStatus.ACTIVE
+        assert project.archived is False
         assert storage.get_project(project.id) == project
         assert storage.get_project_by_name("infra") == project
 
@@ -34,7 +35,8 @@ class TestProjectCrud:
     def test_list_excludes_archived_by_default(self, storage: SqliteStorage) -> None:
         storage.add_project("active-one")
         archived = storage.add_project("archived-one")
-        storage.update_project(archived.id, status=ProjectStatus.ARCHIVED)
+        archived.archive()
+        storage.save_project(archived)
 
         assert [p.name for p in storage.list_projects()] == ["active-one"]
         assert [p.name for p in storage.list_projects(include_archived=True)] == [
@@ -44,7 +46,9 @@ class TestProjectCrud:
 
     def test_update_fields(self, storage: SqliteStorage) -> None:
         project = storage.add_project("old", description="d")
-        updated = storage.update_project(project.id, name="new", description="d2")
+        project.set_name(ProjectName("new"))
+        project.set_description(Description("d2"))
+        updated = storage.save_project(project)
         assert updated.name == "new"
         assert updated.description == "d2"
 
@@ -52,7 +56,8 @@ class TestProjectCrud:
         storage.add_project("taken")
         other = storage.add_project("other")
         with pytest.raises(DuplicateProjectError):
-            storage.update_project(other.id, name="taken")
+            other.set_name(ProjectName("taken"))
+            storage.save_project(other)
 
     def test_delete_unassigns_todos(self, storage: SqliteStorage) -> None:
         project = storage.add_project("doomed")

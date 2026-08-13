@@ -11,7 +11,6 @@ from todo.domain.item_id import ItemId
 from todo.domain.priority import Priority
 from todo.domain.project import Project
 from todo.domain.project_name import ProjectName
-from todo.domain.project_status import ProjectStatus
 from todo.domain.project_update import ProjectUpdate
 from todo.domain.status import Status
 from todo.domain.tag import Tag
@@ -96,14 +95,7 @@ class StorageProtocol(Protocol):
 
     def item_tags(self) -> ItemTagLists: ...
 
-    def update_project(
-        self,
-        project_id: int,
-        *,
-        name: str | None = None,
-        description: str | None = None,
-        status: ProjectStatus | None = None,
-    ) -> Project: ...
+    def save_project(self, project: Project) -> Project: ...
 
     def delete_project(self, project_id: int) -> None: ...
 

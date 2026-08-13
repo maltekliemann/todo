@@ -101,7 +101,8 @@ def _project_to_dict(project: Project) -> dict[str, object]:
         "id": project.id,
         "name": project.name,
         "description": project.description,
-        "status": project.status.value,
+        # Same two strings the column holds, so the contract is unchanged.
+        "status": "archived" if project.archived else "active",
         "created_at": project.created_at.isoformat(),
         "updated_at": project.updated_at.isoformat(),
     }
@@ -347,7 +348,7 @@ class RichOutput(_JsonOutput):
         table.add_column("Description")
         for s in summaries:
             # Name and description are user text: build Text, never markup.
-            if s.project.is_archived:
+            if s.project.archived:
                 name = Text(f"{s.project.name} (archived)", style="dim")
             else:
                 name = Text(s.project.name)
@@ -368,7 +369,7 @@ class RichOutput(_JsonOutput):
         header = Text()
         header.append(f"{project.id.label}  ", style="dim")
         header.append(project.name, style="bold")
-        if project.is_archived:
+        if project.archived:
             header.append("  (archived)", style="dim")
         header.append(f"   {done}/{len(items)} done", style="dim")
         self._console.print(header)
@@ -457,7 +458,7 @@ class PlainOutput(_JsonOutput):
             print("No projects.")
             return
         for s in summaries:
-            suffix = " (archived)" if s.project.is_archived else ""
+            suffix = " (archived)" if s.project.archived else ""
             desc = f"  - {s.project.description}" if s.project.description else ""
             print(
                 f"  {s.project.id:>4}  {s.project.name}{suffix}  "
@@ -467,7 +468,7 @@ class PlainOutput(_JsonOutput):
     def print_project(self, detail: ProjectDetail, deps: Dependencies) -> None:
         project, items = detail.project, detail.items
         done = sum(1 for i in items if i.is_done)
-        suffix = " (archived)" if project.is_archived else ""
+        suffix = " (archived)" if project.archived else ""
         print(f"{project.id.label}  {project.name}{suffix}  {done}/{len(items)} done")
         if project.description:
             print(project.description)

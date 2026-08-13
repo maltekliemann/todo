@@ -6,6 +6,9 @@ from enum import Enum
 
 
 class Status(Enum):
+    """The workflow, in order. Declaration order is that order: next and
+    previous read it rather than repeating it."""
+
     BACKLOG = "backlog"
     TODO = "todo"
     IN_PROGRESS = "in-progress"
@@ -19,20 +22,22 @@ class Status(Enum):
             valid = ", ".join(s.value for s in cls)
             raise ValueError(f"Invalid status '{value}'. Must be one of: {valid}")
 
-    @classmethod
-    def active_statuses(cls) -> list[Status]:
-        return [cls.BACKLOG, cls.TODO, cls.IN_PROGRESS]
+    @property
+    def done(self) -> bool:
+        return self is Status.DONE
+
+    @property
+    def active(self) -> bool:
+        """Still being worked on — everything that is not finished."""
+        return not self.done
 
     def next(self) -> Status | None:
-        order = [Status.BACKLOG, Status.TODO, Status.IN_PROGRESS, Status.DONE]
-        idx = order.index(self)
-        if idx < len(order) - 1:
-            return order[idx + 1]
-        return None
+        """The step forward, or None at the end of the workflow."""
+        order = list(Status)
+        index = order.index(self) + 1
+        return order[index] if index < len(order) else None
 
     def prev(self) -> Status | None:
-        order = [Status.BACKLOG, Status.TODO, Status.IN_PROGRESS, Status.DONE]
-        idx = order.index(self)
-        if idx > 0:
-            return order[idx - 1]
-        return None
+        """The step back, or None at the start of the workflow."""
+        index = list(Status).index(self) - 1
+        return list(Status)[index] if index >= 0 else None

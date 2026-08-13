@@ -23,13 +23,13 @@ from todo.domain.priority import Priority
 from todo.domain.project import Project
 from todo.domain.project_id import ProjectId
 from todo.domain.project_name import ProjectName
-from todo.domain.project_status import ProjectStatus
 from todo.domain.project_update import ProjectUpdate
 from todo.domain.status import Status
 from todo.domain.tag import Tag
 from todo.domain.title import Title
 from todo.domain.todo_item import TodoItem
 from todo.domain.update_body import UpdateBody
+from todo.domain.update_id import UpdateId
 from todo.exceptions import (
     DuplicateProjectError,
     NotFoundError,
@@ -76,7 +76,7 @@ def _joined_project(row: sqlite3.Row) -> Project | None:
         id=ProjectId(row["proj_id"]),
         name=ProjectName(row["proj_name"]),
         description=Description(row["proj_description"]),
-        status=ProjectStatus(row["proj_status"]),
+        archived=_archived_from(row["proj_status"]),
         created_at=datetime.fromisoformat(row["proj_created_at"]),
         updated_at=datetime.fromisoformat(row["proj_updated_at"]),
     )
@@ -87,7 +87,7 @@ def _row_to_project(row: sqlite3.Row) -> Project:
         id=ProjectId(row["id"]),
         name=ProjectName(row["name"]),
         description=Description(row["description"]),
-        status=ProjectStatus(row["status"]),
+        archived=_archived_from(row["status"]),
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
     )
@@ -95,6 +95,24 @@ def _row_to_project(row: sqlite3.Row) -> Project:
 
 # The project's own columns, aliased: an item carries the Project, not a
 # copy of two of its fields that can drift apart.
+# The column keeps its two strings; the model keeps a flag.
+_ACTIVE = "active"
+_ARCHIVED = "archived"
+
+
+def _archived_from(value: str) -> bool:
+    """Decode the status column, refusing anything it should not hold.
+
+    The enum this replaced validated on read for free; a bool would have
+    let a corrupt row through as "not archived".
+    """
+    if value == _ARCHIVED:
+        return True
+    if value == _ACTIVE:
+        return False
+    raise StorageError(f"Unknown project status {value!r}")
+
+
 _TODO_SELECT = (
     "SELECT todos.*, "
     "projects.id AS proj_id, projects.name AS proj_name, "
@@ -108,9 +126,9 @@ _TODO_SELECT = (
 
 def _row_to_update(row: sqlite3.Row) -> ProjectUpdate:
     return ProjectUpdate(
-        id=row["id"],
+        id=UpdateId(row["id"]),
         project_id=ProjectId(row["project_id"]),
-        body=row["body"],
+        body=UpdateBody(row["body"]),
         created_at=datetime.fromisoformat(row["created_at"]),
     )
 
@@ -464,7 +482,7 @@ class SqliteStorage:
             cur = self._conn.execute(
                 "INSERT INTO projects (name, description, status, created_at, "
                 "updated_at) VALUES (?, ?, ?, ?, ?)",
-                (name, description, ProjectStatus.ACTIVE.value, now, now),
+                (name, description, _ACTIVE, now, now),
             )
             self._commit()
         except sqlite3.IntegrityError as e:
@@ -532,51 +550,34 @@ class SqliteStorage:
         }
 
     def list_projects(self, *, include_archived: bool = False) -> "ProjectList":
-        where = "" if include_archived else " WHERE status = 'active'"
+        where = "" if include_archived else f" WHERE status = '{_ACTIVE}'"
         with self._read_guard("list projects"):
             rows = self._conn.execute(
                 f"SELECT * FROM projects{where} ORDER BY name ASC"
             ).fetchall()
             return [_row_to_project(r) for r in rows]
 
-    def update_project(
-        self,
-        project_id: int,
-        *,
-        name: str | None = None,
-        description: str | None = None,
-        status: ProjectStatus | None = None,
-    ) -> Project:
-        self.get_project(project_id)  # raises ProjectNotFoundError if missing
-
-        sets: list[str] = []
-        params: list[str | int] = []
-        if name is not None:
-            sets.append("name = ?")
-            params.append(name)
-        if description is not None:
-            sets.append("description = ?")
-            params.append(description)
-        if status is not None:
-            sets.append("status = ?")
-            params.append(status.value)
-        if not sets:
-            return self.get_project(project_id)
-
-        sets.append("updated_at = ?")
-        params.append(_now().isoformat())
-        params.append(project_id)
+    def save_project(self, project: Project) -> Project:
+        """Write the project back as it now stands."""
+        self.get_project(project.id)  # raises ProjectNotFoundError if missing
         try:
             self._conn.execute(
-                f"UPDATE projects SET {', '.join(sets)} WHERE id = ?",
-                params,
+                "UPDATE projects SET name = ?, description = ?, status = ?, "
+                "updated_at = ? WHERE id = ?",
+                (
+                    project.name,
+                    project.description,
+                    _ARCHIVED if project.archived else _ACTIVE,
+                    project.updated_at.isoformat(),
+                    project.id,
+                ),
             )
             self._commit()
         except sqlite3.IntegrityError as e:
-            raise DuplicateProjectError(name or "") from e
+            raise DuplicateProjectError(project.name) from e
         except (sqlite3.Error, OverflowError) as e:
-            raise StorageError(f"Failed to update project #{project_id}: {e}") from e
-        return self.get_project(project_id)
+            raise StorageError(f"Failed to save project {project.id.label}: {e}") from e
+        return self.get_project(project.id)
 
     def delete_project(self, project_id: int) -> None:
         self.get_project(project_id)  # raises ProjectNotFoundError if missing

@@ -22,7 +22,8 @@ from todo.domain.dependency_graph import DependencyGraph
 from todo.domain.item_id import ItemId
 from todo.domain.priority import Priority
 from todo.domain.project import Project
-from todo.domain.project_status import ProjectStatus
+from todo.domain.project_id import ProjectId
+from todo.domain.project_name import ProjectName
 from todo.domain.project_update import ProjectUpdate
 from todo.domain.status import Status
 from todo.domain.todo_item import TodoItem
@@ -63,7 +64,7 @@ def _project(**overrides: object) -> Project:
         "id": ItemId(1),
         "name": "proj [/] name",
         "description": "desc [/] here",
-        "status": ProjectStatus.ACTIVE,
+        "archived": False,
         "created_at": _NOW,
         "updated_at": _NOW,
     }
@@ -111,7 +112,9 @@ class TestRichOutputMarkupSafety:
         summaries = [
             ProjectSummary(project=_project(), open_count=1, done_count=0),
             ProjectSummary(
-                project=_project(id=2, name="arch [/]", status=ProjectStatus.ARCHIVED),
+                project=_project(
+                    id=ProjectId(2), name=ProjectName("arch [/]"), archived=True
+                ),
                 open_count=0,
                 done_count=0,
             ),

@@ -183,7 +183,7 @@ def _cells(item: TodoItem, deps: Dependencies) -> list[Text]:
     titles are user-controlled. Priority and deadline proximity carry their
     own colour; everything else inherits the row's.
     """
-    deadline_text = _deadline_str(item) if item.status != Status.DONE else ""
+    deadline_text = _deadline_str(item) if item.status.active else ""
     values = [
         str(item.id),
         _priority_label(item.priority),

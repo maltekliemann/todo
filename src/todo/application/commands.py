@@ -14,7 +14,6 @@ from todo.domain.item_id import ItemId
 from todo.domain.priority import Priority
 from todo.domain.project import Project
 from todo.domain.project_name import ProjectName
-from todo.domain.project_status import ProjectStatus
 from todo.domain.project_update import ProjectUpdate
 from todo.domain.status import Status
 from todo.domain.tag import Tag
@@ -143,7 +142,7 @@ def _tracked_update(
         # reading the graph — and one read answers both questions.
         deps = (
             Dependencies.load(storage)
-            if status is Status.DONE and not item.is_done
+            if status is not None and status.done and not item.is_done
             else None
         )
         dependents = deps.dependents_of(item_id) if deps else []
@@ -335,19 +334,21 @@ def edit_project(
     name: str | None = None,
     description: str | None = None,
 ) -> Project:
-    normalized = _to_project_name(name) if name is not None else None
-    return storage.update_project(
-        project_id,
-        name=normalized,
-        description=(Description(description) if description is not None else None),
-    )
+    project = storage.get_project(project_id)
+    if name is not None:
+        project.set_name(_to_project_name(name))
+    if description is not None:
+        project.set_description(Description(description))
+    return storage.save_project(project)
 
 
 def archive_project(
     storage: StorageProtocol,
     project_id: int,
 ) -> Project:
-    return storage.update_project(project_id, status=ProjectStatus.ARCHIVED)
+    project = storage.get_project(project_id)
+    project.archive()
+    return storage.save_project(project)
 
 
 def delete_project(

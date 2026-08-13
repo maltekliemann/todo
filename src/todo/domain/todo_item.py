@@ -138,7 +138,7 @@ class TodoItem:
         """Finishing records when; leaving done withdraws the claim that
         it was ever finished. Arriving at done a second time keeps the
         first stamp, because the second move finished nothing."""
-        if status is Status.DONE:
+        if status.done:
             self._done_at = self._done_at if self.is_done and self._done_at else _now()
         else:
             self._done_at = None
@@ -177,7 +177,7 @@ class TodoItem:
 
     @property
     def is_done(self) -> bool:
-        return self._status is Status.DONE
+        return self._status.done
 
     @property
     def is_overdue(self) -> bool:

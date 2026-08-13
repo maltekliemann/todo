@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 
 from todo.domain.priority import Priority
 from todo.domain.project import Project
-from todo.domain.project_status import ProjectStatus
 from todo.domain.status import Status
 from todo.domain.todo_item import TodoItem
 from todo.tui.filters import Filters
@@ -34,7 +33,6 @@ def _project(project_id: int, name: str) -> Project:
         id=project_id,
         name=name,
         description="",
-        status=ProjectStatus.ACTIVE,
         created_at=_NOW,
         updated_at=_NOW,
     )

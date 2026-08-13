@@ -13,10 +13,12 @@ from todo.application.dependencies import Dependencies
 from todo.application.queries import ProjectDetail, ProjectSummary
 from todo.domain.deadline import Deadline
 from todo.domain.dependency_graph import DependencyGraph
+from todo.domain.description import Description
 from todo.domain.item_id import ItemId
 from todo.domain.priority import Priority
 from todo.domain.project import Project
-from todo.domain.project_status import ProjectStatus
+from todo.domain.project_id import ProjectId
+from todo.domain.project_name import ProjectName
 from todo.domain.project_update import ProjectUpdate
 from todo.domain.status import Status
 from todo.domain.todo_item import TodoItem
@@ -51,10 +53,10 @@ def _item(**overrides: object) -> TodoItem:
 
 def _project(**overrides: object) -> Project:
     defaults: dict[str, object] = {
-        "id": ItemId(1),
-        "name": "infra",
-        "description": "Infra work",
-        "status": ProjectStatus.ACTIVE,
+        "id": ProjectId(1),
+        "name": ProjectName("infra"),
+        "description": Description("Infra work"),
+        "archived": False,
         "created_at": _NOW,
         "updated_at": _NOW,
     }
@@ -169,7 +171,7 @@ class TestRichTagsProjects:
     def test_projects(self, rich_out: RichOutput, capsys) -> None:
         active = ProjectSummary(project=_project(), open_count=2, done_count=1)
         archived = ProjectSummary(
-            project=_project(id=2, name="old", status=ProjectStatus.ARCHIVED),
+            project=_project(id=ProjectId(2), name=ProjectName("old"), archived=True),
             open_count=0,
             done_count=5,
         )

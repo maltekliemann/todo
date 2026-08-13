@@ -11,7 +11,6 @@ from todo.application.queries import list_todos, parse_since, resolve_project
 from todo.domain.deadline import Deadline
 from todo.domain.priority import Priority
 from todo.domain.project import Project
-from todo.domain.project_status import ProjectStatus
 from todo.domain.status import Status
 from todo.domain.tag import Tag
 from todo.domain.title import Title
@@ -55,8 +54,9 @@ class TestEnums:
         assert Status.BACKLOG.next() == Status.TODO
         assert Status.DONE.prev() == Status.IN_PROGRESS
 
-    def test_active_statuses_exclude_done(self) -> None:
-        assert Status.DONE not in Status.active_statuses()
+    def test_done_and_active_are_opposites(self) -> None:
+        assert Status.DONE.done and not Status.DONE.active
+        assert all(s.active and not s.done for s in Status if s is not Status.DONE)
 
 
 class TestModels:
@@ -65,11 +65,11 @@ class TestModels:
             id=1,
             name="p",
             description="",
-            status=ProjectStatus.ARCHIVED,
+            archived=True,
             created_at=_NOW,
             updated_at=_NOW,
         )
-        assert project.is_archived is True
+        assert project.archived is True
 
     def test_done_item_never_overdue_or_urgent(self) -> None:
         item = TodoItem(

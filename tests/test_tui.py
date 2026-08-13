@@ -20,7 +20,6 @@ from todo.domain.item_id import ItemId
 from todo.domain.priority import Priority
 from todo.domain.project import Project
 from todo.domain.project_name import ProjectName
-from todo.domain.project_status import ProjectStatus
 from todo.domain.status import Status
 from todo.domain.tag import Tag
 from todo.domain.todo_item import TodoItem
@@ -1900,7 +1899,6 @@ class TestSharedMetaPresenter:
                 id=1,
                 name=ProjectName("proj [/]"),
                 description=Description(""),
-                status=ProjectStatus.ACTIVE,
                 created_at=datetime.now(),
                 updated_at=datetime.now(),
             ),
