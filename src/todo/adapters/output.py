@@ -133,8 +133,8 @@ def _item_to_dict(item: TodoItem) -> dict[str, object]:
         "blocked_by": item.blocked_by,
         "blocking": item.blocking,
         "is_blocked": item.is_blocked,
-        "project_id": item.project_id,
-        "project": item.project_name,
+        "project_id": item.project.id if item.project else None,
+        "project": item.project.name if item.project else None,
     }
 
 
@@ -254,8 +254,8 @@ class RichOutput(_JsonOutput):
         )
         if item.done_at:
             lines.append(f"   Done: {item.done_at.strftime('%b %d, %Y %H:%M')}")
-        if item.project_name:
-            lines.append(f"\nProject: {item.project_name}")
+        if item.project:
+            lines.append(f"\nProject: {item.project.name}")
         if item.tags:
             lines.append(f"\nTags: {', '.join(item.tags)}")
         if item.blocked_by:
@@ -402,8 +402,8 @@ class PlainOutput(_JsonOutput):
         )
         if item.done_at:
             print(f"Done: {item.done_at.isoformat()}")
-        if item.project_name:
-            print(f"Project: {item.project_name}")
+        if item.project:
+            print(f"Project: {item.project.name}")
         if item.tags:
             print(f"Tags: {', '.join(item.tags)}")
         if item.blocked_by:

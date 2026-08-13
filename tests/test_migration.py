@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 
 from todo.adapters.sqlite_storage import SqliteStorage
+from todo.domain.description import Description
+from todo.domain.project_name import ProjectName
 from todo.domain.tag import Tag
 from todo.domain.title import Title
 
@@ -89,7 +91,7 @@ class TestMigration:
         assert item.title == "Old item"
         assert item.body == "kept"
         assert item.tags == ["legacy"]
-        assert item.project_id is None
+        assert item.project is None
         storage.close()
 
     def test_migration_is_idempotent(self, tmp_path: Path) -> None:
@@ -171,9 +173,12 @@ class TestMigration:
         _make_legacy_db(legacy)
 
         storage = SqliteStorage(legacy)
-        project = storage.add_project("infra", description="Infra work")
+        project = storage.add_project(
+            ProjectName("infra"), description=Description("Infra work")
+        )
         storage.update(1, project_id=project.id)
-        assert storage.get(1).project_name == "infra"
+        filed = storage.get(1)
+        assert filed.project is not None and filed.project.name == "infra"
         storage.close()
 
 

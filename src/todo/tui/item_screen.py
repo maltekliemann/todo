@@ -76,7 +76,7 @@ def field_value(item: TodoItem, key: str) -> str:
     if key == "tags":
         return ", ".join(item.tags) or EMPTY
     if key == "project":
-        return item.project_name or EMPTY
+        return item.project.name if item.project else EMPTY
     if key == "blocked_by":
         return ", ".join(f"#{i}" for i in item.blocked_by) or EMPTY
     if key == "blocking":
@@ -291,7 +291,7 @@ class ItemScreen(ModalScreen[bool]):
             self._show_message(str(exc) or "Could not read the projects")
             return
         choices = [("", f"({EMPTY} none)")] + [(str(p.id), p.name) for p in projects]
-        current = str(self._item.project_id) if self._item.project_id else ""
+        current = str(self._item.project.id) if self._item.project else ""
         self.app.push_screen(
             ChoicePrompt("Project", choices, current), self._save_project
         )

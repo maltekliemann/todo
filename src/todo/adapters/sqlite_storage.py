@@ -72,8 +72,21 @@ def _row_to_item(
         blocked_by=blocked_by if blocked_by is not None else [],
         blocking=blocking if blocking is not None else [],
         is_blocked=is_blocked,
-        project_id=row["project_id"],
-        project_name=row["project_name"],
+        project=_joined_project(row),
+    )
+
+
+def _joined_project(row: sqlite3.Row) -> Project | None:
+    """The project the join brought along, if the item is filed under one."""
+    if row["proj_id"] is None:
+        return None
+    return Project(
+        id=row["proj_id"],
+        name=ProjectName(row["proj_name"]),
+        description=Description(row["proj_description"]),
+        status=ProjectStatus(row["proj_status"]),
+        created_at=datetime.fromisoformat(row["proj_created_at"]),
+        updated_at=datetime.fromisoformat(row["proj_updated_at"]),
     )
 
 
@@ -88,9 +101,16 @@ def _row_to_project(row: sqlite3.Row) -> Project:
     )
 
 
+# The project's own columns, aliased: an item carries the Project, not a
+# copy of two of its fields that can drift apart.
 _TODO_SELECT = (
-    "SELECT todos.*, projects.name AS project_name FROM todos "
-    "LEFT JOIN projects ON projects.id = todos.project_id"
+    "SELECT todos.*, "
+    "projects.id AS proj_id, projects.name AS proj_name, "
+    "projects.description AS proj_description, "
+    "projects.status AS proj_status, "
+    "projects.created_at AS proj_created_at, "
+    "projects.updated_at AS proj_updated_at "
+    "FROM todos LEFT JOIN projects ON projects.id = todos.project_id"
 )
 
 

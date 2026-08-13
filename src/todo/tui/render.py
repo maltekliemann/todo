@@ -42,8 +42,8 @@ def meta_lines(item: TodoItem) -> list[str]:
     if item.done_at:
         second += f"    Done: {item.done_at.strftime('%b %d, %Y %H:%M')}"
     lines = [first, second]
-    if item.project_name:
-        lines.append(f"Project: {escape_markup(item.project_name)}")
+    if item.project:
+        lines.append(f"Project: {escape_markup(item.project.name)}")
     if item.tags:
         lines.append(f"Tags: {escape_markup(', '.join(item.tags))}")
     if item.blocked_by:

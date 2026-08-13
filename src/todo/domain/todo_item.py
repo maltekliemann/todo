@@ -7,6 +7,7 @@ from datetime import datetime
 
 from todo.domain.deadline import Deadline
 from todo.domain.priority import Priority
+from todo.domain.project import Project
 from todo.domain.status import Status
 from todo.domain.tag import Tag
 from todo.domain.title import Title
@@ -35,8 +36,7 @@ class TodoItem:
     blocked_by: list[int] = field(default_factory=list)
     blocking: list[int] = field(default_factory=list)
     is_blocked: bool = False
-    project_id: int | None = None
-    project_name: str | None = None
+    project: Project | None = None
 
     def __post_init__(self) -> None:
         # The rule ranges over one item's tags, and the item has them, so

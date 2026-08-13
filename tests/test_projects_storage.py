@@ -56,15 +56,15 @@ class TestProjectCrud:
     def test_delete_unassigns_todos(self, storage: SqliteStorage) -> None:
         project = storage.add_project("doomed")
         item = add_todo(storage, "Task", project_id=project.id)
-        assert item.project_name == "doomed"
+        assert item.project is not None and item.project.name == "doomed"
 
         storage.delete_project(project.id)
         survivor = storage.get(item.id)
-        assert survivor.project_id is None
-        assert survivor.project_name is None
+        assert survivor.project is None
 
     def test_assign_and_clear_project_on_todo(self, storage: SqliteStorage) -> None:
         project = storage.add_project("p")
         add_todo(storage, "Task")
-        assert storage.update(1, project_id=project.id).project_name == "p"
-        assert storage.update(1, project_id=None).project_id is None
+        assigned = storage.update(1, project_id=project.id)
+        assert assigned.project is not None and assigned.project.name == "p"
+        assert storage.update(1, project_id=None).project is None

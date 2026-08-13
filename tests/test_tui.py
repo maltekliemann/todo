@@ -13,7 +13,11 @@ from textual.widgets import DataTable, Input, Label, OptionList, Static
 from todo.adapters.sqlite_storage import SqliteStorage
 from todo.application.commands import add_todo, block_todo
 from todo.domain.deadline import Deadline
+from todo.domain.description import Description
 from todo.domain.priority import Priority
+from todo.domain.project import Project
+from todo.domain.project_name import ProjectName
+from todo.domain.project_status import ProjectStatus
 from todo.domain.status import Status
 from todo.domain.todo_item import TodoItem
 from todo.tui.app import TodoApp
@@ -1886,8 +1890,14 @@ class TestSharedMetaPresenter:
             blocked_by=[1],
             blocking=[2, 3],
             is_blocked=True,
-            project_id=1,
-            project_name="proj [/]",
+            project=Project(
+                id=1,
+                name=ProjectName("proj [/]"),
+                description=Description(""),
+                status=ProjectStatus.ACTIVE,
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            ),
         )
         lines = meta_lines(item)
         joined = "\n".join(lines)
@@ -2256,7 +2266,8 @@ class TestCreateUnderActiveFilter:
             created = next(
                 i for i in storage.list(include_done=True) if i.title == "Buy milk"
             )
-            assert created.project_id == project.id
+            assert created.project is not None
+            assert created.project.id == project.id
             table = app.query_one("#item-list", DataTable)
             assert _item_rows(table) == 2  # visible, not invisible
 
@@ -2275,7 +2286,7 @@ class TestCreateUnderActiveFilter:
             created = next(
                 i for i in storage.list(include_done=True) if i.title == "Solo"
             )
-            assert created.project_id is None
+            assert created.project is None
 
 
 @contextlib.contextmanager
@@ -2496,13 +2507,14 @@ class TestItemMenu:
             await pilot.press("down")  # (none) -> infra
             await pilot.press("enter")
             await pilot.pause()
-            assert storage.get(1).project_name == "infra"
+            filed = storage.get(1)
+            assert filed.project is not None and filed.project.name == "infra"
 
             await self._row(pilot, "project")
             await pilot.press("up")  # back to (none)
             await pilot.press("enter")
             await pilot.pause()
-            assert storage.get(1).project_id is None
+            assert storage.get(1).project is None
 
     async def test_a_blocker_is_removed_from_the_menu(self, db_path: Path) -> None:
         """'you also need to be able to remove blockers and such'."""
