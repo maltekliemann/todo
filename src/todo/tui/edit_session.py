@@ -1,8 +1,9 @@
-"""Running $EDITOR on an item: the temp buffer, the suspend, the apply.
+"""Running $EDITOR on an item's body: the temp buffer, the suspend, the
+apply.
 
-The buffer format itself lives in `editor`; this is the part that touches
-the terminal and the filesystem. Every failure path reports where the
-user's buffer was left — the flow must never strand their work silently.
+What the buffer holds lives in `editor`; this is the part that touches the
+terminal and the filesystem. Every failure path reports where the user's
+buffer was left — the flow must never strand their work silently.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from todo.application.commands import CompletionResult
 from todo.application.contracts.storage import StorageProtocol
 from todo.domain.models import TodoItem
 from todo.exceptions import TodoError
-from todo.tui.editor import apply_editor_edit, editor_command, item_to_editor_text
+from todo.tui.editor import apply_body_edit, editor_command
 from todo.tui.render import escape_markup
 
 
@@ -30,9 +31,10 @@ class EditorSession:
         self._storage = storage
 
     def run(self, item: TodoItem) -> CompletionResult | None:
-        """Edit an item in $EDITOR. Returns the result of a real edit, or
-        None if nothing was applied (cancelled, unchanged, or failed)."""
-        text = item_to_editor_text(item)
+        """Edit an item's body in $EDITOR. Returns the result of a real
+        edit, or None if nothing was applied (cancelled, unchanged, or
+        failed)."""
+        text = item.body
         try:
             tmp_path = self.write_buffer(text)
         except OSError as exc:
@@ -110,7 +112,7 @@ class EditorSession:
         self, item_id: int, original: str, edited: str, tmp_path: str
     ) -> CompletionResult | None:
         """Apply an edited buffer. On rejection the buffer file is kept and
-        its path reported, so a field typo never destroys the user's work."""
+        its path reported, so a failed write never destroys the user's work."""
         # Exact no-op check (plus the editor's final newline): anything
         # else — including whitespace-only body edits — is a real edit.
         if edited in (original, original + "\n"):
@@ -118,7 +120,7 @@ class EditorSession:
             return None
 
         try:
-            result = apply_editor_edit(self._storage, item_id, edited)
+            result = apply_body_edit(self._storage, item_id, edited)
         except (ValueError, TodoError) as exc:
             self._error(
                 f"Edit rejected: {escape_markup(str(exc))} — "

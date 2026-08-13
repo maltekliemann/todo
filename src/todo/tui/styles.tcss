@@ -140,36 +140,81 @@ BlockDialog > #block-container {
     margin-top: 1;
 }
 
-InspectDialog {
+ItemScreen {
     align: center middle;
 }
 
-InspectDialog > #inspect-container {
-    width: 80%;
-    height: 80%;
-    max-width: 100;
+ItemScreen > #item-container {
+    /* Wide enough that the created/updated heading stays on one line at
+       80 columns; it wraps rather than clips if an id or a done date
+       pushes it over. */
+    width: 92%;
+    max-width: 96;
+    /* Fixed height with the body preview as the only flexible part: on a
+       short terminal the preview shrinks to nothing and the rows, the
+       inline error and the hint all stay on screen. */
+    height: 100%;
+    max-height: 26;
     padding: 1 2;
     background: $surface;
     border: thick $primary;
 }
 
-#inspect-title {
-    margin-bottom: 1;
+#item-heading {
+    height: auto;
 }
 
-#inspect-meta {
+#item-fields {
+    height: auto;
+    max-height: 12;
+    border: none;
+    background: $surface;
+}
+
+#item-error {
+    color: $error;
+    height: auto;
+    display: none;
+}
+
+#item-hint {
     color: $text-muted;
-    margin-bottom: 1;
 }
 
-#inspect-body-scroll {
+#item-body-scroll {
     height: 1fr;
+    min-height: 0;
     border-top: solid $primary 30%;
     padding-top: 1;
+    margin-top: 1;
+}
+
+TextPrompt, ChoicePrompt {
+    align: center middle;
+}
+
+TextPrompt > #prompt-container, ChoicePrompt > #prompt-container {
+    width: 60;
+    height: auto;
+    max-height: 100%;
+    padding: 1 2;
+    background: $surface;
+    border: thick $primary;
+}
+
+#prompt-title {
+    text-style: bold;
     margin-bottom: 1;
 }
 
-#inspect-hint {
+#prompt-options {
+    height: auto;
+    max-height: 12;
+    border: none;
+    background: $surface;
+}
+
+#prompt-hint {
     color: $text-muted;
-    text-align: center;
+    margin-top: 1;
 }

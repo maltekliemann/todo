@@ -22,17 +22,12 @@ from todo.application.queries import (
 from todo.domain.enums import Priority
 from todo.domain.models import TodoItem
 from todo.exceptions import NotFoundError, TodoError
+from todo.tui.blockers import BlockDialog
 from todo.tui.detail import DetailPane
-from todo.tui.dialogs import (
-    BlockDialog,
-    ConfirmDialog,
-    InspectDialog,
-    NewItemDialog,
-    SearchDialog,
-)
-from todo.tui.edit_session import EditorSession
+from todo.tui.dialogs import ConfirmDialog, NewItemDialog, SearchDialog
 from todo.tui.filters import Filters
-from todo.tui.render import escape_markup
+from todo.tui.item_screen import ItemScreen
+from todo.tui.render import escape_markup, unblocked_notices
 from todo.tui.table import COLUMNS, TodoTable, is_separator
 
 _STATUS_GROUP = Binding.Group("Status", compact=True)
@@ -45,8 +40,9 @@ class TodoListView(Widget):
     # label rather than repeating a word each.
     BINDINGS = [
         Binding("n", "new", "New", show=True),
-        Binding("i", "inspect", "View", show=True),
-        Binding("e", "edit", "Edit", show=True),
+        # One screen for reading an item and for changing it, so there is
+        # no "which key was the editable one?".
+        Binding("i,e", "open", "Open", show=True),
         Binding("d", "done", "Done", show=True),
         Binding("x,delete", "delete", "Del", show=True),
         Binding("b", "block", "Block", show=True),
@@ -151,7 +147,7 @@ class TodoListView(Widget):
     def on_row_selected(self, event: DataTable.RowSelected) -> None:
         if event.row_key is None or is_separator(event.row_key.value):
             return
-        self.action_inspect()
+        self.action_open()
 
     def _refresh_list(
         self, *, from_poll: bool = False, select_id: int | None = None
@@ -354,11 +350,16 @@ class TodoListView(Widget):
         self._refresh_list(select_id=successor)
 
     def _notify_unblocked(self, result: CompletionResult | list[TodoItem]) -> None:
-        deps = result.unblocked if isinstance(result, CompletionResult) else result
-        for dep in deps:
-            self.notify(f"🔓 #{dep.id} {escape_markup(dep.title)} is now unblocked")
+        for message in unblocked_notices(result):
+            self.notify(message)
 
-    def action_inspect(self) -> None:
+    def action_open(self) -> None:
+        """Open the selected item's own screen: every field, editable.
+
+        The item is read here rather than inside the screen so a stale row
+        (deleted by another process, or by a poll that has not landed yet)
+        never opens an empty screen.
+        """
         item_id = self._selected_item_id()
         if item_id is None:
             return
@@ -369,26 +370,12 @@ class TodoListView(Widget):
         except TodoError as exc:
             self.notify(escape_markup(str(exc)), severity="error")
             return
-        self.app.push_screen(InspectDialog(item))
 
-    def action_edit(self) -> None:
-        item_id = self._selected_item_id()
-        if item_id is None:
-            return
+        def after(changed: bool | None) -> None:
+            if changed:
+                self._refresh_list()
 
-        try:
-            item = show_todo(self._storage, item_id)
-        except NotFoundError:
-            return
-        except TodoError as exc:
-            self.notify(escape_markup(str(exc)), severity="error")
-            return
-
-        result = EditorSession(self, self._storage).run(item)
-        if result is None:
-            return
-        self._notify_unblocked(result)
-        self._refresh_list()
+        self.app.push_screen(ItemScreen(self._storage, item), after)
 
     def action_delete(self) -> None:
         item_id = self._selected_item_id()

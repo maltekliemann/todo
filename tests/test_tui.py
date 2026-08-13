@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import contextlib
+from collections.abc import Iterator
+from datetime import date
 from pathlib import Path
 
 import pytest
 from rich.text import Text
 from textual.coordinate import Coordinate
-from textual.widgets import DataTable, Input, Label, Static
+from textual.widgets import DataTable, Input, Label, OptionList, Static
 
 from todo.adapters.sqlite_storage import SqliteStorage
-from todo.application.commands import add_todo
+from todo.application.commands import add_todo, block_todo
 from todo.domain.enums import Priority, Status
+from todo.domain.models import TodoItem
 from todo.tui.app import TodoApp
 from todo.tui.edit_session import EditorSession
 from todo.tui.list_view import TodoListView
@@ -470,7 +474,7 @@ class TestBlockerPicker:
     async def test_a_cycle_reports_inline_and_stays_open(
         self, several: SqliteStorage
     ) -> None:
-        from todo.tui.dialogs import BlockDialog
+        from todo.tui.blockers import BlockDialog
 
         several.add_blocker(2, 1)  # #2 already waits on #1
         app = TodoApp(storage=several)
@@ -1356,32 +1360,47 @@ class TestDetailPanel:
             assert "High task" in str(title.render())
 
 
-class TestInspect:
-    async def test_i_opens_inspect_dialog(self, seeded_storage: SqliteStorage) -> None:
-        from todo.tui.dialogs import InspectDialog
+class TestOpenItem:
+    """One screen for reading an item and for changing it."""
+
+    async def test_i_opens_the_item_screen(self, seeded_storage: SqliteStorage) -> None:
+        from todo.tui.item_screen import ItemScreen
 
         app = TodoApp(storage=seeded_storage)
         async with app.run_test() as pilot:
             await pilot.pause()
             await pilot.press("i")
             await pilot.pause()
-            assert isinstance(app.screen, InspectDialog)
+            assert isinstance(app.screen, ItemScreen)
 
-    async def test_enter_opens_inspect_dialog(
+    async def test_e_opens_the_item_screen(self, seeded_storage: SqliteStorage) -> None:
+        """The key that used to drop straight into $EDITOR now opens the
+        same screen as 'i': there is one way to open an item."""
+        from todo.tui.item_screen import ItemScreen
+
+        app = TodoApp(storage=seeded_storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("e")
+            await pilot.pause()
+            assert isinstance(app.screen, ItemScreen)
+
+    async def test_enter_opens_the_item_screen(
         self, seeded_storage: SqliteStorage
     ) -> None:
-        from todo.tui.dialogs import InspectDialog
+        from todo.tui.item_screen import ItemScreen
 
         app = TodoApp(storage=seeded_storage)
         async with app.run_test() as pilot:
             await pilot.pause()
             await pilot.press("enter")
             await pilot.pause()
-            assert isinstance(app.screen, InspectDialog)
+            assert isinstance(app.screen, ItemScreen)
 
-    async def test_inspect_shows_full_body(self, db_path: Path) -> None:
-        """Long bodies are visible in the inspect modal (not clipped)."""
-        from todo.tui.dialogs import InspectDialog
+    async def test_the_whole_body_is_there_to_scroll(self, db_path: Path) -> None:
+        """The screen replaced a full-screen read-only view; a long body
+        must still be reachable, not clipped away."""
+        from todo.tui.item_screen import ItemScreen
 
         storage = SqliteStorage(db_path)
         long_body = "\n".join(f"line {i}" for i in range(40))
@@ -1392,25 +1411,24 @@ class TestInspect:
             await pilot.pause()
             await pilot.press("i")
             await pilot.pause()
-            assert isinstance(app.screen, InspectDialog)
+            assert isinstance(app.screen, ItemScreen)
 
-            body_widget = app.screen.query_one("#inspect-body", Static)
-            rendered = str(body_widget.render())
+            rendered = str(app.screen.query_one("#item-body", Static).render())
             assert "line 0" in rendered
             assert "line 39" in rendered
 
-    async def test_escape_closes_inspect(self, seeded_storage: SqliteStorage) -> None:
-        from todo.tui.dialogs import InspectDialog
+    async def test_escape_closes_it(self, seeded_storage: SqliteStorage) -> None:
+        from todo.tui.item_screen import ItemScreen
 
         app = TodoApp(storage=seeded_storage)
         async with app.run_test() as pilot:
             await pilot.pause()
             await pilot.press("i")
             await pilot.pause()
-            assert isinstance(app.screen, InspectDialog)
+            assert isinstance(app.screen, ItemScreen)
             await pilot.press("escape")
             await pilot.pause()
-            assert not isinstance(app.screen, InspectDialog)
+            assert not isinstance(app.screen, ItemScreen)
 
 
 class TestStatusGroups:
@@ -1584,7 +1602,7 @@ class TestBlocking:
             assert "\U0001f6a7" not in blocker_title
 
     async def test_b_opens_block_dialog(self, seeded_storage: SqliteStorage) -> None:
-        from todo.tui.dialogs import BlockDialog
+        from todo.tui.blockers import BlockDialog
 
         app = TodoApp(storage=seeded_storage)
         async with app.run_test() as pilot:
@@ -1611,7 +1629,7 @@ class TestBlocking:
             assert item.blocked_by == [2]
             assert item.is_blocked is True
             # Dialog dismissed back to the list view.
-            from todo.tui.dialogs import BlockDialog
+            from todo.tui.blockers import BlockDialog
 
             assert not isinstance(app.screen, BlockDialog)
 
@@ -1623,7 +1641,7 @@ class TestBlocking:
         (tests/test_query_amplification.py), it is simply unreachable."""
         from textual.widgets import OptionList
 
-        from todo.tui.dialogs import BlockDialog
+        from todo.tui.blockers import BlockDialog
 
         app = TodoApp(storage=seeded_storage)
         async with app.run_test() as pilot:
@@ -1788,7 +1806,7 @@ class TestLockedDatabaseDialogs:
             await pilot.press("2")
             await pilot.press("enter")
             await pilot.pause()
-            from todo.tui.dialogs import BlockDialog
+            from todo.tui.blockers import BlockDialog
 
             assert app.is_running
             assert isinstance(app.screen, BlockDialog)  # stays open with error
@@ -2256,3 +2274,417 @@ class TestCreateUnderActiveFilter:
                 i for i in storage.list(include_done=True) if i.title == "Solo"
             )
             assert created.project_id is None
+
+
+@contextlib.contextmanager
+def monkeypatched(module: object, name: str, value: object) -> Iterator[None]:
+    original = getattr(module, name)
+    setattr(module, name, value)
+    try:
+        yield
+    finally:
+        setattr(module, name, original)
+
+
+class TestItemMenu:
+    """Opening an item gives a menu of its fields; Enter on a row changes
+    that field. Nothing is typed as 'key: value' and nothing is remembered
+    by number."""
+
+    async def _open(self, pilot: object) -> object:
+        from todo.tui.item_screen import ItemScreen
+
+        app = pilot.app  # type: ignore[attr-defined]
+        await pilot.press("i")  # type: ignore[attr-defined]
+        await pilot.pause()  # type: ignore[attr-defined]
+        assert isinstance(app.screen, ItemScreen)
+        return app.screen
+
+    async def _row(self, pilot: object, key: str) -> None:
+        """Walk the menu to a field the way a user does, then choose it.
+
+        From the top every time: the menu keeps the cursor on the row you
+        last edited, and it wraps at the ends.
+        """
+        from todo.tui.item_screen import FIELDS
+
+        index = [k for k, _ in FIELDS].index(key)
+        await pilot.press("home")  # type: ignore[attr-defined]
+        for _ in range(index):
+            await pilot.press("down")  # type: ignore[attr-defined]
+        await pilot.press("enter")  # type: ignore[attr-defined]
+        await pilot.pause()  # type: ignore[attr-defined]
+
+    def _rows(self, screen: object) -> list[str]:
+        options = screen.query_one("#item-fields", OptionList)  # type: ignore[attr-defined]
+        return [
+            str(options.get_option_at_index(i).prompt)
+            for i in range(options.option_count)
+        ]
+
+    async def test_every_field_is_listed_with_its_value(self, db_path: Path) -> None:
+        storage = SqliteStorage(db_path)
+        project = storage.add_project("infra")
+        add_todo(
+            storage,
+            "Main",
+            priority=Priority.HIGH,
+            deadline=date(2099, 3, 4),
+            tags=["auth", "web"],
+            project_id=project.id,
+        )
+        add_todo(storage, "Blocker")
+        add_todo(storage, "Dependent")
+        block_todo(storage, 1, 2)
+        block_todo(storage, 3, 1)
+
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = await self._open(pilot)
+            rows = "\n".join(self._rows(screen))
+            assert "Title       Main" in rows
+            assert "Priority    high" in rows
+            assert "Status      todo" in rows
+            assert "Deadline    2099-03-04" in rows
+            assert "Tags        auth, web" in rows
+            assert "Project     infra" in rows
+            assert "Blocked by  #2" in rows
+            assert "Blocking    #3" in rows
+            assert "Body        empty" in rows
+
+    async def test_renaming_from_the_menu(self, db_path: Path) -> None:
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Old name")
+
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await self._open(pilot)
+            await self._row(pilot, "title")
+            field = app.screen.query_one("#prompt-input", Input)
+            assert field.value == "Old name"  # pre-filled, not blank
+            field.value = "New name"
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert storage.get(1).title == "New name"
+            assert "Title       New name" in "\n".join(self._rows(app.screen))
+
+    async def test_an_empty_title_is_refused_and_the_screen_stays(
+        self, db_path: Path
+    ) -> None:
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Keep me")
+
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = await self._open(pilot)
+            await self._row(pilot, "title")
+            app.screen.query_one("#prompt-input", Input).value = "   "
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert app.screen is screen  # not closed on the user's work
+            assert "empty" in str(screen.query_one("#item-error", Label).render())
+            assert storage.get(1).title == "Keep me"
+
+    async def test_priority_is_chosen_from_its_values(self, db_path: Path) -> None:
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Task", priority=Priority.MEDIUM)
+
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await self._open(pilot)
+            await self._row(pilot, "priority")
+            options = app.screen.query_one("#prompt-options", OptionList)
+            # Starts on the current value, so Enter alone changes nothing.
+            assert str(options.get_option_at_index(options.highlighted).prompt) == (
+                "medium"
+            )
+            await pilot.press("up")  # medium -> high
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert storage.get(1).priority is Priority.HIGH
+            assert "Priority    high" in "\n".join(self._rows(app.screen))
+
+    async def test_status_change_reports_what_it_unblocked(self, db_path: Path) -> None:
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Blocker")
+        add_todo(storage, "Waiting")
+        block_todo(storage, 2, 1)
+
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = await self._open(pilot)  # cursor is on #1, the blocker
+            notices: list[str] = []
+            screen.notify = lambda msg, **kw: notices.append(str(msg))  # type: ignore[method-assign]
+            await self._row(pilot, "status")
+            options = app.screen.query_one("#prompt-options", OptionList)
+            options.highlighted = [s.value for s in Status].index("done")
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert storage.get(1).status is Status.DONE
+            assert any("#2" in n and "unblocked" in n for n in notices)
+
+    async def test_a_bad_deadline_is_refused_inline(self, db_path: Path) -> None:
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Task", deadline=date(2099, 1, 1))
+
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = await self._open(pilot)
+            await self._row(pilot, "deadline")
+            app.screen.query_one("#prompt-input", Input).value = "next tuesday"
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert app.screen is screen
+            assert "YYYY-MM-DD" in str(screen.query_one("#item-error", Label).render())
+            assert storage.get(1).deadline == date(2099, 1, 1)  # untouched
+
+    async def test_an_emptied_deadline_clears_it(self, db_path: Path) -> None:
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Task", deadline=date(2099, 1, 1))
+
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await self._open(pilot)
+            await self._row(pilot, "deadline")
+            app.screen.query_one("#prompt-input", Input).value = ""
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert storage.get(1).deadline is None
+
+    async def test_tags_are_replaced_by_what_you_type(self, db_path: Path) -> None:
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Task", tags=["old"])
+
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await self._open(pilot)
+            await self._row(pilot, "tags")
+            app.screen.query_one("#prompt-input", Input).value = "one, two"
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert storage.get(1).tags == ["one", "two"]
+
+    async def test_the_project_is_picked_and_cleared(self, db_path: Path) -> None:
+        """Project was context-only in the editor buffer: unreachable from
+        the TUI at all. It is a field like any other now."""
+        storage = SqliteStorage(db_path)
+        storage.add_project("infra")
+        add_todo(storage, "Task")
+
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await self._open(pilot)
+            await self._row(pilot, "project")
+            await pilot.press("down")  # (none) -> infra
+            await pilot.press("enter")
+            await pilot.pause()
+            assert storage.get(1).project_name == "infra"
+
+            await self._row(pilot, "project")
+            await pilot.press("up")  # back to (none)
+            await pilot.press("enter")
+            await pilot.pause()
+            assert storage.get(1).project_id is None
+
+    async def test_a_blocker_is_removed_from_the_menu(self, db_path: Path) -> None:
+        """'you also need to be able to remove blockers and such'."""
+        from todo.tui.blockers import BlockDialog
+
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Main")
+        add_todo(storage, "Blocker")
+        block_todo(storage, 1, 2)
+
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await self._open(pilot)
+            await self._row(pilot, "blocked_by")
+            assert isinstance(app.screen, BlockDialog)
+            # #2 is the current blocker, so it sorts first and is marked.
+            assert str(
+                app.screen.query_one("#block-options", OptionList)
+                .get_option_at_index(0)
+                .prompt
+            ).startswith("✓ #2")
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert storage.get(1).blocked_by == []
+            assert "Blocked by  —" in "\n".join(self._rows(app.screen))
+
+    async def test_blocking_is_read_only(self, db_path: Path) -> None:
+        """Dependents are set from their own side; the row says so instead
+        of opening something that cannot help."""
+        from todo.tui.item_screen import ItemScreen
+
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Main")
+        add_todo(storage, "Dependent")
+        block_todo(storage, 2, 1)
+
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = await self._open(pilot)
+            notices: list[str] = []
+            screen.notify = lambda msg, **kw: notices.append(str(msg))  # type: ignore[method-assign]
+            await self._row(pilot, "blocking")
+
+            assert isinstance(app.screen, ItemScreen)  # nothing opened
+            assert notices and "other item" in notices[0]
+
+    async def test_the_body_row_hands_off_to_the_editor(self, db_path: Path) -> None:
+        from todo.tui import item_screen as item_screen_module
+
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Task", body="line one\nline two")
+
+        seen: list[str] = []
+
+        class FakeSession:
+            def __init__(self, view: object, storage: object) -> None:
+                pass
+
+            def run(self, item: TodoItem) -> None:
+                seen.append(item.body)
+                return None
+
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = await self._open(pilot)
+            assert "Body        2 lines" in "\n".join(self._rows(screen))
+            with monkeypatched(item_screen_module, "EditorSession", FakeSession):
+                await self._row(pilot, "body")
+            assert seen == ["line one\nline two"]
+
+    async def test_a_change_reaches_the_list_behind_it(self, db_path: Path) -> None:
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Before")
+
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await self._open(pilot)
+            await self._row(pilot, "title")
+            app.screen.query_one("#prompt-input", Input).value = "After"
+            await pilot.press("enter")
+            await pilot.pause()
+            await pilot.press("escape")
+            await pilot.pause()
+
+            table = app.query_one("#item-list", DataTable)
+            titles = [
+                str(table.get_cell_at(Coordinate(r, COLUMNS.index("Title"))))
+                for r in range(table.row_count)
+            ]
+            assert any("After" in t for t in titles)
+
+    @pytest.mark.parametrize("size", [(80, 24), (80, 20), (60, 16)])
+    async def test_the_hint_and_the_error_stay_on_screen(
+        self, db_path: Path, size: tuple[int, int]
+    ) -> None:
+        """The body preview is the only part allowed to give way: a screen
+        taller than the terminal must never push the inline error off it
+        (round-2 defect #7, one dialog over)."""
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Task", body="\n".join(f"line {i}" for i in range(40)))
+
+        app = TodoApp(storage=storage)
+        async with app.run_test(size=size) as pilot:
+            await pilot.pause()
+            screen = await self._open(pilot)
+            hint = screen.query_one("#item-hint", Label)
+            assert hint.region.height > 0
+            assert hint.region.bottom <= size[1]
+
+            await self._row(pilot, "deadline")
+            app.screen.query_one("#prompt-input", Input).value = "whenever"
+            await pilot.press("enter")
+            await pilot.pause()
+
+            error = screen.query_one("#item-error", Label)
+            assert "YYYY-MM-DD" in str(error.render())
+            assert error.region.height > 0
+            assert error.region.bottom <= size[1]
+
+    async def test_escaping_a_prompt_changes_nothing(self, db_path: Path) -> None:
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Task", priority=Priority.MEDIUM)
+
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            before = storage.get(1)
+            await self._open(pilot)
+            for field in ("title", "priority", "deadline", "tags", "project"):
+                await self._row(pilot, field)
+                await pilot.press("escape")
+                await pilot.pause()
+            assert storage.get(1) == before
+
+    async def test_an_item_deleted_underneath_says_so(self, db_path: Path) -> None:
+        """Another process (or another window) can delete the item while
+        this screen is open. The write fails; saying so and staying put
+        beats vanishing mid-keystroke, and Esc still works."""
+        from todo.tui.item_screen import ItemScreen
+
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Doomed")
+
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = await self._open(pilot)
+            await self._row(pilot, "tags")
+            storage.delete(1)
+            app.screen.query_one("#prompt-input", Input).value = "late"
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert app.is_running
+            assert app.screen is screen
+            assert "1" in str(screen.query_one("#item-error", Label).render())
+            await pilot.press("escape")
+            await pilot.pause()
+            assert not isinstance(app.screen, ItemScreen)
+
+    async def test_an_applied_body_edit_updates_the_row(self, db_path: Path) -> None:
+        from todo.application.commands import CompletionResult, edit_todo
+        from todo.tui import item_screen as item_screen_module
+
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Task", body="one line")
+
+        class FakeSession:
+            def __init__(self, view: object, storage_: object) -> None:
+                pass
+
+            def run(self, item: TodoItem) -> CompletionResult:
+                # What a real $EDITOR round trip leaves behind.
+                return edit_todo(storage, item.id, body="one\ntwo\nthree")
+
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = await self._open(pilot)
+            with monkeypatched(item_screen_module, "EditorSession", FakeSession):
+                await self._row(pilot, "body")
+            assert "Body        3 lines" in "\n".join(self._rows(screen))

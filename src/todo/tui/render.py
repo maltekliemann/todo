@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from todo.adapters.output import _deadline_str
+from todo.application.commands import CompletionResult
 from todo.domain.models import TodoItem
 
 
@@ -50,3 +51,13 @@ def meta_lines(item: TodoItem) -> list[str]:
     if item.blocking:
         lines.append(f"Blocking: {', '.join(f'#{i}' for i in item.blocking)}")
     return lines
+
+
+def unblocked_notices(result: CompletionResult | list[TodoItem]) -> list[str]:
+    """One message per dependent a completion just freed.
+
+    Every screen that can complete an item owes the user this news, so the
+    wording lives here rather than in whichever screen happened to be open.
+    """
+    deps = result.unblocked if isinstance(result, CompletionResult) else result
+    return [f"🔓 #{d.id} {escape_markup(d.title)} is now unblocked" for d in deps]

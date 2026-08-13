@@ -1,4 +1,4 @@
-"""The $EDITOR round-trip: parsing/applying edits and surviving editor failure."""
+"""The $EDITOR round-trip: storing an edited body and surviving failure."""
 
 from __future__ import annotations
 
@@ -7,171 +7,45 @@ from pathlib import Path
 import pytest
 
 from todo.adapters.sqlite_storage import SqliteStorage
-from todo.application.commands import add_todo, block_todo
-from todo.domain.enums import Priority, Status
+from todo.application.commands import add_todo
 from todo.tui.app import TodoApp
 from todo.tui.edit_session import EditorSession
-from todo.tui.editor import apply_editor_edit, item_to_editor_text
+from todo.tui.editor import apply_body_edit
 
 
-def _edited(storage: SqliteStorage, item_id: int, **replacements: str) -> str:
-    """The editor buffer for an item with whole lines replaced by field name."""
-    text = item_to_editor_text(storage.get(item_id))
-    lines = []
-    for line in text.split("\n"):
-        key = line.partition(":")[0].strip().lower()
-        if key in replacements:
-            lines.append(f"{key}: {replacements[key]}")
-        else:
-            lines.append(line)
-    return "\n".join(lines)
+class TestApplyBodyEdit:
+    """The buffer is the body and nothing else: there is no format to get
+    wrong, and no field a body line can reach."""
 
+    def test_edited_buffer_becomes_the_body(self, storage: SqliteStorage) -> None:
+        add_todo(storage, "Task", body="old")
+        result = apply_body_edit(storage, 1, "new body\n")
+        assert result.item.body == "new body"
 
-class TestApplyEditorEdit:
-    def test_clearing_tags_line_clears_tags(self, storage: SqliteStorage) -> None:
-        add_todo(storage, "Task", tags=["a", "b"])
-        result = apply_editor_edit(storage, 1, _edited(storage, 1, tags=""))
-        assert result.item.tags == []
-
-    def test_absent_tags_line_keeps_tags(self, storage: SqliteStorage) -> None:
-        add_todo(storage, "Task", tags=["a", "b"])
-        text = "\n".join(
-            line
-            for line in _edited(storage, 1).split("\n")
-            if not line.startswith("tags:")
-        )
-        result = apply_editor_edit(storage, 1, text)
-        assert result.item.tags == ["a", "b"]
-
-    def test_replacing_tags(self, storage: SqliteStorage) -> None:
-        add_todo(storage, "Task", tags=["a"])
-        result = apply_editor_edit(storage, 1, _edited(storage, 1, tags="x, y"))
-        assert result.item.tags == ["x", "y"]
-
-    def test_status_done_reports_unblocked(self, storage: SqliteStorage) -> None:
-        add_todo(storage, "Blocker")
-        add_todo(storage, "Waiting")
-        block_todo(storage, 2, 1)
-        result = apply_editor_edit(storage, 1, _edited(storage, 1, status="done"))
-        assert result.item.status == Status.DONE
-        assert [dep.id for dep in result.unblocked] == [2]
-
-    def test_clearing_deadline_still_works(self, storage: SqliteStorage) -> None:
-        from datetime import date
-
-        add_todo(storage, "Task", deadline=date(2099, 1, 1))
-        result = apply_editor_edit(storage, 1, _edited(storage, 1, deadline=""))
-        assert result.item.deadline is None
-
-    def test_absent_deadline_line_keeps_deadline(self, storage: SqliteStorage) -> None:
-        from datetime import date
-
-        add_todo(storage, "Task", deadline=date(2099, 1, 1))
-        text = "\n".join(
-            line
-            for line in _edited(storage, 1).split("\n")
-            if not line.startswith("deadline:")
-        )
-        result = apply_editor_edit(storage, 1, text)
-        assert result.item.deadline == date(2099, 1, 1)
-
-    def test_priority_change(self, storage: SqliteStorage) -> None:
-        add_todo(storage, "Task")
-        result = apply_editor_edit(storage, 1, _edited(storage, 1, priority="urgent"))
-        assert result.item.priority == Priority.URGENT
-
-
-class TestEditorContextLines:
-    """Opening an item must show its project and its dependencies. Neither
-    is editable here, so both are marked as context and ignored on parse."""
-
-    def _buffer(self, storage: SqliteStorage) -> str:
-        return item_to_editor_text(storage.get(1))
-
-    def test_shows_project_blockers_and_dependents(
-        self, storage: SqliteStorage
-    ) -> None:
-        project = storage.add_project("infra")
-        add_todo(storage, "Main", project_id=project.id)
-        add_todo(storage, "Blocker")
-        add_todo(storage, "Dependent")
-        storage.add_blocker(1, 2)
-        storage.add_blocker(3, 1)
-
-        text = self._buffer(storage)
-        assert "# project: infra" in text
-        assert "# blocked by: #2" in text
-        assert "# blocking: #3" in text
-
-    def test_absent_context_lines_are_omitted(self, storage: SqliteStorage) -> None:
-        add_todo(storage, "Bare")
-        text = self._buffer(storage)
-        assert "project:" not in text
-        assert "blocked by:" not in text
-        assert "blocking:" not in text
-
-    def test_context_lines_are_not_applied_as_fields(
-        self, storage: SqliteStorage
-    ) -> None:
-        """Editing a context line must not silently do nothing to a real
-        field — the parser must not see these keys at all."""
-        project = storage.add_project("infra")
-        storage.add_project("other")
-        add_todo(storage, "Main", body="keep", project_id=project.id)
-        add_todo(storage, "Blocker")
-        storage.add_blocker(1, 2)
-
-        edited = self._buffer(storage).replace("# project: infra", "# project: other")
-        result = apply_editor_edit(storage, 1, edited)
-        assert result.item.project_name == "infra"
-        assert result.item.blocked_by == [2]
-        assert result.item.body == "keep"
-
-
-class TestEditorBodyContract:
-    def test_missing_body_marker_rejects_edit(self, storage: SqliteStorage) -> None:
-        """Deleting the '# Body' marker errors (round-10: previously it
-        silently kept the body while discarding the user's body edits)."""
-        add_todo(storage, "Task", body="important body text")
-        text = "\n".join(
-            line
-            for line in item_to_editor_text(storage.get(1)).split("\n")
-            if not line.startswith("# Body")
-        )
-        with pytest.raises(ValueError, match="[Bb]ody"):
-            apply_editor_edit(storage, 1, text)
-        assert storage.get(1).body == "important body text"
-
-    def test_emptying_body_below_marker_clears_it(self, storage: SqliteStorage) -> None:
+    def test_emptied_buffer_clears_the_body(self, storage: SqliteStorage) -> None:
         add_todo(storage, "Task", body="old body")
-        text = item_to_editor_text(storage.get(1))
-        marker_idx = text.index("# Body")
-        result = apply_editor_edit(
-            storage, 1, text[: marker_idx + text[marker_idx:].index("\n") + 1]
+        assert apply_body_edit(storage, 1, "").item.body == ""
+
+    def test_field_looking_lines_are_body_text(self, storage: SqliteStorage) -> None:
+        """'status: done' in the body is prose, never a field override."""
+        add_todo(storage, "Task")
+        result = apply_body_edit(storage, 1, "status: done\ntitle: Renamed\n")
+        assert result.item.status.value == "todo"
+        assert result.item.title == "Task"
+        assert result.item.body == "status: done\ntitle: Renamed"
+
+    def test_indentation_is_preserved(self, storage: SqliteStorage) -> None:
+        add_todo(storage, "Task", body="old")
+        edited = "    def f():\n        pass\n"
+        assert apply_body_edit(storage, 1, edited).item.body == (
+            "    def f():\n        pass"
         )
-        assert result.item.body == ""
 
-
-class TestEditorInvalidFields:
-    def test_invalid_priority_raises_clean_error(self, storage: SqliteStorage) -> None:
+    def test_only_the_editors_final_newline_is_dropped(
+        self, storage: SqliteStorage
+    ) -> None:
         add_todo(storage, "Task")
-        with pytest.raises(ValueError, match="Invalid priority"):
-            apply_editor_edit(storage, 1, _edited(storage, 1, priority="hgih"))
-        # Nothing changed.
-        assert storage.get(1).priority.value == "medium"
-
-    def test_invalid_status_raises_clean_error(self, storage: SqliteStorage) -> None:
-        add_todo(storage, "Task")
-        with pytest.raises(ValueError, match="Invalid status"):
-            apply_editor_edit(storage, 1, _edited(storage, 1, status="doen"))
-        assert storage.get(1).status.value == "todo"
-
-    def test_invalid_deadline_raises_like_cli(self, storage: SqliteStorage) -> None:
-        """CLI rejects bad deadlines; the editor path must too, not silently
-        ignore them (mutation-path parity)."""
-        add_todo(storage, "Task")
-        with pytest.raises(ValueError, match="[Dd]eadline"):
-            apply_editor_edit(storage, 1, _edited(storage, 1, deadline="garbage"))
+        assert apply_body_edit(storage, 1, "para\n\n\n").item.body == "para\n\n"
 
 
 class TestEditorCommand:
@@ -199,94 +73,6 @@ class TestEditorCommand:
         ]
 
 
-class TestApplyEditedBuffer:
-    """The post-$EDITOR half of action_edit, testable without suspend()."""
-
-    async def test_rejected_edit_keeps_buffer_file(
-        self, db_path: Path, tmp_path: Path
-    ) -> None:
-        from todo.tui.list_view import TodoListView
-
-        storage = SqliteStorage(db_path)
-        add_todo(storage, "Task", body="keep me")
-        app = TodoApp(storage=storage)
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            view = app.query_one(TodoListView)
-            original = item_to_editor_text(storage.get(1))
-            edited = original.replace("deadline: ", "deadline: 2026/01/01")
-            buf = tmp_path / "buffer.todo.txt"
-            buf.write_text(edited)
-
-            EditorSession(view, storage).apply(1, original, edited, str(buf))
-            await pilot.pause()
-
-            assert app.is_running
-            assert storage.get(1).body == "keep me"  # nothing applied
-            assert buf.exists()  # user's work is recoverable
-
-    async def test_missing_item_is_reported_not_crash(
-        self, db_path: Path, tmp_path: Path
-    ) -> None:
-        from todo.tui.list_view import TodoListView
-
-        storage = SqliteStorage(db_path)
-        add_todo(storage, "Task")
-        app = TodoApp(storage=storage)
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            view = app.query_one(TodoListView)
-            original = item_to_editor_text(storage.get(1))
-            edited = original.replace("title: Task", "title: Renamed")
-            buf = tmp_path / "buffer.todo.txt"
-            buf.write_text(edited)
-
-            storage.delete(1)  # deleted while "the editor was open"
-            EditorSession(view, storage).apply(1, original, edited, str(buf))
-            await pilot.pause()
-            assert app.is_running
-
-    async def test_successful_edit_removes_buffer(
-        self, db_path: Path, tmp_path: Path
-    ) -> None:
-        from todo.tui.list_view import TodoListView
-
-        storage = SqliteStorage(db_path)
-        add_todo(storage, "Task")
-        app = TodoApp(storage=storage)
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            view = app.query_one(TodoListView)
-            original = item_to_editor_text(storage.get(1))
-            edited = original.replace("title: Task", "title: Renamed")
-            buf = tmp_path / "buffer.todo.txt"
-            buf.write_text(edited)
-
-            EditorSession(view, storage).apply(1, original, edited, str(buf))
-            await pilot.pause()
-            assert storage.get(1).title == "Renamed"
-            assert not buf.exists()
-
-
-class TestEditorFailureHandling:
-    async def test_broken_editor_does_not_crash_tui(
-        self, db_path: Path, monkeypatch
-    ) -> None:
-        """A missing/broken $EDITOR shows an error instead of tearing down."""
-        storage = SqliteStorage(db_path)
-        add_todo(storage, "Task")
-        monkeypatch.setenv("EDITOR", "/nonexistent/editor-binary")
-
-        app = TodoApp(storage=storage)
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            await pilot.press("e")
-            await pilot.pause()
-            assert app.is_running
-            # Item unchanged.
-            assert storage.get(1).title == "Task"
-
-
 class TestEditorCommandValidation:
     def test_empty_editor_value_raises(self) -> None:
         from todo.tui.editor import editor_command
@@ -301,48 +87,6 @@ class TestEditorCommandValidation:
             editor_command('code "', "/tmp/x")
 
 
-class TestEditorEmptyTitle:
-    def test_blanked_title_line_rejects_whole_edit(
-        self, storage: SqliteStorage
-    ) -> None:
-        """'title:' blanked must error, not partially apply the edit."""
-        add_todo(storage, "Keep me")
-        buffer = _edited(storage, 1, title="", status="in-progress")
-        with pytest.raises(ValueError, match="[Tt]itle"):
-            apply_editor_edit(storage, 1, buffer)
-        # Nothing applied: status unchanged too.
-        assert storage.get(1).status.value == "todo"
-        assert storage.get(1).title == "Keep me"
-
-
-class TestEditorBodyWhitespacePreserved:
-    def test_title_only_edit_keeps_body_bytes(self, storage: SqliteStorage) -> None:
-        """Editing another field must not silently mutate an untouched body
-        (indentation and trailing newline included — think pasted code)."""
-        body = "    indented line\n\n  second\n"
-        add_todo(storage, "Task", body=body)
-        result = apply_editor_edit(storage, 1, _edited(storage, 1, title="Renamed"))
-        assert result.item.title == "Renamed"
-        assert result.item.body == body
-
-    def test_editor_added_trailing_newline_is_not_a_body_change(
-        self, storage: SqliteStorage
-    ) -> None:
-        body = "plain body"
-        add_todo(storage, "Task", body=body)
-        # POSIX editors terminate the file with a newline on save.
-        edited = _edited(storage, 1, title="Renamed") + "\n"
-        result = apply_editor_edit(storage, 1, edited)
-        assert result.item.body == body
-
-    def test_edited_body_preserves_indentation(self, storage: SqliteStorage) -> None:
-        add_todo(storage, "Task", body="old")
-        text = item_to_editor_text(storage.get(1))
-        edited = text.replace("\nold", "\n    def f():\n        pass") + "\n"
-        result = apply_editor_edit(storage, 1, edited)
-        assert result.item.body == "    def f():\n        pass"
-
-
 class TestEditorPathWithSpaces:
     def test_unquoted_spaced_path_falls_back_to_verbatim(self, tmp_path: Path) -> None:
         """An unquoted $EDITOR path containing spaces (common on macOS)
@@ -353,6 +97,77 @@ class TestEditorPathWithSpaces:
         editor.write_text("#!/bin/sh\nexit 0\n")
         editor.chmod(0o755)
         assert editor_command(str(editor), "/tmp/x") == [str(editor), "/tmp/x"]
+
+
+class TestApplyEditedBuffer:
+    """The post-$EDITOR half, testable without suspend()."""
+
+    async def test_rejected_edit_keeps_buffer_file(
+        self, db_path: Path, tmp_path: Path
+    ) -> None:
+        """The item was deleted while the editor was open: the write fails,
+        so the user's typing must stay recoverable on disk."""
+        from todo.tui.list_view import TodoListView
+
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Task", body="keep me")
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            view = app.query_one(TodoListView)
+            original = storage.get(1).body
+            edited = "hours of typing"
+            buf = tmp_path / "buffer.todo.txt"
+            buf.write_text(edited)
+
+            storage.delete(1)
+            EditorSession(view, storage).apply(1, original, edited, str(buf))
+            await pilot.pause()
+
+            assert app.is_running
+            assert buf.exists()  # user's work is recoverable
+
+    async def test_successful_edit_removes_buffer(
+        self, db_path: Path, tmp_path: Path
+    ) -> None:
+        from todo.tui.list_view import TodoListView
+
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Task", body="old")
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            view = app.query_one(TodoListView)
+            original = storage.get(1).body
+            edited = "rewritten"
+            buf = tmp_path / "buffer.todo.txt"
+            buf.write_text(edited)
+
+            EditorSession(view, storage).apply(1, original, edited, str(buf))
+            await pilot.pause()
+            assert storage.get(1).body == "rewritten"
+            assert not buf.exists()
+
+
+class TestEditorFailureHandling:
+    async def test_broken_editor_does_not_crash_tui(
+        self, db_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A missing/broken $EDITOR shows an error instead of tearing down."""
+        from todo.tui.list_view import TodoListView
+
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Task", body="untouched")
+        monkeypatch.setenv("EDITOR", "/nonexistent/editor-binary")
+
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            view = app.query_one(TodoListView)
+            assert EditorSession(view, storage).run(storage.get(1)) is None
+            await pilot.pause()
+            assert app.is_running
+            assert storage.get(1).body == "untouched"
 
 
 class TestWhitespaceOnlyBodyEdit:
@@ -369,8 +184,8 @@ class TestWhitespaceOnlyBodyEdit:
         async with app.run_test() as pilot:
             await pilot.pause()
             view = app.query_one(TodoListView)
-            original = item_to_editor_text(storage.get(1))
-            edited = original + "\n\n"  # append a trailing blank line to the body
+            original = storage.get(1).body
+            edited = original + "\n\n"  # append a trailing blank line
             buf = tmp_path / "buffer.todo.txt"
             buf.write_text(edited)
 
@@ -390,7 +205,7 @@ class TestWhitespaceOnlyBodyEdit:
             await pilot.pause()
             view = app.query_one(TodoListView)
             item_before = storage.get(1)
-            original = item_to_editor_text(item_before)
+            original = item_before.body
             edited = original + "\n"  # only the editor's final newline
             buf = tmp_path / "buffer.todo.txt"
             buf.write_text(edited)
@@ -401,56 +216,6 @@ class TestWhitespaceOnlyBodyEdit:
             assert after.body == "print(x)"
             assert after.updated_at == item_before.updated_at  # true no-op
             assert not buf.exists()
-
-
-class TestMissingBodyMarkerErrors:
-    def test_deleted_marker_rejects_edit_instead_of_silent_drop(
-        self, storage: SqliteStorage
-    ) -> None:
-        """Deleting the '# Body' marker must error (buffer kept upstream),
-        never report success while the user's body edits are discarded."""
-        add_todo(storage, "Task", body="draft the outline")
-        text = "\n".join(
-            line
-            for line in item_to_editor_text(storage.get(1)).split("\n")
-            if not line.startswith("# Body")
-        )
-        text += "\nsend to Alice"  # the body edit that silently vanished
-        with pytest.raises(ValueError, match="[Bb]ody"):
-            apply_editor_edit(storage, 1, text)
-        assert storage.get(1).body == "draft the outline"  # nothing applied
-
-    async def test_marker_less_buffer_keeps_file_and_notifies(
-        self, db_path: Path, tmp_path: Path
-    ) -> None:
-        from todo.tui.list_view import TodoListView
-
-        storage = SqliteStorage(db_path)
-        add_todo(storage, "Task", body="keep me")
-        app = TodoApp(storage=storage)
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            view = app.query_one(TodoListView)
-            original = item_to_editor_text(storage.get(1))
-            edited = "\n".join(
-                line for line in original.split("\n") if not line.startswith("# Body")
-            )
-            buf = tmp_path / "buffer.todo.txt"
-            buf.write_text(edited)
-            EditorSession(view, storage).apply(1, original, edited, str(buf))
-            await pilot.pause()
-            assert app.is_running
-            assert storage.get(1).body == "keep me"
-            assert buf.exists()  # user's work recoverable
-
-    def test_body_lines_cannot_inject_fields(self, storage: SqliteStorage) -> None:
-        """With the marker required, 'status: done' inside the body region
-        is body text, never a field override."""
-        add_todo(storage, "Task")
-        text = item_to_editor_text(storage.get(1)) + "status: done"
-        result = apply_editor_edit(storage, 1, text)
-        assert result.item.status.value == "todo"
-        assert "status: done" in result.item.body
 
 
 class TestEditorNonzeroExitKeepsBuffer:
@@ -484,7 +249,7 @@ class TestEditorNonzeroExitKeepsBuffer:
             monkeypatch.setattr(
                 view, "notify", lambda msg, **kw: notices.append(str(msg))
             )
-            view.action_edit()
+            EditorSession(view, storage).run(storage.get(1))
             await pilot.pause()
             assert notices and "kept at" in notices[0]
             match = re.search(r"kept at (\S+)", notices[0])
@@ -508,7 +273,7 @@ class TestEditorEncodingRobustness:
             await pilot.pause()
             view = app.query_one(TodoListView)
             buf = tmp_path / "latin1.todo.txt"
-            buf.write_bytes("title: caf\xe9".encode("latin-1"))
+            buf.write_bytes("caf\xe9".encode("latin-1"))
             notices: list[str] = []
             view.notify = lambda msg, **kw: notices.append(str(msg))  # type: ignore[method-assign]
 
@@ -529,49 +294,9 @@ class TestEditorEncodingRobustness:
         async with app.run_test() as pilot:
             await pilot.pause()
             view = app.query_one(TodoListView)
-            path = EditorSession(view, storage).write_buffer(
-                item_to_editor_text(storage.get(1))
-            )
+            path = EditorSession(view, storage).write_buffer(storage.get(1).body)
             try:
-                assert "Ünïcode ✅ täsk" in Path(path).read_text(encoding="utf-8")
+                assert "emoji 🎉 body" in Path(path).read_text(encoding="utf-8")
                 assert EditorSession(view, storage).read_buffer(path) is not None
             finally:
                 Path(path).unlink(missing_ok=True)
-
-
-class TestBlankEnumFieldsError:
-    """A blanked priority/status line is bad input, not an absent field:
-    the title branch errors and the deadline branch clears, so silently
-    ignoring these two (and deleting the buffer) is the odd one out."""
-
-    def test_blank_priority_line_rejects_edit(self, storage: SqliteStorage) -> None:
-        add_todo(storage, "Task")
-        with pytest.raises(ValueError, match="[Pp]riority"):
-            apply_editor_edit(storage, 1, _edited(storage, 1, priority=""))
-        assert storage.get(1).priority.value == "medium"
-
-    def test_blank_status_line_rejects_edit(self, storage: SqliteStorage) -> None:
-        add_todo(storage, "Task")
-        with pytest.raises(ValueError, match="[Ss]tatus"):
-            apply_editor_edit(storage, 1, _edited(storage, 1, status=""))
-        assert storage.get(1).status.value == "todo"
-
-    def test_blank_status_does_not_partially_apply(
-        self, storage: SqliteStorage
-    ) -> None:
-        add_todo(storage, "Task")
-        buffer = _edited(storage, 1, status="", title="Renamed")
-        with pytest.raises(ValueError):
-            apply_editor_edit(storage, 1, buffer)
-        assert storage.get(1).title == "Task"
-
-    def test_deleted_priority_line_still_leaves_field_unchanged(
-        self, storage: SqliteStorage
-    ) -> None:
-        add_todo(storage, "Task", priority=Priority.HIGH)
-        text = "\n".join(
-            line
-            for line in item_to_editor_text(storage.get(1)).split("\n")
-            if not line.startswith("priority:")
-        )
-        assert apply_editor_edit(storage, 1, text).item.priority == Priority.HIGH

@@ -151,15 +151,15 @@ class TestTuiMarkupSafety:
             meta = str(app.query_one("#detail-meta", Static).render())
             assert "[/]" in meta
 
-    async def test_inspect_dialog_hostile(self, hostile_storage: SqliteStorage) -> None:
+    async def test_item_screen_hostile(self, hostile_storage: SqliteStorage) -> None:
         app = TodoApp(storage=hostile_storage)
         async with app.run_test() as pilot:
             await pilot.pause()
             await pilot.press("i")
             await pilot.pause()
-            from todo.tui.dialogs import InspectDialog
+            from todo.tui.item_screen import ItemScreen
 
-            assert isinstance(app.screen, InspectDialog)
+            assert isinstance(app.screen, ItemScreen)
             await pilot.press("escape")
             await pilot.pause()
 
@@ -211,7 +211,7 @@ class TestTuiMarkupSafety:
         candidate, verbatim and without crashing."""
         from textual.widgets import OptionList
 
-        from todo.tui.dialogs import BlockDialog
+        from todo.tui.blockers import BlockDialog
 
         app = TodoApp(storage=hostile_storage)
         async with app.run_test() as pilot:
@@ -270,7 +270,10 @@ class TestTextualMarkupEscaping:
             assert "[WIP] refactor auth" in title
             assert "[Red]tag" in meta
 
-    async def test_inspect_modal_keeps_bracketed_title(self, db_path: Path) -> None:
+    async def test_item_screen_keeps_bracketed_title(self, db_path: Path) -> None:
+        from rich.text import Text
+        from textual.widgets import OptionList
+
         from todo.adapters.sqlite_storage import SqliteStorage
         from todo.application.commands import add_todo
         from todo.tui.app import TodoApp
@@ -282,8 +285,12 @@ class TestTextualMarkupEscaping:
             await pilot.pause()
             await pilot.press("i")
             await pilot.pause()
-            title = str(app.screen.query_one("#inspect-title", Static).render())
-            assert "[WIP] refactor auth" in title
+            row = app.screen.query_one("#item-fields", OptionList).get_option_at_index(
+                0
+            )
+            # A Text prompt is never parsed as markup, so "[WIP]" survives.
+            assert isinstance(row.prompt, Text)
+            assert "[WIP] refactor auth" in str(row.prompt)
 
     async def test_filter_bar_keeps_bracketed_search(self, db_path: Path) -> None:
         from todo.adapters.sqlite_storage import SqliteStorage
