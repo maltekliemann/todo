@@ -41,13 +41,35 @@ def editor_command(editor_value: str, path: str) -> list[str]:
     return [*parts, path]
 
 
+def _context_lines(item: TodoItem) -> list[str]:
+    """The item's project and dependencies, as read-only context.
+
+    They belong in the buffer — opening an item should show what it waits
+    on and what waits on it — but they are not editable here, so they are
+    commented and the parser never sees these keys. Absent ones are
+    omitted rather than shown blank, which would read as editable.
+    """
+    lines = []
+    if item.project_name:
+        lines.append(f"# project: {item.project_name}")
+    if item.blocked_by:
+        lines.append(f"# blocked by: {', '.join(f'#{i}' for i in item.blocked_by)}")
+    if item.blocking:
+        lines.append(f"# blocking: {', '.join(f'#{i}' for i in item.blocking)}")
+    if lines:
+        lines.append("# (context only — edits to these lines are ignored)")
+    return lines
+
+
 def item_to_editor_text(item: TodoItem) -> str:
+    context = "".join(f"{line}\n" for line in _context_lines(item))
     return (
         f"title: {item.title}\n"
         f"priority: {item.priority.value}\n"
         f"status: {item.status.value}\n"
         f"deadline: {item.deadline.isoformat() if item.deadline else ''}\n"
         f"tags: {', '.join(item.tags)}\n"
+        f"{context}"
         f"\n"
         f"# Body (everything below this line is the body):\n"
         f"{item.body}"

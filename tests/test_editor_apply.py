@@ -81,6 +81,53 @@ class TestApplyEditorEdit:
         assert result.item.priority == Priority.URGENT
 
 
+class TestEditorContextLines:
+    """Opening an item must show its project and its dependencies. Neither
+    is editable here, so both are marked as context and ignored on parse."""
+
+    def _buffer(self, storage: SqliteStorage) -> str:
+        return item_to_editor_text(storage.get(1))
+
+    def test_shows_project_blockers_and_dependents(
+        self, storage: SqliteStorage
+    ) -> None:
+        project = storage.add_project("infra")
+        add_todo(storage, "Main", project_id=project.id)
+        add_todo(storage, "Blocker")
+        add_todo(storage, "Dependent")
+        storage.add_blocker(1, 2)
+        storage.add_blocker(3, 1)
+
+        text = self._buffer(storage)
+        assert "# project: infra" in text
+        assert "# blocked by: #2" in text
+        assert "# blocking: #3" in text
+
+    def test_absent_context_lines_are_omitted(self, storage: SqliteStorage) -> None:
+        add_todo(storage, "Bare")
+        text = self._buffer(storage)
+        assert "project:" not in text
+        assert "blocked by:" not in text
+        assert "blocking:" not in text
+
+    def test_context_lines_are_not_applied_as_fields(
+        self, storage: SqliteStorage
+    ) -> None:
+        """Editing a context line must not silently do nothing to a real
+        field — the parser must not see these keys at all."""
+        project = storage.add_project("infra")
+        storage.add_project("other")
+        add_todo(storage, "Main", body="keep", project_id=project.id)
+        add_todo(storage, "Blocker")
+        storage.add_blocker(1, 2)
+
+        edited = self._buffer(storage).replace("# project: infra", "# project: other")
+        result = apply_editor_edit(storage, 1, edited)
+        assert result.item.project_name == "infra"
+        assert result.item.blocked_by == [2]
+        assert result.item.body == "keep"
+
+
 class TestEditorBodyContract:
     def test_missing_body_marker_rejects_edit(self, storage: SqliteStorage) -> None:
         """Deleting the '# Body' marker errors (round-10: previously it
