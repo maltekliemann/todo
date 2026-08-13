@@ -282,7 +282,7 @@ class TodoListView(Widget):
         parts = self._filters.status_parts()
         hint = "  [dim]([0] clears)[/dim]" if parts else ""
         if not self._cursor_follows_item:
-            parts.append("[dim]Cursor:[/dim] [b]stay[/b]")
+            parts.append("[dim]Cursor:[/dim] [b]advance[/b]")
         if parts:
             search_status.update("  ".join(parts) + hint)
         else:
@@ -455,13 +455,14 @@ class TodoListView(Widget):
         self._refresh_list()
 
     def action_toggle_cursor_mode(self) -> None:
-        """Toggle whether the cursor follows a moved item or stays put.
+        """Toggle what the cursor does after you move the selected item.
 
-        'Stay' keeps the cursor on the same visual row after status moves,
-        so repeatedly pressing 'd' cleans a list top-down.
+        'Follow item' keeps it on that item wherever it lands. 'Advance to
+        next' moves it to the item that came after, so holding 'd' or '>'
+        walks a list top-down.
         """
         self._cursor_follows_item = not self._cursor_follows_item
-        mode = "follow item" if self._cursor_follows_item else "stay on row"
+        mode = "follow item" if self._cursor_follows_item else "advance to next"
         self.notify(f"Cursor mode: {mode}")
         self._refresh_list()
 

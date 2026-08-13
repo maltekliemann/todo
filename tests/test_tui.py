@@ -579,6 +579,25 @@ class TestStayCursorMode:
             add_todo(storage, f"Task {n}")
         return storage
 
+    async def test_the_mode_is_named_for_what_it_does(
+        self, five_items: SqliteStorage
+    ) -> None:
+        """It advances to the next item; calling it "stay on row" described
+        the behaviour it replaced."""
+        app = TodoApp(storage=five_items)
+        notices: list[str] = []
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            view = app.query_one(TodoListView)
+            view.notify = lambda msg, **kw: notices.append(str(msg))  # type: ignore[method-assign]
+            await pilot.press("full_stop")
+            await pilot.pause()
+            assert notices and "advance" in notices[0].lower()
+            assert "stay" not in notices[0].lower()
+
+            status = str(app.query_one("#search-status", Static).render())
+            assert "advance" in status.lower()
+
     async def test_status_steps_walk_down_the_list(
         self, five_items: SqliteStorage
     ) -> None:
