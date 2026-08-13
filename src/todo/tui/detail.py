@@ -7,6 +7,7 @@ from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widgets import Static
 
+from todo.application.dependencies import Dependencies
 from todo.domain.todo_item import TodoItem
 from todo.tui.render import escape_markup, meta_lines
 
@@ -19,11 +20,11 @@ class DetailPane(Vertical):
         yield Static("", id="detail-meta")
         yield Static("", id="detail-body")
 
-    def show(self, item: TodoItem) -> None:
+    def show(self, item: TodoItem, deps: Dependencies) -> None:
         self.query_one("#detail-title", Static).update(
             f"[b]#{item.id}  {escape_markup(item.title)}[/b]"
         )
-        self.query_one("#detail-meta", Static).update("\n".join(meta_lines(item)))
+        self.query_one("#detail-meta", Static).update("\n".join(meta_lines(item, deps)))
         # Text, not markup: the body is user-controlled.
         self.query_one("#detail-body", Static).update(
             Text(item.body) if item.body else ""

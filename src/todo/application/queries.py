@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from todo.application.contracts.storage import StorageProtocol
+from todo.application.dependencies import Dependencies
 from todo.domain.priority import Priority
 from todo.domain.project import Project
 from todo.domain.project_name import ProjectName
@@ -54,10 +55,14 @@ def list_todos(
         project_id=project_id,
         include_done=include_done,
     )
-    if blocked:
-        items = [i for i in items if i.is_blocked]
-    elif ready:
-        items = [i for i in items if not i.is_blocked and not i.is_done]
+    if blocked or ready:
+        # Blocked-ness is the graph's answer, not a column: load it once
+        # for the whole page rather than per item.
+        deps = Dependencies.load(storage)
+        if blocked:
+            items = [i for i in items if deps.is_blocked(i.id)]
+        else:
+            items = [i for i in items if not deps.is_blocked(i.id) and not i.is_done]
     return items
 
 

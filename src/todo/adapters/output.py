@@ -5,6 +5,7 @@ import sys
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
+from todo.application.dependencies import Dependencies
 from todo.application.queries import ProjectDetail, ProjectSummary
 from todo.domain.priority import Priority
 from todo.domain.project import Project
@@ -75,19 +76,23 @@ def _styled(text: str, style: str) -> str:
 
 @runtime_checkable
 class OutputProtocol(Protocol):
-    def print_list(self, items: list[TodoItem]) -> None: ...
-    def print_item(self, item: TodoItem) -> None: ...
-    def print_summary(self, since: datetime, items: list[TodoItem]) -> None: ...
+    def print_list(self, items: list[TodoItem], deps: Dependencies) -> None: ...
+    def print_item(self, item: TodoItem, deps: Dependencies) -> None: ...
+    def print_summary(
+        self, since: datetime, items: list[TodoItem], deps: Dependencies
+    ) -> None: ...
     def print_deleted(self, item_id: int) -> None: ...
-    def print_json_list(self, items: list[TodoItem]) -> None: ...
-    def print_json_item(self, item: TodoItem) -> None: ...
-    def print_json_summary(self, since: datetime, items: list[TodoItem]) -> None: ...
+    def print_json_list(self, items: list[TodoItem], deps: Dependencies) -> None: ...
+    def print_json_item(self, item: TodoItem, deps: Dependencies) -> None: ...
+    def print_json_summary(
+        self, since: datetime, items: list[TodoItem], deps: Dependencies
+    ) -> None: ...
     def print_tags(self, counts: list[tuple[str, int]]) -> None: ...
     def print_json_tags(self, counts: list[tuple[str, int]]) -> None: ...
     def print_projects(self, summaries: list[ProjectSummary]) -> None: ...
-    def print_project(self, detail: ProjectDetail) -> None: ...
+    def print_project(self, detail: ProjectDetail, deps: Dependencies) -> None: ...
     def print_json_projects(self, summaries: list[ProjectSummary]) -> None: ...
-    def print_json_project(self, detail: ProjectDetail) -> None: ...
+    def print_json_project(self, detail: ProjectDetail, deps: Dependencies) -> None: ...
     def print_json_deleted_project(self, project: Project) -> None: ...
 
 
@@ -102,10 +107,10 @@ def _project_to_dict(project: Project) -> dict[str, object]:
     }
 
 
-def _detail_to_dict(detail: ProjectDetail) -> dict[str, object]:
+def _detail_to_dict(detail: ProjectDetail, deps: Dependencies) -> dict[str, object]:
     return {
         **_project_to_dict(detail.project),
-        "items": [_item_to_dict(i) for i in detail.items],
+        "items": [_item_to_dict(i, deps) for i in detail.items],
         "updates": [
             {
                 "id": u.id,
@@ -117,7 +122,7 @@ def _detail_to_dict(detail: ProjectDetail) -> dict[str, object]:
     }
 
 
-def _item_to_dict(item: TodoItem) -> dict[str, object]:
+def _item_to_dict(item: TodoItem, deps: Dependencies) -> dict[str, object]:
     return {
         "id": item.id,
         "title": item.title,
@@ -130,9 +135,9 @@ def _item_to_dict(item: TodoItem) -> dict[str, object]:
         "deadline": item.deadline.isoformat() if item.deadline else None,
         "tags": item.tags,
         "is_overdue": item.is_overdue,
-        "blocked_by": item.blocked_by,
-        "blocking": item.blocking,
-        "is_blocked": item.is_blocked,
+        "blocked_by": deps.blockers_of(item.id),
+        "blocking": deps.dependents_of(item.id),
+        "is_blocked": deps.is_blocked(item.id),
         "project_id": item.project.id if item.project else None,
         "project": item.project.name if item.project else None,
     }
@@ -145,18 +150,20 @@ class _JsonOutput:
     so the rich and plain variants cannot drift apart.
     """
 
-    def print_json_list(self, items: list[TodoItem]) -> None:
-        print(json.dumps([_item_to_dict(i) for i in items], indent=2))
+    def print_json_list(self, items: list[TodoItem], deps: Dependencies) -> None:
+        print(json.dumps([_item_to_dict(i, deps) for i in items], indent=2))
 
-    def print_json_item(self, item: TodoItem) -> None:
-        print(json.dumps(_item_to_dict(item), indent=2))
+    def print_json_item(self, item: TodoItem, deps: Dependencies) -> None:
+        print(json.dumps(_item_to_dict(item, deps), indent=2))
 
-    def print_json_summary(self, since: datetime, items: list[TodoItem]) -> None:
+    def print_json_summary(
+        self, since: datetime, items: list[TodoItem], deps: Dependencies
+    ) -> None:
         print(
             json.dumps(
                 {
                     "since": since.isoformat(),
-                    "items": [_item_to_dict(i) for i in items],
+                    "items": [_item_to_dict(i, deps) for i in items],
                     "count": len(items),
                 },
                 indent=2,
@@ -181,8 +188,8 @@ class _JsonOutput:
             )
         )
 
-    def print_json_project(self, detail: ProjectDetail) -> None:
-        print(json.dumps(_detail_to_dict(detail), indent=2))
+    def print_json_project(self, detail: ProjectDetail, deps: Dependencies) -> None:
+        print(json.dumps(_detail_to_dict(detail, deps), indent=2))
 
     def print_json_deleted_project(self, project: Project) -> None:
         print(json.dumps(_project_to_dict(project), indent=2))
@@ -194,7 +201,7 @@ class RichOutput(_JsonOutput):
 
         self._console = Console()
 
-    def print_list(self, items: list[TodoItem]) -> None:
+    def print_list(self, items: list[TodoItem], deps: Dependencies) -> None:
         if not items:
             self._console.print("[dim]No items.[/dim]")
             return
@@ -216,7 +223,9 @@ class RichOutput(_JsonOutput):
             dl = _deadline_str(item)
             dl_style = _deadline_style(item)
             status_icon = _status_icon(item.status)
-            title = f"\U0001f6a7 {item.title}" if item.is_blocked else item.title
+            title = (
+                f"\U0001f6a7 {item.title}" if deps.is_blocked(item.id) else item.title
+            )
             table.add_row(
                 str(item.id),
                 _styled(_priority_label(item.priority), pri_style),
@@ -231,7 +240,7 @@ class RichOutput(_JsonOutput):
             f"\n[dim]{len(items)} item{'s' if len(items) != 1 else ''}[/dim]"
         )
 
-    def print_item(self, item: TodoItem) -> None:
+    def print_item(self, item: TodoItem, deps: Dependencies) -> None:
         from rich.panel import Panel
         from rich.text import Text
 
@@ -258,18 +267,20 @@ class RichOutput(_JsonOutput):
             lines.append(f"\nProject: {item.project.name}")
         if item.tags:
             lines.append(f"\nTags: {', '.join(item.tags)}")
-        if item.blocked_by:
-            blocked = ", ".join(f"#{i}" for i in item.blocked_by)
+        if deps.blockers_of(item.id):
+            blocked = ", ".join(f"#{i}" for i in deps.blockers_of(item.id))
             lines.append(f"\nBlocked by: {blocked}")
-        if item.blocking:
-            blocking = ", ".join(f"#{i}" for i in item.blocking)
+        if deps.dependents_of(item.id):
+            blocking = ", ".join(f"#{i}" for i in deps.dependents_of(item.id))
             lines.append(f"\nBlocking: {blocking}")
         if item.body:
             lines.append(f"\n\n{item.body}")
 
         self._console.print(Panel(lines))
 
-    def print_summary(self, since: datetime, items: list[TodoItem]) -> None:
+    def print_summary(
+        self, since: datetime, items: list[TodoItem], deps: Dependencies
+    ) -> None:
         now = datetime.now(tz=since.tzinfo)
         header = f"Done ({since.strftime('%b %d')} \u2192 {now.strftime('%b %d')})"
         self._console.rule(header)
@@ -349,7 +360,7 @@ class RichOutput(_JsonOutput):
             )
         self._console.print(table)
 
-    def print_project(self, detail: ProjectDetail) -> None:
+    def print_project(self, detail: ProjectDetail, deps: Dependencies) -> None:
         from rich.text import Text
 
         project, items = detail.project, detail.items
@@ -372,11 +383,11 @@ class RichOutput(_JsonOutput):
                 self._console.print(line)
         if items:
             self._console.print()
-            self.print_list(items)
+            self.print_list(items, deps)
 
 
 class PlainOutput(_JsonOutput):
-    def print_list(self, items: list[TodoItem]) -> None:
+    def print_list(self, items: list[TodoItem], deps: Dependencies) -> None:
         if not items:
             print("No items.")
             return
@@ -391,7 +402,7 @@ class PlainOutput(_JsonOutput):
             )
         print(f"\n{len(items)} item{'s' if len(items) != 1 else ''}")
 
-    def print_item(self, item: TodoItem) -> None:
+    def print_item(self, item: TodoItem, deps: Dependencies) -> None:
         print(f"#{item.id}  {item.title}")
         print(f"Priority: {item.priority.value}  Status: {item.status.value}")
         if item.deadline:
@@ -406,14 +417,18 @@ class PlainOutput(_JsonOutput):
             print(f"Project: {item.project.name}")
         if item.tags:
             print(f"Tags: {', '.join(item.tags)}")
-        if item.blocked_by:
-            print(f"Blocked by: {', '.join(f'#{i}' for i in item.blocked_by)}")
-        if item.blocking:
-            print(f"Blocking: {', '.join(f'#{i}' for i in item.blocking)}")
+        if deps.blockers_of(item.id):
+            ids = ", ".join(f"#{i}" for i in deps.blockers_of(item.id))
+            print(f"Blocked by: {ids}")
+        if deps.dependents_of(item.id):
+            ids = ", ".join(f"#{i}" for i in deps.dependents_of(item.id))
+            print(f"Blocking: {ids}")
         if item.body:
             print(f"\n{item.body}")
 
-    def print_summary(self, since: datetime, items: list[TodoItem]) -> None:
+    def print_summary(
+        self, since: datetime, items: list[TodoItem], deps: Dependencies
+    ) -> None:
         now = datetime.now(tz=since.tzinfo)
         print(f"-- Done ({since.strftime('%b %d')} -> {now.strftime('%b %d')}) --")
         if not items:
@@ -449,7 +464,7 @@ class PlainOutput(_JsonOutput):
                 f"open:{s.open_count} done:{s.done_count}{desc}"
             )
 
-    def print_project(self, detail: ProjectDetail) -> None:
+    def print_project(self, detail: ProjectDetail, deps: Dependencies) -> None:
         project, items = detail.project, detail.items
         done = sum(1 for i in items if i.is_done)
         suffix = " (archived)" if project.is_archived else ""
@@ -463,7 +478,7 @@ class PlainOutput(_JsonOutput):
                 print(f"  {stamp}  {update.body}")
         if items:
             print()
-            self.print_list(items)
+            self.print_list(items, deps)
 
 
 def _pri_style(p: Priority) -> str:

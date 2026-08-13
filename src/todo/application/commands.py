@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import date
 
 from todo.application.contracts.storage import StorageProtocol, Unset
+from todo.application.dependencies import Dependencies
 from todo.domain.deadline import Deadline
 from todo.domain.dependency_graph import DependencyGraph
 from todo.domain.description import Description
@@ -130,12 +131,17 @@ def _tracked_update(
     hydrated, so cost does not scale with dependent count."""
     with storage.transaction():
         before = storage.get(item_id)
-        # The blocked-set diff is only needed when this completion could
-        # actually unblock someone — most items block nothing.
-        completing = (
-            status == Status.DONE and not before.is_done and bool(before.blocking)
+        # Only a completion can unblock anything, so nothing else pays for
+        # reading the graph — and one read answers both questions.
+        deps = (
+            Dependencies.load(storage)
+            if status == Status.DONE and not before.is_done
+            else None
         )
-        blocked_before = storage.blocked_ids() if completing else set()
+        dependents = deps.dependents_of(item_id) if deps else []
+        # Most items block nothing; those skip the blocked-set diff too.
+        completing = deps is not None and bool(dependents)
+        blocked_before = deps.blocked_ids() if completing and deps else set()
         item = storage.update(
             item_id,
             title=Title(title) if title is not None else None,
@@ -151,7 +157,7 @@ def _tracked_update(
         )
         unblocked: list[TodoItem] = []
         if completing:
-            unblocked = _newly_unblocked(storage, before.blocking, blocked_before)
+            unblocked = _newly_unblocked(storage, dependents, blocked_before)
     return CompletionResult(item=item, unblocked=unblocked)
 
 
@@ -161,7 +167,7 @@ def _newly_unblocked(
     blocked_before: set[int],
 ) -> list[TodoItem]:
     """Hydrate the dependents that just transitioned blocked -> unblocked."""
-    blocked_after = storage.blocked_ids()
+    blocked_after = Dependencies.load(storage).blocked_ids()
     unblocked: list[TodoItem] = []
     for dep_id in sorted(dependents):
         if dep_id not in blocked_before or dep_id in blocked_after:
@@ -198,13 +204,15 @@ def delete_todo(
     completing the blocker does, so it must report them the same way.
     """
     with storage.transaction():
-        victim = storage.get(item_id)
-        if not victim.blocking:
+        storage.get(item_id)  # raises NotFoundError before any graph work
+        deps = Dependencies.load(storage)
+        dependents = deps.dependents_of(item_id)
+        if not dependents:
             storage.delete(item_id)
             return []
-        blocked_before = storage.blocked_ids()
+        blocked_before = deps.blocked_ids()
         storage.delete(item_id)
-        return _newly_unblocked(storage, victim.blocking, blocked_before)
+        return _newly_unblocked(storage, dependents, blocked_before)
 
 
 def block_todo(
@@ -264,9 +272,10 @@ def unblock_todo_batch(
     succeeding while the real blocker stays in place.
     """
     with storage.transaction():
-        item = storage.get(blocked_id)  # raises NotFoundError before changes
+        storage.get(blocked_id)  # raises NotFoundError before changes
+        blockers = Dependencies.load(storage).blockers_of(blocked_id)
         for blocker_id in blocker_ids:
-            if blocker_id not in item.blocked_by:
+            if blocker_id not in blockers:
                 raise DependencyError(
                     f"Item #{blocked_id} is not blocked by #{blocker_id}."
                 )

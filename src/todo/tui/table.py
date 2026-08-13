@@ -16,6 +16,7 @@ from todo.adapters.output import (
     _relative_age,
     _status_icon,
 )
+from todo.application.dependencies import Dependencies
 from todo.domain.status import Status
 from todo.domain.todo_item import TodoItem
 from todo.tui.render import join_styles
@@ -120,7 +121,7 @@ class TodoTable(DataTable["str | Text"]):
     def action_cursor_left(self) -> None:
         self.post_message(self.StatusStep(self, -1))
 
-    def populate(self, items: list[TodoItem]) -> dict[int, int]:
+    def populate(self, items: list[TodoItem], deps: Dependencies) -> dict[int, int]:
         """Rebuild every row, grouped by status under a separator.
 
         Returns item id -> row index, which is what the caller needs to put
@@ -144,13 +145,13 @@ class TodoTable(DataTable["str | Text"]):
             self.add_row(*cells, key=f"{SEPARATOR_PREFIX}{status.value}")
             index += 1
             for item in group:
-                self.add_row(*_cells(item), key=str(item.id))
+                self.add_row(*_cells(item, deps), key=str(item.id))
                 row_index_of[item.id] = index
                 index += 1
         return row_index_of
 
 
-def deps_cell(item: TodoItem) -> str:
+def deps_cell(item: TodoItem, deps: Dependencies) -> str:
     """What this item waits on, and how many wait on it.
 
     '←#2,#3' are the blockers by id — you need the id to act on them —
@@ -163,17 +164,19 @@ def deps_cell(item: TodoItem) -> str:
     history stays in the detail pane.
     """
     parts = []
-    if item.blocked_by and item.is_blocked:
-        shown = item.blocked_by[:_MAX_BLOCKER_IDS]
+    blockers = deps.blockers_of(item.id)
+    if blockers and deps.is_blocked(item.id):
+        shown = blockers[:_MAX_BLOCKER_IDS]
         ids = ",".join(f"#{i}" for i in shown)
-        hidden = len(item.blocked_by) - len(shown)
+        hidden = len(blockers) - len(shown)
         parts.append(f"←{ids}+{hidden}" if hidden else f"←{ids}")
-    if item.blocking:
-        parts.append(f"→{len(item.blocking)}")
+    dependents = deps.dependents_of(item.id)
+    if dependents:
+        parts.append(f"→{len(dependents)}")
     return " ".join(parts)
 
 
-def _cells(item: TodoItem) -> list[Text]:
+def _cells(item: TodoItem, deps: Dependencies) -> list[Text]:
     """One row's cells, styled.
 
     Always Text, never str: DataTable parses plain strings as markup and
@@ -185,12 +188,12 @@ def _cells(item: TodoItem) -> list[Text]:
         str(item.id),
         _priority_label(item.priority),
         f"{_status_icon(item.status)} {item.status.value}",
-        f"\U0001f6a7 {item.title}" if item.is_blocked else item.title,
-        deps_cell(item),
+        f"\U0001f6a7 {item.title}" if deps.is_blocked(item.id) else item.title,
+        deps_cell(item, deps),
         deadline_text,
         _relative_age(item.created_at),
     ]
-    row_style = "dim" if item.is_blocked else ""
+    row_style = "dim" if deps.is_blocked(item.id) else ""
     styles = [row_style] * len(values)
     styles[COLUMNS.index("Pri")] = join_styles(row_style, _pri_style(item.priority))
     if deadline_text:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 
 from todo.domain.deadline import Deadline
@@ -17,10 +17,9 @@ from todo.domain.title import Title
 class TodoItem:
     """One item, and the facts derived from its own fields.
 
-    `blocked_by`, `blocking` and `is_blocked` are read projections of the
-    DependencyGraph, filled in on read. They are not state: nothing writes
-    through them, because a dependency is not a property of either item it
-    joins. Change one through the graph.
+    Dependencies are not here. An edge belongs to neither item it joins,
+    so what this waits on, what waits on it, and whether it is held up are
+    answered by the graph — see application.dependencies.Dependencies.
     """
 
     id: int
@@ -33,9 +32,6 @@ class TodoItem:
     done_at: datetime | None
     deadline: Deadline | None
     tags: list[Tag]
-    blocked_by: list[int] = field(default_factory=list)
-    blocking: list[int] = field(default_factory=list)
-    is_blocked: bool = False
     project: Project | None = None
 
     def __post_init__(self) -> None:

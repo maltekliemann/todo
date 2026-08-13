@@ -12,7 +12,9 @@ from textual.widgets import DataTable, Input, Label, OptionList, Static
 
 from todo.adapters.sqlite_storage import SqliteStorage
 from todo.application.commands import add_todo, block_todo
+from todo.application.dependencies import Dependencies
 from todo.domain.deadline import Deadline
+from todo.domain.dependency_graph import DependencyGraph
 from todo.domain.description import Description
 from todo.domain.priority import Priority
 from todo.domain.project import Project
@@ -248,7 +250,7 @@ class TestBlockerPicker:
             await pilot.pause()
             await pilot.press("enter")
             await pilot.pause()
-            assert several.get(1).blocked_by == [2]
+            assert Dependencies.load(several).blockers_of(1) == [2]
 
     async def test_down_moves_the_highlight_before_choosing(
         self, several: SqliteStorage
@@ -264,7 +266,7 @@ class TestBlockerPicker:
             await pilot.press("down")
             await pilot.press("enter")
             await pilot.pause()
-            assert several.get(1).blocked_by == [4]
+            assert Dependencies.load(several).blockers_of(1) == [4]
 
     async def test_choosing_an_existing_blocker_removes_it(
         self, several: SqliteStorage
@@ -279,7 +281,7 @@ class TestBlockerPicker:
             assert options[0].startswith("✓"), options
             await pilot.press("enter")
             await pilot.pause()
-            assert several.get(1).blocked_by == []
+            assert Dependencies.load(several).blockers_of(1) == []
 
     async def test_current_blockers_sort_first(self, several: SqliteStorage) -> None:
         several.add_blocker(1, 4)
@@ -353,7 +355,7 @@ class TestBlockerPicker:
             await pilot.pause()
             await pilot.press("enter")
             await pilot.pause()
-            assert several.get(1).blocked_by == [2]
+            assert Dependencies.load(several).blockers_of(1) == [2]
 
     async def test_backspace_widens_the_filter(self, several: SqliteStorage) -> None:
         app = TodoApp(storage=several)
@@ -391,7 +393,7 @@ class TestBlockerPicker:
             assert self._options(app)[0].endswith("Rotate certificates")
             await pilot.press("enter")
             await pilot.pause()
-            assert storage.get(1).blocked_by == [3]
+            assert Dependencies.load(storage).blockers_of(1) == [3]
 
     async def test_a_dash_query_is_a_search_not_a_removal(self, db_path: Path) -> None:
         storage = SqliteStorage(db_path)
@@ -410,7 +412,7 @@ class TestBlockerPicker:
             await pilot.press("enter")
             await pilot.pause()
             # The #2 relation is untouched and #3 was added.
-            assert storage.get(1).blocked_by == [2, 3]
+            assert Dependencies.load(storage).blockers_of(1) == [2, 3]
 
     async def test_a_non_decimal_digit_does_not_crash(self, db_path: Path) -> None:
         """'²'.isdigit() is True but int('²') raises; a German keyboard
@@ -439,7 +441,7 @@ class TestBlockerPicker:
             await pilot.pause()
             await pilot.click("#block-options", offset=(2, 0))
             await pilot.pause()
-            assert several.get(1).blocked_by == [2]
+            assert Dependencies.load(several).blockers_of(1) == [2]
 
     async def test_a_new_search_clears_the_previous_error(
         self, several: SqliteStorage
@@ -496,7 +498,7 @@ class TestBlockerPicker:
             assert isinstance(app.screen, BlockDialog)
             error = str(app.screen.query_one("#block-error", Label).render())
             assert error
-            assert several.get(1).blocked_by == []
+            assert Dependencies.load(several).blockers_of(1) == []
 
 
 class TestDepsColumn:
@@ -548,7 +550,7 @@ class TestDepsColumn:
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
             table = app.query_one("#item-list", DataTable)
-            assert linked.get(1).is_blocked is False
+            assert Dependencies.load(linked).is_blocked(1) is False
             assert self._deps_cell(table, "Task 1") == ""
 
     async def test_shows_both_directions_at_once(self, linked: SqliteStorage) -> None:
@@ -1631,9 +1633,9 @@ class TestBlocking:
             await pilot.press("enter")
             await pilot.pause()
 
-            item = seeded_storage.get(1)
-            assert item.blocked_by == [2]
-            assert item.is_blocked is True
+            deps = Dependencies.load(seeded_storage)
+            assert deps.blockers_of(1) == [2]
+            assert deps.is_blocked(1) is True
             # Dialog dismissed back to the list view.
             from todo.tui.blockers import BlockDialog
 
@@ -1665,7 +1667,7 @@ class TestBlocking:
             await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, BlockDialog)  # nothing to choose
-            assert seeded_storage.get(1).blocked_by == []
+            assert Dependencies.load(seeded_storage).blockers_of(1) == []
 
     async def test_b_block_dialog_removes_an_existing_blocker(
         self, seeded_storage: SqliteStorage
@@ -1676,7 +1678,7 @@ class TestBlocking:
         from todo.application.commands import block_todo
 
         block_todo(seeded_storage, 1, 2)
-        assert seeded_storage.get(1).is_blocked is True
+        assert Dependencies.load(seeded_storage).is_blocked(1) is True
 
         app = TodoApp(storage=seeded_storage)
         async with app.run_test() as pilot:
@@ -1686,9 +1688,9 @@ class TestBlocking:
             await pilot.press("enter")  # #2 is marked and sorted first
             await pilot.pause()
 
-            item = seeded_storage.get(1)
-            assert item.blocked_by == []
-            assert item.is_blocked is False
+            deps = Dependencies.load(seeded_storage)
+            assert deps.blockers_of(1) == []
+            assert deps.is_blocked(1) is False
 
     async def test_blocked_row_is_dimmed(self, db_path: Path) -> None:
         from rich.text import Text
@@ -1887,9 +1889,6 @@ class TestSharedMetaPresenter:
             done_at=None,
             deadline=Deadline(2099, 1, 1),
             tags=["a[red]b"],
-            blocked_by=[1],
-            blocking=[2, 3],
-            is_blocked=True,
             project=Project(
                 id=1,
                 name=ProjectName("proj [/]"),
@@ -1899,7 +1898,13 @@ class TestSharedMetaPresenter:
                 updated_at=datetime.now(),
             ),
         )
-        lines = meta_lines(item)
+        lines = meta_lines(
+            item,
+            Dependencies(
+                graph=DependencyGraph(frozenset({(1, 7), (7, 2), (7, 3)})),
+                done_ids=frozenset(),
+            ),
+        )
         joined = "\n".join(lines)
         assert "Priority: high" in joined
         assert "Deadline:" in joined
@@ -2540,7 +2545,7 @@ class TestItemMenu:
             await pilot.press("enter")
             await pilot.pause()
 
-            assert storage.get(1).blocked_by == []
+            assert Dependencies.load(storage).blockers_of(1) == []
             assert "Blocked by  —" in "\n".join(self._rows(app.screen))
 
     async def test_a_dependent_is_added_from_the_blocking_row(
@@ -2563,8 +2568,8 @@ class TestItemMenu:
             await pilot.press("enter")  # the only candidate, #2
             await pilot.pause()
 
-            assert storage.get(2).blocked_by == [1]
-            assert storage.get(1).blocking == [2]
+            assert Dependencies.load(storage).blockers_of(2) == [1]
+            assert Dependencies.load(storage).dependents_of(1) == [2]
             assert "Blocking    #2" in "\n".join(self._rows(app.screen))
 
     async def test_a_dependent_is_removed_from_the_blocking_row(
@@ -2586,7 +2591,7 @@ class TestItemMenu:
             await pilot.press("enter")
             await pilot.pause()
 
-            assert storage.get(2).blocked_by == []
+            assert Dependencies.load(storage).blockers_of(2) == []
             assert "Blocking    —" in "\n".join(self._rows(app.screen))
 
     async def test_the_two_directions_ask_different_questions(
@@ -2633,7 +2638,7 @@ class TestItemMenu:
             assert isinstance(app.screen, BlockDialog)  # still open
             error = str(app.screen.query_one("#block-error", Label).render())
             assert "cycle" in error
-            assert storage.get(2).blocked_by == []
+            assert Dependencies.load(storage).blockers_of(2) == []
 
     async def test_the_body_row_hands_off_to_the_editor(self, db_path: Path) -> None:
         from todo.tui import item_screen as item_screen_module

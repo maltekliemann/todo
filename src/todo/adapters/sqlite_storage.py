@@ -45,13 +45,7 @@ def _sql_casefold(value: str | None) -> str | None:
     return value.casefold() if value is not None else None
 
 
-def _row_to_item(
-    row: sqlite3.Row,
-    *,
-    blocked_by: list[int] | None = None,
-    blocking: list[int] | None = None,
-    is_blocked: bool = False,
-) -> TodoItem:
+def _row_to_item(row: sqlite3.Row) -> TodoItem:
     tags_raw: str = row["tags"]
     # Constructing the value objects is the read-side check that what was
     # stored is still something the domain calls valid.
@@ -69,9 +63,6 @@ def _row_to_item(
         done_at=datetime.fromisoformat(done_at_raw) if done_at_raw else None,
         deadline=Deadline.fromisoformat(deadline_raw) if deadline_raw else None,
         tags=tags,
-        blocked_by=blocked_by if blocked_by is not None else [],
-        blocking=blocking if blocking is not None else [],
-        is_blocked=is_blocked,
         project=_joined_project(row),
     )
 
@@ -296,32 +287,7 @@ class SqliteStorage:
         ).fetchone()
         if row is None:
             raise NotFoundError(item_id)
-        blocker_rows = self._conn.execute(
-            "SELECT blocker_id FROM todo_dependencies WHERE blocked_id = ? "
-            "ORDER BY blocker_id ASC",
-            (item_id,),
-        ).fetchall()
-        blocked_by = [r["blocker_id"] for r in blocker_rows]
-        blocking_rows = self._conn.execute(
-            "SELECT blocked_id FROM todo_dependencies WHERE blocker_id = ? "
-            "ORDER BY blocked_id ASC",
-            (item_id,),
-        ).fetchall()
-        blocking = [r["blocked_id"] for r in blocking_rows]
-        is_blocked = False
-        if row["status"] != Status.DONE.value and blocked_by:
-            placeholders = ",".join("?" for _ in blocked_by)
-            status_rows = self._conn.execute(
-                f"SELECT status FROM todos WHERE id IN ({placeholders})",
-                blocked_by,
-            ).fetchall()
-            is_blocked = any(r["status"] != Status.DONE.value for r in status_rows)
-        return _row_to_item(
-            row,
-            blocked_by=blocked_by,
-            blocking=blocking,
-            is_blocked=is_blocked,
-        )
+        return _row_to_item(row)
 
     def update(
         self,
@@ -408,56 +374,7 @@ class SqliteStorage:
                 "ORDER BY todos.done_at DESC",
                 (Status.DONE.value, since.isoformat()),
             ).fetchall()
-            return self._hydrate_dependencies(rows)
-
-    def _hydrate_dependencies(self, rows: list[sqlite3.Row]) -> list[TodoItem]:
-        """Build TodoItems with blocked_by/blocking/is_blocked populated.
-
-        Every multi-item query must go through here so dependency data is
-        consistent across list, summary, and any future read path. Queries
-        are scoped to the selected rows so cost tracks the result size, not
-        total history.
-        """
-        if not rows:
-            return []
-        ids = [r["id"] for r in rows]
-        ph = ",".join("?" for _ in ids)
-        dep_rows = self._conn.execute(
-            "SELECT blocker_id, blocked_id FROM todo_dependencies "
-            f"WHERE blocked_id IN ({ph}) OR blocker_id IN ({ph})",
-            [*ids, *ids],
-        ).fetchall()
-        blocker_ids = sorted({d["blocker_id"] for d in dep_rows})
-        status_by_id: dict[int, str] = {}
-        if blocker_ids:
-            bph = ",".join("?" for _ in blocker_ids)
-            status_rows = self._conn.execute(
-                f"SELECT id, status FROM todos WHERE id IN ({bph})",
-                blocker_ids,
-            ).fetchall()
-            status_by_id = {r["id"]: r["status"] for r in status_rows}
-        blocked_by_map: dict[int, list[int]] = {}
-        blocking_map: dict[int, list[int]] = {}
-        for dep in dep_rows:
-            blocked_by_map.setdefault(dep["blocked_id"], []).append(dep["blocker_id"])
-            blocking_map.setdefault(dep["blocker_id"], []).append(dep["blocked_id"])
-
-        items: list[TodoItem] = []
-        for r in rows:
-            blocked_by = sorted(blocked_by_map.get(r["id"], []))
-            blocking = sorted(blocking_map.get(r["id"], []))
-            is_blocked = r["status"] != Status.DONE.value and any(
-                status_by_id.get(b) != Status.DONE.value for b in blocked_by
-            )
-            items.append(
-                _row_to_item(
-                    r,
-                    blocked_by=blocked_by,
-                    blocking=blocking,
-                    is_blocked=is_blocked,
-                )
-            )
-        return items
+            return [_row_to_item(r) for r in rows]
 
     def _assert_exists(self, item_id: int) -> None:
         """Existence check without dependency hydration."""
@@ -574,7 +491,7 @@ class SqliteStorage:
         params.extend([today, today])
         with self._read_guard("list todos"):
             rows = self._conn.execute(query, params).fetchall()
-            return self._hydrate_dependencies(rows)
+            return [_row_to_item(r) for r in rows]
 
     def add_project(
         self, name: ProjectName, *, description: Description | str = ""
@@ -611,20 +528,14 @@ class SqliteStorage:
                 raise ProjectNotFoundError(name)
             return _row_to_project(row)
 
-    def blocked_ids(self) -> set[int]:
-        """Ids of non-done items with at least one non-done blocker.
-
-        One indexed query instead of hydrating an item per dependent —
-        the completion/delete paths diff this set before and after.
-        """
-        with self._read_guard("read blocked items"):
+    def done_ids(self) -> set[int]:
+        """Every finished item. With the graph, this is what decides
+        blocked-ness — a rule that used to live in SQL."""
+        with self._read_guard("read completed ids"):
             rows = self._conn.execute(
-                "SELECT DISTINCT d.blocked_id FROM todo_dependencies d "
-                "JOIN todos b ON b.id = d.blocker_id "
-                "JOIN todos t ON t.id = d.blocked_id "
-                "WHERE b.status != 'done' AND t.status != 'done'"
+                "SELECT id FROM todos WHERE status = ?", (Status.DONE.value,)
             ).fetchall()
-        return {r["blocked_id"] for r in rows}
+        return {r["id"] for r in rows}
 
     def dependency_edges(self) -> EdgeList:
         """All (blocker_id, blocked_id) edges — one query for graph walks."""

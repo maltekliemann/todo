@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Container
 from dataclasses import dataclass
 
 from todo.exceptions import DependencyError
@@ -54,6 +55,25 @@ class DependencyGraph:
         if self._reaches(blocked, blocker):
             raise DependencyError("Adding this blocker would create a cycle.")
         return DependencyGraph(self.edges | {(blocker, blocked)})
+
+    def blockers_of(self, item_id: int) -> list[int]:
+        """What this item waits on."""
+        return sorted(blocker for blocker, blocked in self.edges if blocked == item_id)
+
+    def dependents_of(self, item_id: int) -> list[int]:
+        """What waits on this item."""
+        return sorted(blocked for blocker, blocked in self.edges if blocker == item_id)
+
+    def is_blocked(self, item_id: int, done_ids: Container[int]) -> bool:
+        """Whether anything this item waits on is still unfinished.
+
+        Needs the graph and the finished set together, which is why it is
+        neither a field on the item nor a column in a query.
+        """
+        if item_id in done_ids:
+            # A finished item waits on nothing, whatever the edges say.
+            return False
+        return any(blocker not in done_ids for blocker in self.blockers_of(item_id))
 
     def _reaches(
         self, start: int, target: int, *, ignoring: Edge | None = None

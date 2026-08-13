@@ -21,6 +21,7 @@ from textual.widgets.option_list import Option
 
 from todo.application.commands import block_todo, unblock_todo
 from todo.application.contracts.storage import StorageProtocol
+from todo.application.dependencies import Dependencies
 from todo.application.queries import list_todos, show_todo
 from todo.domain.todo_item import TodoItem
 from todo.exceptions import TodoError
@@ -130,11 +131,12 @@ class BlockDialog(ModalScreen[bool]):
         """Read the candidates, degrading a storage failure to the inline
         error — an unreadable database must not close the dialog."""
         try:
-            item = show_todo(self._storage, self._item_id)
+            show_todo(self._storage, self._item_id)  # raises if it is gone
+            deps = Dependencies.load(self._storage)
             self._related_ids = set(
-                item.blocked_by
+                deps.blockers_of(self._item_id)
                 if self._relation is Relation.WAITS_ON
-                else item.blocking
+                else deps.dependents_of(self._item_id)
             )
             self._candidates = [
                 i

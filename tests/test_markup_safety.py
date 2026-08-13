@@ -16,7 +16,9 @@ from textual.widgets import DataTable, Label, Static
 from todo.adapters.output import RichOutput
 from todo.adapters.sqlite_storage import SqliteStorage
 from todo.application.commands import add_todo, block_todo
+from todo.application.dependencies import Dependencies
 from todo.application.queries import ProjectDetail, ProjectSummary, show_project
+from todo.domain.dependency_graph import DependencyGraph
 from todo.domain.priority import Priority
 from todo.domain.project import Project
 from todo.domain.project_status import ProjectStatus
@@ -29,6 +31,12 @@ HOSTILE = "Fix [/] thing"
 HOSTILE_VARIANTS = ["Fix [/] thing", "open [bold tag", "double ]] close", "[/b]"]
 
 _NOW = datetime.now(tz=timezone.utc)
+
+
+def _deps(*edges: tuple[int, int], done: tuple[int, ...] = ()) -> Dependencies:
+    return Dependencies(
+        graph=DependencyGraph(frozenset(edges)), done_ids=frozenset(done)
+    )
 
 
 def _item(**overrides: object) -> TodoItem:
@@ -72,23 +80,23 @@ class TestRichOutputMarkupSafety:
     def test_print_list_hostile_titles(
         self, rich_out: RichOutput, capsys, title: str
     ) -> None:
-        rich_out.print_list([_item(title=title)])
+        rich_out.print_list([_item(title=title)], _deps())
         assert title in capsys.readouterr().out
 
     def test_print_list_hostile_blocked_title(
         self, rich_out: RichOutput, capsys
     ) -> None:
-        rich_out.print_list([_item(is_blocked=True, blocked_by=[2])])
+        rich_out.print_list([_item()], _deps((2, 1)))
         assert HOSTILE in capsys.readouterr().out
 
     def test_print_item_hostile(self, rich_out: RichOutput, capsys) -> None:
-        rich_out.print_item(_item())
+        rich_out.print_item(_item(), _deps())
         out = capsys.readouterr().out
         assert "[/]" in out
 
     def test_print_summary_hostile_title(self, rich_out: RichOutput, capsys) -> None:
         done = _item(status=Status.DONE, done_at=_NOW)
-        rich_out.print_summary(_NOW, [done])
+        rich_out.print_summary(_NOW, [done], _deps())
         assert HOSTILE in capsys.readouterr().out
 
     def test_print_tags_hostile_tag(self, rich_out: RichOutput, capsys) -> None:
@@ -121,7 +129,7 @@ class TestRichOutputMarkupSafety:
                 ProjectUpdate(id=1, project_id=1, body="log [/] body", created_at=_NOW)
             ],
         )
-        rich_out.print_project(detail)
+        rich_out.print_project(detail, _deps())
         out = capsys.readouterr().out
         assert "desc [/] here" in out
         assert "log [/] body" in out

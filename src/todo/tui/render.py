@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from todo.adapters.output import _deadline_str
 from todo.application.commands import CompletionResult
+from todo.application.dependencies import Dependencies
 from todo.domain.todo_item import TodoItem
 
 
@@ -26,7 +27,7 @@ def escape_markup(text: str) -> str:
     return text.replace("[", "\\[")
 
 
-def meta_lines(item: TodoItem) -> list[str]:
+def meta_lines(item: TodoItem, deps: Dependencies) -> list[str]:
     """The metadata block shared by the detail pane and the inspect modal.
 
     One source of truth so the two renderings can never drift. User text
@@ -46,10 +47,12 @@ def meta_lines(item: TodoItem) -> list[str]:
         lines.append(f"Project: {escape_markup(item.project.name)}")
     if item.tags:
         lines.append(f"Tags: {escape_markup(', '.join(item.tags))}")
-    if item.blocked_by:
-        lines.append(f"Blocked by: {', '.join(f'#{i}' for i in item.blocked_by)}")
-    if item.blocking:
-        lines.append(f"Blocking: {', '.join(f'#{i}' for i in item.blocking)}")
+    blockers = deps.blockers_of(item.id)
+    if blockers:
+        lines.append(f"Blocked by: {', '.join(f'#{i}' for i in blockers)}")
+    dependents = deps.dependents_of(item.id)
+    if dependents:
+        lines.append(f"Blocking: {', '.join(f'#{i}' for i in dependents)}")
     return lines
 
 

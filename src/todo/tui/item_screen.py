@@ -25,6 +25,7 @@ from textual.widgets.option_list import Option
 
 from todo.application.commands import CompletionResult, edit_todo
 from todo.application.contracts.storage import StorageProtocol
+from todo.application.dependencies import Dependencies
 from todo.application.queries import list_all_projects, show_todo
 from todo.domain.priority import Priority
 from todo.domain.status import Status
@@ -63,7 +64,7 @@ def body_summary(body: str) -> str:
     return f"{lines} line{'' if lines == 1 else 's'}"
 
 
-def field_value(item: TodoItem, key: str) -> str:
+def field_value(item: TodoItem, key: str, deps: Dependencies) -> str:
     """The current value of one field, as the row shows it."""
     if key == "title":
         return item.title
@@ -78,9 +79,9 @@ def field_value(item: TodoItem, key: str) -> str:
     if key == "project":
         return item.project.name if item.project else EMPTY
     if key == "blocked_by":
-        return ", ".join(f"#{i}" for i in item.blocked_by) or EMPTY
+        return ", ".join(f"#{i}" for i in deps.blockers_of(item.id)) or EMPTY
     if key == "blocking":
-        return ", ".join(f"#{i}" for i in item.blocking) or EMPTY
+        return ", ".join(f"#{i}" for i in deps.dependents_of(item.id)) or EMPTY
     return body_summary(item.body)
 
 
@@ -126,6 +127,8 @@ class ItemScreen(ModalScreen[bool]):
 
     def _show_item(self) -> None:
         item = self._item
+        # Reloaded with the item: an edge changed by the picker has to show.
+        deps = Dependencies.load(self._storage)
 
         heading = Text(f"#{item.id}", style="bold")
         heading.append(
@@ -143,7 +146,7 @@ class ItemScreen(ModalScreen[bool]):
         highlighted = options.highlighted
         options.clear_options()
         for key, label in FIELDS:
-            options.add_option(Option(_row(label, field_value(item, key))))
+            options.add_option(Option(_row(label, field_value(item, key, deps))))
         options.highlighted = 0 if highlighted is None else highlighted
 
         self.query_one("#item-body", Static).update(

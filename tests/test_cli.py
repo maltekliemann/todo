@@ -7,6 +7,7 @@ from click.testing import CliRunner
 
 from todo.adapters.sqlite_storage import SqliteStorage
 from todo.application.commands import block_todo, unblock_todo
+from todo.application.dependencies import Dependencies
 from todo.domain.status import Status
 from todo.exceptions import DependencyError, NotFoundError
 from todo.infra.cli.main import main
@@ -948,20 +949,20 @@ class TestBlockStorage:
 
         block_todo(storage, b.id, a.id)
 
-        refreshed = storage.get(b.id)
-        assert refreshed.blocked_by == [a.id]
-        assert refreshed.is_blocked is True
-        assert storage.get(a.id).blocking == [b.id]
+        deps = Dependencies.load(storage)
+        assert deps.blockers_of(b.id) == [a.id]
+        assert deps.is_blocked(b.id) is True
+        assert deps.dependents_of(a.id) == [b.id]
 
     def test_list_no_n_plus_one_context(self, storage: SqliteStorage) -> None:
         a = storage.add("Blocker")
         b = storage.add("Blocked")
         block_todo(storage, b.id, a.id)
 
-        by_id = {i.id: i for i in storage.list()}
-        assert by_id[b.id].blocked_by == [a.id]
-        assert by_id[b.id].is_blocked is True
-        assert by_id[a.id].blocking == [b.id]
+        deps = Dependencies.load(storage)
+        assert deps.blockers_of(b.id) == [a.id]
+        assert deps.is_blocked(b.id) is True
+        assert deps.dependents_of(a.id) == [b.id]
 
     def test_self_block_raises(self, storage: SqliteStorage) -> None:
         a = storage.add("Item")
@@ -987,9 +988,9 @@ class TestBlockStorage:
 
         storage.update(a.id, status=Status.DONE)
 
-        refreshed = storage.get(b.id)
-        assert refreshed.blocked_by == [a.id]
-        assert refreshed.is_blocked is False
+        deps = Dependencies.load(storage)
+        assert deps.blockers_of(b.id) == [a.id]
+        assert deps.is_blocked(b.id) is False
 
     def test_delete_cascades(self, storage: SqliteStorage) -> None:
         a = storage.add("Blocker")
@@ -998,9 +999,9 @@ class TestBlockStorage:
 
         storage.delete(a.id)
 
-        refreshed = storage.get(b.id)
-        assert refreshed.blocked_by == []
-        assert refreshed.is_blocked is False
+        deps = Dependencies.load(storage)
+        assert deps.blockers_of(b.id) == []
+        assert deps.is_blocked(b.id) is False
 
     def test_unblock_removes_relation(self, storage: SqliteStorage) -> None:
         a = storage.add("Blocker")
@@ -1009,8 +1010,9 @@ class TestBlockStorage:
 
         unblock_todo(storage, b.id, a.id)
 
-        assert storage.get(b.id).blocked_by == []
-        assert storage.get(b.id).is_blocked is False
+        deps = Dependencies.load(storage)
+        assert deps.blockers_of(b.id) == []
+        assert deps.is_blocked(b.id) is False
 
 
 class TestFullWorkflow:

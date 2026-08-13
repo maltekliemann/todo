@@ -22,6 +22,7 @@ from todo.application.commands import (
     unblock_todo_batch,
 )
 from todo.application.contracts.storage import UNSET, Unset
+from todo.application.dependencies import Dependencies
 from todo.application.queries import (
     count_tags,
     list_projects,
@@ -151,9 +152,9 @@ def add(
         click.echo(str(e), err=True)
         sys.exit(1)
     if as_json:
-        out.print_json_item(item)
+        out.print_json_item(item, Dependencies.load(storage))
     else:
-        out.print_item(item)
+        out.print_item(item, Dependencies.load(storage))
 
 
 @main.command("list")
@@ -215,9 +216,9 @@ def list_cmd(
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
     if as_json:
-        out.print_json_list(items)
+        out.print_json_list(items, Dependencies.load(storage))
     else:
-        out.print_list(items)
+        out.print_list(items, Dependencies.load(storage))
 
 
 @main.command()
@@ -233,9 +234,9 @@ def show(item_id: int, as_json: bool) -> None:
         click.echo(str(e), err=True)
         sys.exit(1)
     if as_json:
-        out.print_json_item(item)
+        out.print_json_item(item, Dependencies.load(storage))
     else:
-        out.print_item(item)
+        out.print_item(item, Dependencies.load(storage))
 
 
 @main.command()
@@ -318,9 +319,9 @@ def edit(
         sys.exit(1)
     _warn_unblocked(result.unblocked)
     if as_json:
-        out.print_json_item(result.item)
+        out.print_json_item(result.item, Dependencies.load(storage))
     else:
-        out.print_item(result.item)
+        out.print_item(result.item, Dependencies.load(storage))
 
 
 @main.command()
@@ -338,9 +339,9 @@ def mv(item_id: int, status: str, as_json: bool) -> None:
         sys.exit(1)
     _warn_unblocked(result.unblocked)
     if as_json:
-        out.print_json_item(result.item)
+        out.print_json_item(result.item, Dependencies.load(storage))
     else:
-        out.print_item(result.item)
+        out.print_item(result.item, Dependencies.load(storage))
 
 
 @main.command()
@@ -357,9 +358,9 @@ def done(item_id: int, as_json: bool) -> None:
         sys.exit(1)
     _warn_unblocked(result.unblocked)
     if as_json:
-        out.print_json_item(result.item)
+        out.print_json_item(result.item, Dependencies.load(storage))
     else:
-        out.print_item(result.item)
+        out.print_item(result.item, Dependencies.load(storage))
 
 
 @main.command()
@@ -390,9 +391,9 @@ def summary_cmd(since: str, as_json: bool) -> None:
         click.echo(str(e), err=True)
         sys.exit(1)
     if as_json:
-        out.print_json_summary(since_dt, items)
+        out.print_json_summary(since_dt, items, Dependencies.load(storage))
     else:
-        out.print_summary(since_dt, items)
+        out.print_summary(since_dt, items, Dependencies.load(storage))
 
 
 @main.command()
@@ -409,9 +410,9 @@ def block(item_id: int, blocker_ids: tuple[int, ...], as_json: bool) -> None:
         click.echo(str(e), err=True)
         sys.exit(1)
     if as_json:
-        out.print_json_item(item)
+        out.print_json_item(item, Dependencies.load(storage))
     else:
-        out.print_item(item)
+        out.print_item(item, Dependencies.load(storage))
 
 
 @main.command()
@@ -428,9 +429,9 @@ def unblock(item_id: int, blocker_ids: tuple[int, ...], as_json: bool) -> None:
         click.echo(str(e), err=True)
         sys.exit(1)
     if as_json:
-        out.print_json_item(item)
+        out.print_json_item(item, Dependencies.load(storage))
     else:
-        out.print_item(item)
+        out.print_item(item, Dependencies.load(storage))
 
 
 @main.group()
@@ -453,9 +454,9 @@ def project_add(name: str, description: str, as_json: bool) -> None:
         sys.exit(1)
     detail = project_detail(storage, created)
     if as_json:
-        out.print_json_project(detail)
+        out.print_json_project(detail, Dependencies.load(storage))
     else:
-        out.print_project(detail)
+        out.print_project(detail, Dependencies.load(storage))
 
 
 @project.command("list")
@@ -485,9 +486,9 @@ def project_show(ref: str, as_json: bool) -> None:
         click.echo(str(e), err=True)
         sys.exit(1)
     if as_json:
-        out.print_json_project(detail)
+        out.print_json_project(detail, Dependencies.load(storage))
     else:
-        out.print_project(detail)
+        out.print_project(detail, Dependencies.load(storage))
 
 
 @project.command("edit")
@@ -509,9 +510,9 @@ def project_edit(
         sys.exit(1)
     detail = project_detail(storage, edited)
     if as_json:
-        out.print_json_project(detail)
+        out.print_json_project(detail, Dependencies.load(storage))
     else:
-        out.print_project(detail)
+        out.print_project(detail, Dependencies.load(storage))
 
 
 @project.command("archive")
@@ -525,9 +526,9 @@ def project_archive(ref: str, as_json: bool) -> None:
     archived = archive_project(storage, project_id)
     detail = project_detail(storage, archived)
     if as_json:
-        out.print_json_project(detail)
+        out.print_json_project(detail, Dependencies.load(storage))
     else:
-        out.print_project(detail)
+        out.print_project(detail, Dependencies.load(storage))
 
 
 @project.command("log")
@@ -546,9 +547,9 @@ def project_log(ref: str, text: str, as_json: bool) -> None:
         sys.exit(1)
     detail = project_detail(storage, proj)
     if as_json:
-        out.print_json_project(detail)
+        out.print_json_project(detail, Dependencies.load(storage))
     else:
-        out.print_project(detail)
+        out.print_project(detail, Dependencies.load(storage))
 
 
 @project.command("rm")

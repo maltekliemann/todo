@@ -9,8 +9,10 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 
 from todo.adapters.output import RichOutput
+from todo.application.dependencies import Dependencies
 from todo.application.queries import ProjectDetail, ProjectSummary
 from todo.domain.deadline import Deadline
+from todo.domain.dependency_graph import DependencyGraph
 from todo.domain.priority import Priority
 from todo.domain.project import Project
 from todo.domain.project_status import ProjectStatus
@@ -19,6 +21,13 @@ from todo.domain.status import Status
 from todo.domain.todo_item import TodoItem
 
 _NOW = datetime.now(tz=timezone.utc)
+
+
+def _deps(*edges: tuple[int, int], done: tuple[int, ...] = ()) -> Dependencies:
+    """The dependency read model the presenters take, built by hand."""
+    return Dependencies(
+        graph=DependencyGraph(frozenset(edges)), done_ids=frozenset(done)
+    )
 
 
 def _item(**overrides: object) -> TodoItem:
@@ -59,7 +68,7 @@ def rich_out(monkeypatch: pytest.MonkeyPatch) -> RichOutput:
 
 class TestRichLists:
     def test_empty_list(self, rich_out: RichOutput, capsys) -> None:
-        rich_out.print_list([])
+        rich_out.print_list([], _deps())
         assert "No items" in capsys.readouterr().out
 
     def test_list_variants(self, rich_out: RichOutput, capsys) -> None:
@@ -75,7 +84,7 @@ class TestRichLists:
                 priority=Priority.URGENT,
                 deadline=Deadline.from_date(date.today() + timedelta(days=1)),
             ),
-            _item(id=3, title="Blocked one", blocked_by=[1], is_blocked=True),
+            _item(id=3, title="Blocked one"),
             _item(
                 id=4,
                 title="Finished",
@@ -84,7 +93,7 @@ class TestRichLists:
                 priority=Priority.LOW,
             ),
         ]
-        rich_out.print_list(items)
+        rich_out.print_list(items, _deps((1, 3)))
         out = capsys.readouterr().out
         assert "Overdue" in out
         assert "Urgent soon" in out
@@ -97,12 +106,10 @@ class TestRichLists:
             body="A body",
             deadline=Deadline.from_date(date.today() + timedelta(days=10)),
             tags=["a", "b"],
-            blocked_by=[7],
-            blocking=[9],
             done_at=_NOW,
             status=Status.DONE,
         )
-        rich_out.print_item(item)
+        rich_out.print_item(item, _deps((7, 1), (1, 9)))
         out = capsys.readouterr().out
         assert "Everything" in out
         assert "Tags: a, b" in out
@@ -112,13 +119,13 @@ class TestRichLists:
 
     def test_summary(self, rich_out: RichOutput, capsys) -> None:
         done = _item(status=Status.DONE, done_at=_NOW, title="Shipped")
-        rich_out.print_summary(_NOW - timedelta(days=7), [done])
+        rich_out.print_summary(_NOW - timedelta(days=7), [done], _deps())
         out = capsys.readouterr().out
         assert "Shipped" in out
         assert "1 item completed" in out
 
     def test_summary_empty(self, rich_out: RichOutput, capsys) -> None:
-        rich_out.print_summary(_NOW - timedelta(days=7), [])
+        rich_out.print_summary(_NOW - timedelta(days=7), [], _deps())
         assert "No items completed" in capsys.readouterr().out
 
     def test_deleted(self, rich_out: RichOutput, capsys) -> None:
@@ -140,7 +147,7 @@ class TestRelativeAge:
             _item(id=i, title=f"Age {i}", created_at=_NOW - age)
             for i, age in enumerate(ages, start=1)
         ]
-        rich_out.print_list(items)
+        rich_out.print_list(items, _deps())
         out = capsys.readouterr().out
         for pattern in (r"\d+s", r"5m", r"3h", r"2d", r"2w", r"3mo"):
             assert re.search(pattern, out), pattern
@@ -182,7 +189,7 @@ class TestRichTagsProjects:
             ProjectUpdate(id=1, project_id=1, body="Kickoff done", created_at=_NOW)
         ]
         rich_out.print_project(
-            ProjectDetail(project=_project(), items=items, updates=updates)
+            ProjectDetail(project=_project(), items=items, updates=updates), _deps()
         )
         out = capsys.readouterr().out
         assert "infra" in out
@@ -194,7 +201,7 @@ class TestRichTagsProjects:
         import json as jsonlib
 
         detail = ProjectDetail(project=_project(), items=[_item()], updates=[])
-        rich_out.print_json_project(detail)
+        rich_out.print_json_project(detail, _deps())
         data = jsonlib.loads(capsys.readouterr().out)
         assert data["name"] == "infra"
         assert len(data["items"]) == 1
@@ -264,7 +271,7 @@ class TestColumnAlignment:
             _item(id=i + 1, title=f"item {p.value}", priority=p)
             for i, p in enumerate(Priority)
         ]
-        PlainOutput().print_list(items)
+        PlainOutput().print_list(items, _deps())
         rows = [
             ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("  ")
         ]

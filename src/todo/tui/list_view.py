@@ -13,12 +13,14 @@ from todo.application.commands import (
     move_todo,
 )
 from todo.application.contracts.storage import StorageProtocol
+from todo.application.dependencies import Dependencies
 from todo.application.queries import (
     count_tags,
     list_all_projects,
     list_todos,
     show_todo,
 )
+from todo.domain.dependency_graph import DependencyGraph
 from todo.domain.priority import Priority
 from todo.domain.todo_item import TodoItem
 from todo.exceptions import NotFoundError, TodoError
@@ -87,6 +89,9 @@ class TodoListView(Widget):
         self._storage = storage
         self._items: list[TodoItem] = []
         self._item_by_id: dict[int, TodoItem] = {}
+        self._deps = Dependencies(
+            graph=DependencyGraph(frozenset()), done_ids=frozenset()
+        )
         self._filters = Filters()
         self._cursor_follows_item: bool = True
         self._last_data_version: int = 0
@@ -247,7 +252,10 @@ class TodoListView(Widget):
         # the same one that builds the cache, so they cannot disagree.
         self._item_by_id = {i.id: i for i in self._items}
 
-        row_index_of = table.populate(self._items)
+        # One load for the whole refresh: the rows and the detail pane
+        # must answer from the same graph.
+        self._deps = Dependencies.load(self._storage)
+        row_index_of = table.populate(self._items, self._deps)
 
         if table.row_count > 0:
             follow = self._cursor_follows_item
@@ -305,7 +313,7 @@ class TodoListView(Widget):
             except TodoError:
                 return
 
-        pane.show(item)
+        pane.show(item, self._deps)
 
     def _selected_item_id(self) -> int | None:
         table = self.query_one("#item-list", DataTable)
