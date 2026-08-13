@@ -245,7 +245,7 @@ class RichOutput(_JsonOutput):
         from rich.text import Text
 
         lines = Text()
-        lines.append(f"#{item.id}  ", style="dim")
+        lines.append(f"{item.id.label}  ", style="dim")
         lines.append(item.title, style="bold")
         lines.append("\n")
         lines.append(
@@ -268,10 +268,10 @@ class RichOutput(_JsonOutput):
         if item.tags:
             lines.append(f"\nTags: {', '.join(item.tags)}")
         if deps.blockers_of(item.id):
-            blocked = ", ".join(f"#{i}" for i in deps.blockers_of(item.id))
+            blocked = ", ".join(i.label for i in deps.blockers_of(item.id))
             lines.append(f"\nBlocked by: {blocked}")
         if deps.dependents_of(item.id):
-            blocking = ", ".join(f"#{i}" for i in deps.dependents_of(item.id))
+            blocking = ", ".join(i.label for i in deps.dependents_of(item.id))
             lines.append(f"\nBlocking: {blocking}")
         if item.body:
             lines.append(f"\n\n{item.body}")
@@ -366,7 +366,7 @@ class RichOutput(_JsonOutput):
         project, items = detail.project, detail.items
         done = sum(1 for i in items if i.is_done)
         header = Text()
-        header.append(f"#{project.id}  ", style="dim")
+        header.append(f"{project.id.label}  ", style="dim")
         header.append(project.name, style="bold")
         if project.is_archived:
             header.append("  (archived)", style="dim")
@@ -403,7 +403,7 @@ class PlainOutput(_JsonOutput):
         print(f"\n{len(items)} item{'s' if len(items) != 1 else ''}")
 
     def print_item(self, item: TodoItem, deps: Dependencies) -> None:
-        print(f"#{item.id}  {item.title}")
+        print(f"{item.id.label}  {item.title}")
         print(f"Priority: {item.priority.value}  Status: {item.status.value}")
         if item.deadline:
             print(f"Deadline: {_deadline_str(item)}")
@@ -418,10 +418,10 @@ class PlainOutput(_JsonOutput):
         if item.tags:
             print(f"Tags: {', '.join(item.tags)}")
         if deps.blockers_of(item.id):
-            ids = ", ".join(f"#{i}" for i in deps.blockers_of(item.id))
+            ids = ", ".join(i.label for i in deps.blockers_of(item.id))
             print(f"Blocked by: {ids}")
         if deps.dependents_of(item.id):
-            ids = ", ".join(f"#{i}" for i in deps.dependents_of(item.id))
+            ids = ", ".join(i.label for i in deps.dependents_of(item.id))
             print(f"Blocking: {ids}")
         if item.body:
             print(f"\n{item.body}")
@@ -468,7 +468,7 @@ class PlainOutput(_JsonOutput):
         project, items = detail.project, detail.items
         done = sum(1 for i in items if i.is_done)
         suffix = " (archived)" if project.is_archived else ""
-        print(f"#{project.id}  {project.name}{suffix}  {done}/{len(items)} done")
+        print(f"{project.id.label}  {project.name}{suffix}  {done}/{len(items)} done")
         if project.description:
             print(project.description)
         if detail.updates:

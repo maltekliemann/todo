@@ -5,7 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
+from todo.domain.body import Body
 from todo.domain.deadline import Deadline
+from todo.domain.item_id import ItemId
 from todo.domain.priority import Priority
 from todo.domain.project import Project
 from todo.domain.status import Status
@@ -22,9 +24,9 @@ class TodoItem:
     answered by the graph — see application.dependencies.Dependencies.
     """
 
-    id: int
+    id: ItemId
     title: Title
-    body: str
+    body: Body
     priority: Priority
     status: Status
     created_at: datetime

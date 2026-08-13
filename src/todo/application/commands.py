@@ -9,6 +9,7 @@ from todo.application.dependencies import Dependencies
 from todo.domain.deadline import Deadline
 from todo.domain.dependency_graph import DependencyGraph
 from todo.domain.description import Description
+from todo.domain.item_id import ItemId
 from todo.domain.priority import Priority
 from todo.domain.project import Project
 from todo.domain.project_name import ProjectName
@@ -78,7 +79,7 @@ def add_todo(
 
 def edit_todo(
     storage: StorageProtocol,
-    item_id: int,
+    item_id: ItemId,
     *,
     title: str | None = None,
     body: str | None = None,
@@ -111,7 +112,7 @@ class CompletionResult:
 
 def _tracked_update(
     storage: StorageProtocol,
-    item_id: int,
+    item_id: ItemId,
     status: Status | None,
     *,
     title: str | None = None,
@@ -163,8 +164,8 @@ def _tracked_update(
 
 def _newly_unblocked(
     storage: StorageProtocol,
-    dependents: list[int],
-    blocked_before: set[int],
+    dependents: list[ItemId],
+    blocked_before: set[ItemId],
 ) -> list[TodoItem]:
     """Hydrate the dependents that just transitioned blocked -> unblocked."""
     blocked_after = Dependencies.load(storage).blocked_ids()
@@ -181,7 +182,7 @@ def _newly_unblocked(
 
 def move_todo(
     storage: StorageProtocol,
-    item_id: int,
+    item_id: ItemId,
     status: Status,
 ) -> CompletionResult:
     return _tracked_update(storage, item_id, status)
@@ -189,14 +190,14 @@ def move_todo(
 
 def complete_todo(
     storage: StorageProtocol,
-    item_id: int,
+    item_id: ItemId,
 ) -> CompletionResult:
     return _tracked_update(storage, item_id, Status.DONE)
 
 
 def delete_todo(
     storage: StorageProtocol,
-    item_id: int,
+    item_id: ItemId,
 ) -> list[TodoItem]:
     """Delete an item; returns dependents its removal unblocked.
 
@@ -217,24 +218,24 @@ def delete_todo(
 
 def block_todo(
     storage: StorageProtocol,
-    blocked_id: int,
-    blocker_id: int,
+    blocked_id: ItemId,
+    blocker_id: ItemId,
 ) -> TodoItem:
     return block_todo_batch(storage, blocked_id, [blocker_id])
 
 
 def unblock_todo(
     storage: StorageProtocol,
-    blocked_id: int,
-    blocker_id: int,
+    blocked_id: ItemId,
+    blocker_id: ItemId,
 ) -> TodoItem:
     return unblock_todo_batch(storage, blocked_id, [blocker_id])
 
 
 def block_todo_batch(
     storage: StorageProtocol,
-    blocked_id: int,
-    blocker_ids: list[int],
+    blocked_id: ItemId,
+    blocker_ids: list[ItemId],
 ) -> TodoItem:
     """Add several blockers all-or-nothing.
 
@@ -262,8 +263,8 @@ def block_todo_batch(
 
 def unblock_todo_batch(
     storage: StorageProtocol,
-    blocked_id: int,
-    blocker_ids: list[int],
+    blocked_id: ItemId,
+    blocker_ids: list[ItemId],
 ) -> TodoItem:
     """Remove several blockers all-or-nothing.
 

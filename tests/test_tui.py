@@ -16,6 +16,7 @@ from todo.application.dependencies import Dependencies
 from todo.domain.deadline import Deadline
 from todo.domain.dependency_graph import DependencyGraph
 from todo.domain.description import Description
+from todo.domain.item_id import ItemId
 from todo.domain.priority import Priority
 from todo.domain.project import Project
 from todo.domain.project_name import ProjectName
@@ -1901,7 +1902,15 @@ class TestSharedMetaPresenter:
         lines = meta_lines(
             item,
             Dependencies(
-                graph=DependencyGraph(frozenset({(1, 7), (7, 2), (7, 3)})),
+                graph=DependencyGraph(
+                    frozenset(
+                        {
+                            (ItemId(1), ItemId(7)),
+                            (ItemId(7), ItemId(2)),
+                            (ItemId(7), ItemId(3)),
+                        }
+                    )
+                ),
                 done_ids=frozenset(),
             ),
         )

@@ -19,6 +19,7 @@ from todo.application.commands import add_todo, block_todo
 from todo.application.dependencies import Dependencies
 from todo.application.queries import ProjectDetail, ProjectSummary, show_project
 from todo.domain.dependency_graph import DependencyGraph
+from todo.domain.item_id import ItemId
 from todo.domain.priority import Priority
 from todo.domain.project import Project
 from todo.domain.project_status import ProjectStatus
@@ -35,13 +36,14 @@ _NOW = datetime.now(tz=timezone.utc)
 
 def _deps(*edges: tuple[int, int], done: tuple[int, ...] = ()) -> Dependencies:
     return Dependencies(
-        graph=DependencyGraph(frozenset(edges)), done_ids=frozenset(done)
+        graph=DependencyGraph(frozenset((ItemId(a), ItemId(b)) for a, b in edges)),
+        done_ids=frozenset(ItemId(d) for d in done),
     )
 
 
 def _item(**overrides: object) -> TodoItem:
     defaults: dict[str, object] = {
-        "id": 1,
+        "id": ItemId(1),
         "title": HOSTILE,
         "body": "body with [/] markup",
         "priority": Priority.MEDIUM,
@@ -58,7 +60,7 @@ def _item(**overrides: object) -> TodoItem:
 
 def _project(**overrides: object) -> Project:
     defaults: dict[str, object] = {
-        "id": 1,
+        "id": ItemId(1),
         "name": "proj [/] name",
         "description": "desc [/] here",
         "status": ProjectStatus.ACTIVE,

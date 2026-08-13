@@ -12,12 +12,13 @@ from dataclasses import dataclass
 
 from todo.application.contracts.storage import StorageProtocol
 from todo.domain.dependency_graph import DependencyGraph
+from todo.domain.item_id import ItemId
 
 
 @dataclass(frozen=True)
 class Dependencies:
     graph: DependencyGraph
-    done_ids: frozenset[int]
+    done_ids: frozenset[ItemId]
 
     @classmethod
     def load(cls, storage: StorageProtocol) -> Dependencies:
@@ -26,15 +27,15 @@ class Dependencies:
             done_ids=frozenset(storage.done_ids()),
         )
 
-    def blockers_of(self, item_id: int) -> list[int]:
+    def blockers_of(self, item_id: ItemId) -> list[ItemId]:
         return self.graph.blockers_of(item_id)
 
-    def dependents_of(self, item_id: int) -> list[int]:
+    def dependents_of(self, item_id: ItemId) -> list[ItemId]:
         return self.graph.dependents_of(item_id)
 
-    def is_blocked(self, item_id: int) -> bool:
+    def is_blocked(self, item_id: ItemId) -> bool:
         return self.graph.is_blocked(item_id, self.done_ids)
 
-    def blocked_ids(self) -> set[int]:
+    def blocked_ids(self) -> set[ItemId]:
         """Every item still waiting on something."""
         return {blocked for _, blocked in self.graph.edges if self.is_blocked(blocked)}

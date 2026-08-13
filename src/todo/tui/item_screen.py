@@ -79,9 +79,9 @@ def field_value(item: TodoItem, key: str, deps: Dependencies) -> str:
     if key == "project":
         return item.project.name if item.project else EMPTY
     if key == "blocked_by":
-        return ", ".join(f"#{i}" for i in deps.blockers_of(item.id)) or EMPTY
+        return ", ".join(i.label for i in deps.blockers_of(item.id)) or EMPTY
     if key == "blocking":
-        return ", ".join(f"#{i}" for i in deps.dependents_of(item.id)) or EMPTY
+        return ", ".join(i.label for i in deps.dependents_of(item.id)) or EMPTY
     return body_summary(item.body)
 
 
@@ -130,7 +130,7 @@ class ItemScreen(ModalScreen[bool]):
         # Reloaded with the item: an edge changed by the picker has to show.
         deps = Dependencies.load(self._storage)
 
-        heading = Text(f"#{item.id}", style="bold")
+        heading = Text(item.id.label, style="bold")
         heading.append(
             f"  created {item.created_at:%b %d, %Y %H:%M}"
             f" · updated {item.updated_at:%b %d, %Y %H:%M}",

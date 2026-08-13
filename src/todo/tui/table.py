@@ -167,7 +167,7 @@ def deps_cell(item: TodoItem, deps: Dependencies) -> str:
     blockers = deps.blockers_of(item.id)
     if blockers and deps.is_blocked(item.id):
         shown = blockers[:_MAX_BLOCKER_IDS]
-        ids = ",".join(f"#{i}" for i in shown)
+        ids = ",".join(i.label for i in shown)
         hidden = len(blockers) - len(shown)
         parts.append(f"←{ids}+{hidden}" if hidden else f"←{ids}")
     dependents = deps.dependents_of(item.id)

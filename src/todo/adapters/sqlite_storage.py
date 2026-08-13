@@ -17,10 +17,13 @@ from todo.application.contracts.storage import (
     Unset,
     UpdateList,
 )
+from todo.domain.body import Body
 from todo.domain.deadline import Deadline
 from todo.domain.description import Description
+from todo.domain.item_id import ItemId
 from todo.domain.priority import Priority
 from todo.domain.project import Project
+from todo.domain.project_id import ProjectId
 from todo.domain.project_name import ProjectName
 from todo.domain.project_status import ProjectStatus
 from todo.domain.project_update import ProjectUpdate
@@ -53,9 +56,9 @@ def _row_to_item(row: sqlite3.Row) -> TodoItem:
     done_at_raw: str | None = row["done_at"]
     deadline_raw: str | None = row["deadline"]
     return TodoItem(
-        id=row["id"],
+        id=ItemId(row["id"]),
         title=Title(row["title"]),
-        body=row["body"],
+        body=Body(row["body"]),
         priority=Priority(row["priority"]),
         status=Status(row["status"]),
         created_at=datetime.fromisoformat(row["created_at"]),
@@ -72,7 +75,7 @@ def _joined_project(row: sqlite3.Row) -> Project | None:
     if row["proj_id"] is None:
         return None
     return Project(
-        id=row["proj_id"],
+        id=ProjectId(row["proj_id"]),
         name=ProjectName(row["proj_name"]),
         description=Description(row["proj_description"]),
         status=ProjectStatus(row["proj_status"]),
@@ -83,7 +86,7 @@ def _joined_project(row: sqlite3.Row) -> Project | None:
 
 def _row_to_project(row: sqlite3.Row) -> Project:
     return Project(
-        id=row["id"],
+        id=ProjectId(row["id"]),
         name=ProjectName(row["name"]),
         description=Description(row["description"]),
         status=ProjectStatus(row["status"]),
@@ -108,7 +111,7 @@ _TODO_SELECT = (
 def _row_to_update(row: sqlite3.Row) -> ProjectUpdate:
     return ProjectUpdate(
         id=row["id"],
-        project_id=row["project_id"],
+        project_id=ProjectId(row["project_id"]),
         body=row["body"],
         created_at=datetime.fromisoformat(row["created_at"]),
     )
@@ -277,11 +280,11 @@ class SqliteStorage:
             raise StorageError(f"Failed to add todo: {e}") from e
         return self.get(cur.lastrowid)  # type: ignore[arg-type]
 
-    def get(self, item_id: int) -> TodoItem:
+    def get(self, item_id: ItemId) -> TodoItem:
         with self._read_guard(f"read todo #{item_id}"):
             return self._get_unguarded(item_id)
 
-    def _get_unguarded(self, item_id: int) -> TodoItem:
+    def _get_unguarded(self, item_id: ItemId) -> TodoItem:
         row = self._conn.execute(
             f"{_TODO_SELECT} WHERE todos.id = ?", (item_id,)
         ).fetchone()
@@ -291,7 +294,7 @@ class SqliteStorage:
 
     def update(
         self,
-        item_id: int,
+        item_id: ItemId,
         *,
         title: Title | None = None,
         body: str | None = None,
@@ -359,7 +362,7 @@ class SqliteStorage:
             raise StorageError(f"Failed to update todo #{item_id}: {e}") from e
         return self.get(item_id)
 
-    def delete(self, item_id: int) -> None:
+    def delete(self, item_id: ItemId) -> None:
         self._assert_exists(item_id)
         try:
             self._conn.execute("DELETE FROM todos WHERE id = ?", (item_id,))
@@ -376,7 +379,7 @@ class SqliteStorage:
             ).fetchall()
             return [_row_to_item(r) for r in rows]
 
-    def _assert_exists(self, item_id: int) -> None:
+    def _assert_exists(self, item_id: ItemId) -> None:
         """Existence check without dependency hydration."""
         with self._read_guard(f"read todo #{item_id}"):
             row = self._conn.execute(
@@ -385,7 +388,7 @@ class SqliteStorage:
         if row is None:
             raise NotFoundError(item_id)
 
-    def add_blocker(self, blocked_id: int, blocker_id: int) -> None:
+    def add_blocker(self, blocked_id: ItemId, blocker_id: ItemId) -> None:
         self._assert_exists(blocked_id)
         self._assert_exists(blocker_id)
         try:
@@ -398,7 +401,7 @@ class SqliteStorage:
         except (sqlite3.Error, OverflowError) as e:
             raise StorageError(f"Failed to add blocker: {e}") from e
 
-    def remove_blocker(self, blocked_id: int, blocker_id: int) -> None:
+    def remove_blocker(self, blocked_id: ItemId, blocker_id: ItemId) -> None:
         try:
             self._conn.execute(
                 "DELETE FROM todo_dependencies WHERE blocker_id = ? AND blocked_id = ?",
@@ -528,14 +531,14 @@ class SqliteStorage:
                 raise ProjectNotFoundError(name)
             return _row_to_project(row)
 
-    def done_ids(self) -> set[int]:
+    def done_ids(self) -> set[ItemId]:
         """Every finished item. With the graph, this is what decides
         blocked-ness — a rule that used to live in SQL."""
         with self._read_guard("read completed ids"):
             rows = self._conn.execute(
                 "SELECT id FROM todos WHERE status = ?", (Status.DONE.value,)
             ).fetchall()
-        return {r["id"] for r in rows}
+        return {ItemId(r["id"]) for r in rows}
 
     def dependency_edges(self) -> EdgeList:
         """All (blocker_id, blocked_id) edges — one query for graph walks."""
@@ -543,7 +546,7 @@ class SqliteStorage:
             rows = self._conn.execute(
                 "SELECT blocker_id, blocked_id FROM todo_dependencies"
             ).fetchall()
-        return [(r["blocker_id"], r["blocked_id"]) for r in rows]
+        return [(ItemId(r["blocker_id"]), ItemId(r["blocked_id"])) for r in rows]
 
     def item_tags(self) -> ItemTagLists:
         """Every todo's tags — one column scan for counting.

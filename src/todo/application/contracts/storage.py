@@ -7,6 +7,7 @@ from typing import Protocol, runtime_checkable
 
 from todo.domain.deadline import Deadline
 from todo.domain.description import Description
+from todo.domain.item_id import ItemId
 from todo.domain.priority import Priority
 from todo.domain.project import Project
 from todo.domain.project_name import ProjectName
@@ -31,7 +32,7 @@ UNSET = Unset.UNSET
 # method, so `list[...]` would not resolve to the builtin there.
 ProjectList = list[Project]
 UpdateList = list[ProjectUpdate]
-EdgeList = list[tuple[int, int]]
+EdgeList = list[tuple[ItemId, ItemId]]
 TagStringList = list[str]
 ItemTagLists = list[list[Tag]]
 
@@ -42,7 +43,7 @@ class StorageProtocol(Protocol):
 
     def data_version(self) -> int: ...
 
-    def done_ids(self) -> set[int]: ...
+    def done_ids(self) -> set[ItemId]: ...
 
     def add(
         self,
@@ -56,11 +57,11 @@ class StorageProtocol(Protocol):
         project_id: int | None = None,
     ) -> TodoItem: ...
 
-    def get(self, item_id: int) -> TodoItem: ...
+    def get(self, item_id: ItemId) -> TodoItem: ...
 
     def update(
         self,
-        item_id: int,
+        item_id: ItemId,
         *,
         title: Title | None = None,
         body: str | None = None,
@@ -71,13 +72,13 @@ class StorageProtocol(Protocol):
         project_id: int | None | Unset = UNSET,
     ) -> TodoItem: ...
 
-    def delete(self, item_id: int) -> None: ...
+    def delete(self, item_id: ItemId) -> None: ...
 
     def done_since(self, since: datetime) -> list[TodoItem]: ...
 
-    def add_blocker(self, blocked_id: int, blocker_id: int) -> None: ...
+    def add_blocker(self, blocked_id: ItemId, blocker_id: ItemId) -> None: ...
 
-    def remove_blocker(self, blocked_id: int, blocker_id: int) -> None: ...
+    def remove_blocker(self, blocked_id: ItemId, blocker_id: ItemId) -> None: ...
 
     def list(
         self,

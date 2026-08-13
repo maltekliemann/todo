@@ -23,6 +23,7 @@ from todo.application.commands import block_todo, unblock_todo
 from todo.application.contracts.storage import StorageProtocol
 from todo.application.dependencies import Dependencies
 from todo.application.queries import list_todos, show_todo
+from todo.domain.item_id import ItemId
 from todo.domain.todo_item import TodoItem
 from todo.exceptions import TodoError
 
@@ -69,7 +70,7 @@ class BlockDialog(ModalScreen[bool]):
     def __init__(
         self,
         storage: StorageProtocol,
-        item_id: int,
+        item_id: ItemId,
         relation: Relation = Relation.WAITS_ON,
     ) -> None:
         super().__init__()
@@ -77,8 +78,8 @@ class BlockDialog(ModalScreen[bool]):
         self._item_id = item_id
         self._relation = relation
         self._candidates: list[TodoItem] = []
-        self._related_ids: set[int] = set()
-        self._shown_ids: list[int] = []
+        self._related_ids: set[ItemId] = set()
+        self._shown_ids: list[ItemId] = []
 
     def compose(self) -> ComposeResult:
         with Vertical(id="block-container"):
@@ -206,7 +207,7 @@ class BlockDialog(ModalScreen[bool]):
         other_id = self._shown_ids[index]
         self._toggle(other_id, removing=other_id in self._related_ids)
 
-    def _toggle(self, other_id: int, *, removing: bool) -> None:
+    def _toggle(self, other_id: ItemId, *, removing: bool) -> None:
         # The edge always reads (blocked, blocker); which of the two ids is
         # which is the only thing the direction decides.
         if self._relation is Relation.WAITS_ON:

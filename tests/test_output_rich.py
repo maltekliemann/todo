@@ -13,6 +13,7 @@ from todo.application.dependencies import Dependencies
 from todo.application.queries import ProjectDetail, ProjectSummary
 from todo.domain.deadline import Deadline
 from todo.domain.dependency_graph import DependencyGraph
+from todo.domain.item_id import ItemId
 from todo.domain.priority import Priority
 from todo.domain.project import Project
 from todo.domain.project_status import ProjectStatus
@@ -26,13 +27,14 @@ _NOW = datetime.now(tz=timezone.utc)
 def _deps(*edges: tuple[int, int], done: tuple[int, ...] = ()) -> Dependencies:
     """The dependency read model the presenters take, built by hand."""
     return Dependencies(
-        graph=DependencyGraph(frozenset(edges)), done_ids=frozenset(done)
+        graph=DependencyGraph(frozenset((ItemId(a), ItemId(b)) for a, b in edges)),
+        done_ids=frozenset(ItemId(d) for d in done),
     )
 
 
 def _item(**overrides: object) -> TodoItem:
     defaults: dict[str, object] = {
-        "id": 1,
+        "id": ItemId(1),
         "title": "Task",
         "body": "",
         "priority": Priority.MEDIUM,
@@ -49,7 +51,7 @@ def _item(**overrides: object) -> TodoItem:
 
 def _project(**overrides: object) -> Project:
     defaults: dict[str, object] = {
-        "id": 1,
+        "id": ItemId(1),
         "name": "infra",
         "description": "Infra work",
         "status": ProjectStatus.ACTIVE,
@@ -84,7 +86,7 @@ class TestRichLists:
                 priority=Priority.URGENT,
                 deadline=Deadline.from_date(date.today() + timedelta(days=1)),
             ),
-            _item(id=3, title="Blocked one"),
+            _item(id=ItemId(3), title="Blocked one"),
             _item(
                 id=4,
                 title="Finished",
@@ -183,7 +185,7 @@ class TestRichTagsProjects:
     def test_project_detail(self, rich_out: RichOutput, capsys) -> None:
         items = [
             _item(title="In project"),
-            _item(id=2, title="Done one", status=Status.DONE, done_at=_NOW),
+            _item(id=ItemId(2), title="Done one", status=Status.DONE, done_at=_NOW),
         ]
         updates = [
             ProjectUpdate(id=1, project_id=1, body="Kickoff done", created_at=_NOW)

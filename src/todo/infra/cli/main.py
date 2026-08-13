@@ -34,6 +34,7 @@ from todo.application.queries import (
     summary,
 )
 from todo.config import get_db_path
+from todo.domain.item_id import ItemId
 from todo.domain.priority import Priority
 from todo.domain.project import Project
 from todo.domain.status import Status
@@ -77,6 +78,26 @@ def _resolve_project_obj_or_exit(storage: SqliteStorage, ref: str) -> Project:
 
 def _resolve_project_or_exit(storage: SqliteStorage, ref: str) -> int:
     return _resolve_project_obj_or_exit(storage, ref).id
+
+
+class _ItemIdParam(click.ParamType):  # type: ignore[type-arg]
+    """Turns a command-line argument into an item identity.
+
+    The conversion belongs at the boundary: an id of 0 or -1 is a bad
+    argument, and click reports it as one instead of raising out of the
+    domain constructor.
+    """
+
+    name = "item id"
+
+    def convert(self, value: object, param: object, ctx: object) -> ItemId:
+        try:
+            return ItemId(int(str(value)))
+        except ValueError:
+            self.fail(f"{value!r} is not an item id.", param, ctx)  # type: ignore[arg-type]
+
+
+ITEM_ID = _ItemIdParam()
 
 
 class _SafeGroup(click.Group):
@@ -222,9 +243,9 @@ def list_cmd(
 
 
 @main.command()
-@click.argument("item_id", type=int)
+@click.argument("item_id", type=ITEM_ID)
 @click.option("--json", "as_json", is_flag=True, help="Output JSON")
-def show(item_id: int, as_json: bool) -> None:
+def show(item_id: ItemId, as_json: bool) -> None:
     """Show details for a todo item."""
     storage = _storage()
     out = create_output()
@@ -240,7 +261,7 @@ def show(item_id: int, as_json: bool) -> None:
 
 
 @main.command()
-@click.argument("item_id", type=int)
+@click.argument("item_id", type=ITEM_ID)
 @click.option("--title", default=None)
 @click.option("--body", default=None)
 @click.option(
@@ -267,7 +288,7 @@ def show(item_id: int, as_json: bool) -> None:
 )
 @click.option("--json", "as_json", is_flag=True, help="Output JSON")
 def edit(
-    item_id: int,
+    item_id: ItemId,
     title: str | None,
     body: str | None,
     priority: str | None,
@@ -325,10 +346,10 @@ def edit(
 
 
 @main.command()
-@click.argument("item_id", type=int)
+@click.argument("item_id", type=ITEM_ID)
 @click.argument("status", type=click.Choice(_STATUS_CHOICES, case_sensitive=False))
 @click.option("--json", "as_json", is_flag=True, help="Output JSON")
-def mv(item_id: int, status: str, as_json: bool) -> None:
+def mv(item_id: ItemId, status: str, as_json: bool) -> None:
     """Move a todo item to a new status."""
     storage = _storage()
     out = create_output()
@@ -345,9 +366,9 @@ def mv(item_id: int, status: str, as_json: bool) -> None:
 
 
 @main.command()
-@click.argument("item_id", type=int)
+@click.argument("item_id", type=ITEM_ID)
 @click.option("--json", "as_json", is_flag=True, help="Output JSON")
-def done(item_id: int, as_json: bool) -> None:
+def done(item_id: ItemId, as_json: bool) -> None:
     """Mark a todo item as done."""
     storage = _storage()
     out = create_output()
@@ -364,8 +385,8 @@ def done(item_id: int, as_json: bool) -> None:
 
 
 @main.command()
-@click.argument("item_id", type=int)
-def rm(item_id: int) -> None:
+@click.argument("item_id", type=ITEM_ID)
+def rm(item_id: ItemId) -> None:
     """Delete a todo item."""
     storage = _storage()
     out = create_output()
@@ -397,10 +418,10 @@ def summary_cmd(since: str, as_json: bool) -> None:
 
 
 @main.command()
-@click.argument("item_id", type=int)
-@click.argument("blocker_ids", type=int, nargs=-1, required=True)
+@click.argument("item_id", type=ITEM_ID)
+@click.argument("blocker_ids", type=ITEM_ID, nargs=-1, required=True)
 @click.option("--json", "as_json", is_flag=True, help="Output JSON")
-def block(item_id: int, blocker_ids: tuple[int, ...], as_json: bool) -> None:
+def block(item_id: ItemId, blocker_ids: tuple[ItemId, ...], as_json: bool) -> None:
     """Mark ITEM_ID as blocked by the given blocker item(s), all-or-nothing."""
     storage = _storage()
     out = create_output()
@@ -416,10 +437,10 @@ def block(item_id: int, blocker_ids: tuple[int, ...], as_json: bool) -> None:
 
 
 @main.command()
-@click.argument("item_id", type=int)
-@click.argument("blocker_ids", type=int, nargs=-1, required=True)
+@click.argument("item_id", type=ITEM_ID)
+@click.argument("blocker_ids", type=ITEM_ID, nargs=-1, required=True)
 @click.option("--json", "as_json", is_flag=True, help="Output JSON")
-def unblock(item_id: int, blocker_ids: tuple[int, ...], as_json: bool) -> None:
+def unblock(item_id: ItemId, blocker_ids: tuple[ItemId, ...], as_json: bool) -> None:
     """Remove the given blocker item(s) from ITEM_ID."""
     storage = _storage()
     out = create_output()

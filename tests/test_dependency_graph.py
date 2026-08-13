@@ -9,48 +9,49 @@ from __future__ import annotations
 import pytest
 
 from todo.domain.dependency_graph import DependencyGraph
+from todo.domain.item_id import ItemId
 from todo.exceptions import DependencyError
 
 
 def graph(*edges: tuple[int, int]) -> DependencyGraph:
-    return DependencyGraph(frozenset(edges))
+    return DependencyGraph(frozenset((ItemId(a), ItemId(b)) for a, b in edges))
 
 
 class TestAdding:
     def test_an_edge_is_added(self) -> None:
-        assert graph().with_edge(1, 2).edges == {(1, 2)}
+        assert graph().with_edge(ItemId(1), ItemId(2)).edges == {(1, 2)}
 
     def test_the_original_is_untouched(self) -> None:
         before = graph((1, 2))
-        before.with_edge(2, 3)
+        before.with_edge(ItemId(2), ItemId(3))
         assert before.edges == {(1, 2)}
 
     def test_adding_the_same_edge_twice_changes_nothing(self) -> None:
-        assert graph((1, 2)).with_edge(1, 2).edges == {(1, 2)}
+        assert graph((1, 2)).with_edge(ItemId(1), ItemId(2)).edges == {(1, 2)}
 
     def test_a_diamond_is_not_a_cycle(self) -> None:
         """Two paths reaching the same item is ordinary, not a loop."""
-        diamond = graph((1, 2), (1, 3), (2, 4)).with_edge(3, 4)
+        diamond = graph((1, 2), (1, 3), (2, 4)).with_edge(ItemId(3), ItemId(4))
         assert len(diamond.edges) == 4
 
 
 class TestRefusing:
     def test_an_item_cannot_block_itself(self) -> None:
         with pytest.raises(DependencyError, match="cannot block itself"):
-            graph().with_edge(1, 1)
+            graph().with_edge(ItemId(1), ItemId(1))
 
     def test_a_direct_cycle_is_refused(self) -> None:
         with pytest.raises(DependencyError, match="cycle"):
-            graph((1, 2)).with_edge(2, 1)
+            graph((1, 2)).with_edge(ItemId(2), ItemId(1))
 
     def test_a_transitive_cycle_is_refused(self) -> None:
         with pytest.raises(DependencyError, match="cycle"):
-            graph((1, 2), (2, 3)).with_edge(3, 1)
+            graph((1, 2), (2, 3)).with_edge(ItemId(3), ItemId(1))
 
     def test_a_long_chain_is_walked(self) -> None:
         chain = [(i, i + 1) for i in range(1, 50)]
         with pytest.raises(DependencyError, match="cycle"):
-            graph(*chain).with_edge(50, 1)
+            graph(*chain).with_edge(ItemId(50), ItemId(1))
 
     def test_converging_paths_are_walked_once(self) -> None:
         """Two routes into the same item must not be explored twice — on a
@@ -58,14 +59,14 @@ class TestRefusing:
         exponential."""
         converging = graph((1, 2), (1, 3), (2, 4), (3, 4), (4, 5))
         # Reaches everything downstream of 1 without looping on 4.
-        assert converging.with_edge(9, 1).edges >= {(9, 1)}
+        assert converging.with_edge(ItemId(9), ItemId(1)).edges >= {(9, 1)}
         with pytest.raises(DependencyError, match="cycle"):
-            converging.with_edge(5, 1)
+            converging.with_edge(ItemId(5), ItemId(1))
 
     def test_a_refused_addition_leaves_the_graph_alone(self) -> None:
         before = graph((1, 2))
         with pytest.raises(DependencyError):
-            before.with_edge(2, 1)
+            before.with_edge(ItemId(2), ItemId(1))
         assert before.edges == {(1, 2)}
 
 

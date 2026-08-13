@@ -17,6 +17,7 @@ from textual.widget import Widget
 
 from todo.application.commands import CompletionResult
 from todo.application.contracts.storage import StorageProtocol
+from todo.domain.item_id import ItemId
 from todo.domain.todo_item import TodoItem
 from todo.exceptions import TodoError
 from todo.tui.editor import apply_body_edit, editor_command
@@ -109,7 +110,7 @@ class EditorSession:
             return None
 
     def apply(
-        self, item_id: int, original: str, edited: str, tmp_path: str
+        self, item_id: ItemId, original: str, edited: str, tmp_path: str
     ) -> CompletionResult | None:
         """Apply an edited buffer. On rejection the buffer file is kept and
         its path reported, so a failed write never destroys the user's work."""

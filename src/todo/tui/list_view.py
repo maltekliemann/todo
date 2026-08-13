@@ -21,6 +21,7 @@ from todo.application.queries import (
     show_todo,
 )
 from todo.domain.dependency_graph import DependencyGraph
+from todo.domain.item_id import ItemId
 from todo.domain.priority import Priority
 from todo.domain.todo_item import TodoItem
 from todo.exceptions import NotFoundError, TodoError
@@ -88,7 +89,7 @@ class TodoListView(Widget):
         super().__init__()
         self._storage = storage
         self._items: list[TodoItem] = []
-        self._item_by_id: dict[int, TodoItem] = {}
+        self._item_by_id: dict[ItemId, TodoItem] = {}
         self._deps = Dependencies(
             graph=DependencyGraph(frozenset()), done_ids=frozenset()
         )
@@ -155,7 +156,7 @@ class TodoListView(Widget):
         self.action_open()
 
     def _refresh_list(
-        self, *, from_poll: bool = False, select_id: int | None = None
+        self, *, from_poll: bool = False, select_id: ItemId | None = None
     ) -> None:
         """Refresh, degrading storage failures to a notification.
 
@@ -174,7 +175,7 @@ class TodoListView(Widget):
         else:
             self._read_error_reported = False
 
-    def _successor_id(self, item_id: int) -> int | None:
+    def _successor_id(self, item_id: ItemId) -> ItemId | None:
         """The item listed after `item_id` right now.
 
         Stay mode is "let me move a run of items without chasing the
@@ -190,7 +191,7 @@ class TodoListView(Widget):
             return None
         return ids[index + 1] if index + 1 < len(ids) else None
 
-    def _successor_if_staying(self, item_id: int) -> int | None:
+    def _successor_if_staying(self, item_id: ItemId) -> ItemId | None:
         return None if self._cursor_follows_item else self._successor_id(item_id)
 
     def _rows_for_refresh(self) -> tuple[int, list[TodoItem]]:
@@ -236,7 +237,7 @@ class TodoListView(Widget):
             ),
         )
 
-    def _refresh_list_unguarded(self, *, select_id: int | None = None) -> None:
+    def _refresh_list_unguarded(self, *, select_id: ItemId | None = None) -> None:
         table = self.query_one("#item-list", TodoTable)
         previous_id = self._selected_item_id()
         previous_cursor = table.cursor_row
@@ -299,7 +300,7 @@ class TodoListView(Widget):
             return
 
         try:
-            key = int(str(item_id))
+            key = ItemId(int(str(item_id)))
         except (TypeError, ValueError):
             return
         # _refresh_list already hydrated this item; render from the cache
@@ -315,7 +316,7 @@ class TodoListView(Widget):
 
         pane.show(item, self._deps)
 
-    def _selected_item_id(self) -> int | None:
+    def _selected_item_id(self) -> ItemId | None:
         table = self.query_one("#item-list", DataTable)
         if table.row_count == 0:
             return None
@@ -326,7 +327,7 @@ class TodoListView(Widget):
         if row_key.value is None or is_separator(row_key.value):
             return None
         try:
-            return int(str(row_key.value))
+            return ItemId(int(str(row_key.value)))
         except (ValueError, TypeError):
             return None
 

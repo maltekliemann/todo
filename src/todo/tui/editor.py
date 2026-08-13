@@ -15,6 +15,7 @@ import shutil
 
 from todo.application.commands import CompletionResult, edit_todo
 from todo.application.contracts.storage import StorageProtocol
+from todo.domain.item_id import ItemId
 
 
 def editor_command(editor_value: str, path: str) -> list[str]:
@@ -41,7 +42,7 @@ def editor_command(editor_value: str, path: str) -> list[str]:
 
 
 def apply_body_edit(
-    storage: StorageProtocol, item_id: int, edited: str
+    storage: StorageProtocol, item_id: ItemId, edited: str
 ) -> CompletionResult:
     """Store an edited buffer as the item's body.
 

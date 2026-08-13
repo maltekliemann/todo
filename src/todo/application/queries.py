@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 from todo.application.contracts.storage import StorageProtocol
 from todo.application.dependencies import Dependencies
+from todo.domain.item_id import ItemId
 from todo.domain.priority import Priority
 from todo.domain.project import Project
 from todo.domain.project_name import ProjectName
@@ -68,7 +69,7 @@ def list_todos(
 
 def show_todo(
     storage: StorageProtocol,
-    item_id: int,
+    item_id: ItemId,
 ) -> TodoItem:
     return storage.get(item_id)
 

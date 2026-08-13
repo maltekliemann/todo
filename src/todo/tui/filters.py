@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from todo.domain.priority import Priority
 from todo.domain.project import Project
+from todo.domain.project_id import ProjectId
 from todo.domain.todo_item import TodoItem
 from todo.tui.render import escape_markup
 
@@ -26,7 +27,7 @@ class Filters:
 
     search: str = ""
     tag: str | None = None
-    project_id: int | None = None
+    project_id: ProjectId | None = None
     project_name: str | None = None
     priority: Priority | None = None
 

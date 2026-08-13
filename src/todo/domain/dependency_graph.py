@@ -5,10 +5,11 @@ from __future__ import annotations
 from collections.abc import Container
 from dataclasses import dataclass
 
+from todo.domain.item_id import ItemId
 from todo.exceptions import DependencyError
 
 # (blocker, blocked): the blocker must be done before the blocked item.
-Edge = tuple[int, int]
+Edge = tuple[ItemId, ItemId]
 
 
 @dataclass(frozen=True)
@@ -36,14 +37,14 @@ class DependencyGraph:
     def __post_init__(self) -> None:
         for blocker, blocked in self.edges:
             if blocker == blocked:
-                raise DependencyError(f"Item #{blocker} blocks itself.")
+                raise DependencyError(f"Item {blocker.label} blocks itself.")
         for blocker, blocked in self.edges:
             # Reachable backwards, with this edge itself left out of the
             # walk: that is what "this edge closes a loop" means.
             if self._reaches(blocked, blocker, ignoring=(blocker, blocked)):
                 raise DependencyError("The dependencies contain a cycle.")
 
-    def with_edge(self, blocker: int, blocked: int) -> DependencyGraph:
+    def with_edge(self, blocker: ItemId, blocked: ItemId) -> DependencyGraph:
         """This graph plus one edge, or DependencyError if it cannot hold.
 
         Both messages are raised here rather than left to __post_init__
@@ -56,15 +57,15 @@ class DependencyGraph:
             raise DependencyError("Adding this blocker would create a cycle.")
         return DependencyGraph(self.edges | {(blocker, blocked)})
 
-    def blockers_of(self, item_id: int) -> list[int]:
+    def blockers_of(self, item_id: ItemId) -> list[ItemId]:
         """What this item waits on."""
         return sorted(blocker for blocker, blocked in self.edges if blocked == item_id)
 
-    def dependents_of(self, item_id: int) -> list[int]:
+    def dependents_of(self, item_id: ItemId) -> list[ItemId]:
         """What waits on this item."""
         return sorted(blocked for blocker, blocked in self.edges if blocker == item_id)
 
-    def is_blocked(self, item_id: int, done_ids: Container[int]) -> bool:
+    def is_blocked(self, item_id: ItemId, done_ids: Container[ItemId]) -> bool:
         """Whether anything this item waits on is still unfinished.
 
         Needs the graph and the finished set together, which is why it is
@@ -76,16 +77,16 @@ class DependencyGraph:
         return any(blocker not in done_ids for blocker in self.blockers_of(item_id))
 
     def _reaches(
-        self, start: int, target: int, *, ignoring: Edge | None = None
+        self, start: ItemId, target: ItemId, *, ignoring: Edge | None = None
     ) -> bool:
         """Is `target` reachable from `start` by following blocks-edges?"""
-        blocks: dict[int, list[int]] = {}
+        blocks: dict[ItemId, list[ItemId]] = {}
         for edge in self.edges:
             if edge == ignoring:
                 continue
             blocks.setdefault(edge[0], []).append(edge[1])
 
-        seen: set[int] = set()
+        seen: set[ItemId] = set()
         stack = [start]
         while stack:
             current = stack.pop()
