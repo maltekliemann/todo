@@ -19,6 +19,9 @@ def decode_tags(raw: str) -> list[Tag]:
 
 
 def encode_tags(tags: Iterable[Tag]) -> str:
-    """Tags into the stored column. Tag itself refuses a comma, which is
-    what keeps this join reversible."""
-    return ",".join(tags)
+    """Tags into the stored column, in a fixed order.
+
+    They are a set on the item, so sorting is what makes the stored form
+    a function of the tags rather than of iteration order.
+    """
+    return ",".join(sorted(tags))

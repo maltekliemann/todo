@@ -46,7 +46,7 @@ def meta_lines(item: TodoItem, deps: Dependencies) -> list[str]:
     if item.project:
         lines.append(f"Project: {escape_markup(item.project.name)}")
     if item.tags:
-        lines.append(f"Tags: {escape_markup(', '.join(item.tags))}")
+        lines.append(f"Tags: {escape_markup(', '.join(sorted(item.tags)))}")
     blockers = deps.blockers_of(item.id)
     if blockers:
         lines.append(f"Blocked by: {', '.join(f'#{i}' for i in blockers)}")

@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 
-from todo.application.contracts.storage import StorageProtocol, Unset
+from todo.application.contracts.storage import UNSET, StorageProtocol, Unset
 from todo.application.dependencies import Dependencies
+from todo.domain.body import Body
 from todo.domain.deadline import Deadline
 from todo.domain.dependency_graph import DependencyGraph
 from todo.domain.description import Description
@@ -21,6 +22,12 @@ from todo.domain.title import Title
 from todo.domain.todo_item import TodoItem
 from todo.domain.update_body import UpdateBody
 from todo.exceptions import DependencyError, NotFoundError
+
+
+def _now() -> datetime:
+    """The application layer's clock. The domain takes the time it is
+    given rather than reading one, so a transition is testable."""
+    return datetime.now(tz=timezone.utc)
 
 
 def _to_tags(tags: Sequence[str] | None) -> list[Tag] | None:
@@ -72,7 +79,7 @@ def add_todo(
         priority=priority,
         status=status,
         deadline=_to_deadline(deadline),
-        tags=_to_tags(tags),
+        tags=frozenset(_to_tags(tags) or ()),
         project_id=project_id,
     )
 
@@ -118,48 +125,64 @@ def _tracked_update(
     title: str | None = None,
     body: str | None = None,
     priority: Priority | None = None,
-    deadline: date | None | Unset = Unset.UNSET,
+    deadline: date | None | Unset = UNSET,
     tags: Sequence[str] | None = None,
-    project_id: int | None | Unset = Unset.UNSET,
+    project_id: int | None | Unset = UNSET,
 ) -> CompletionResult:
-    """Apply an update; when it completes the item, report newly unblocked
-    dependents. Every path that can set status=done must go through here so
-    the unblock warning can never silently miss a completion path. The whole
-    read-update-read runs in one transaction, and a dependent deleted by a
-    concurrent process is simply omitted — a completion never reports
-    failure after it has already mutated. Blocked-ness is diffed as a set
-    (one query each side) and only the newly unblocked dependents are
-    hydrated, so cost does not scale with dependent count."""
+    """Load the item, change it through its own methods, save it.
+
+    Every path that can complete an item goes through here, so the report
+    of newly unblocked dependents can never silently miss one. The whole
+    read-change-save runs in one transaction; a dependent deleted by a
+    concurrent process is simply omitted, because a completion never
+    reports failure after it has already happened.
+    """
     with storage.transaction():
-        before = storage.get(item_id)
+        item = storage.get(item_id)
         # Only a completion can unblock anything, so nothing else pays for
         # reading the graph — and one read answers both questions.
         deps = (
             Dependencies.load(storage)
-            if status == Status.DONE and not before.is_done
+            if status is Status.DONE and not item.is_done
             else None
         )
         dependents = deps.dependents_of(item_id) if deps else []
-        # Most items block nothing; those skip the blocked-set diff too.
         completing = deps is not None and bool(dependents)
         blocked_before = deps.blocked_ids() if completing and deps else set()
-        item = storage.update(
-            item_id,
-            title=Title(title) if title is not None else None,
-            body=body,
-            priority=priority,
-            status=status,
-            deadline=(
-                # UNSET means "leave it alone" and is not a date to convert.
-                deadline if isinstance(deadline, Unset) else _to_deadline(deadline)
-            ),
-            tags=_to_tags(tags),
-            project_id=project_id,
-        )
+
+        if title is not None:
+            item.rename(Title(title))
+        if body is not None:
+            item.describe(Body(body))
+        if priority is not None:
+            item.prioritize(priority)
+        if not isinstance(deadline, Unset):
+            due = _to_deadline(deadline)
+            item.schedule(due) if due else item.unschedule()
+        if tags is not None:
+            _retag(item, _to_tags(tags) or [])
+        if not isinstance(project_id, Unset):
+            if project_id is None:
+                item.unfile()
+            else:
+                item.file_under(storage.get_project(project_id))
+        if status is not None:
+            item.move_to(status)
+
+        saved = storage.save(item)
         unblocked: list[TodoItem] = []
         if completing:
             unblocked = _newly_unblocked(storage, dependents, blocked_before)
-    return CompletionResult(item=item, unblocked=unblocked)
+    return CompletionResult(item=saved, unblocked=unblocked)
+
+
+def _retag(item: TodoItem, tags: list[Tag]) -> None:
+    """Make the item's tags exactly these, one add or remove at a time."""
+    wanted = set(tags)
+    for gone in item.tags - wanted:
+        item.remove_tag(gone)
+    for added in wanted - item.tags:
+        item.add_tag(added)
 
 
 def _newly_unblocked(

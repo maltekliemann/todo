@@ -10,11 +10,9 @@ from zoneinfo import ZoneInfo
 from todo.adapters.sqlite_migrations import MIGRATIONS, SCHEMA
 from todo.adapters.tag_column import decode_tags, encode_tags
 from todo.application.contracts.storage import (
-    UNSET,
     EdgeList,
     ItemTagLists,
     ProjectList,
-    Unset,
     UpdateList,
 )
 from todo.domain.body import Body
@@ -52,7 +50,7 @@ def _row_to_item(row: sqlite3.Row) -> TodoItem:
     tags_raw: str = row["tags"]
     # Constructing the value objects is the read-side check that what was
     # stored is still something the domain calls valid.
-    tags = decode_tags(tags_raw) if tags_raw else []
+    tags = frozenset(decode_tags(tags_raw)) if tags_raw else frozenset()
     done_at_raw: str | None = row["done_at"]
     deadline_raw: str | None = row["deadline"]
     return TodoItem(
@@ -250,7 +248,7 @@ class SqliteStorage:
         priority: Priority = Priority.MEDIUM,
         status: Status = Status.TODO,
         deadline: Deadline | None = None,
-        tags: list[Tag] | None = None,
+        tags: frozenset[Tag] | None = None,
         project_id: int | None = None,
     ) -> TodoItem:
         now = _now().isoformat()
@@ -292,75 +290,37 @@ class SqliteStorage:
             raise NotFoundError(item_id)
         return _row_to_item(row)
 
-    def update(
-        self,
-        item_id: ItemId,
-        *,
-        title: Title | None = None,
-        body: str | None = None,
-        priority: Priority | None = None,
-        status: Status | None = None,
-        deadline: Deadline | None | Unset = UNSET,
-        tags: list[Tag] | None = None,
-        project_id: int | None | Unset = UNSET,
-    ) -> TodoItem:
-        # Existence + the one field the done_at transition needs — not a
-        # full dependency hydration used as an existence check.
-        with self._read_guard(f"read todo #{item_id}"):
-            status_row = self._conn.execute(
-                "SELECT status FROM todos WHERE id = ?", (item_id,)
-            ).fetchone()
-        if status_row is None:
-            raise NotFoundError(item_id)
-        existing_status = Status(status_row["status"])
+    def save(self, item: TodoItem) -> TodoItem:
+        """Write the item back as it now stands.
 
-        sets: list[str] = []
-        params: list[str | int | None] = []
-
-        if title is not None:
-            sets.append("title = ?")
-            params.append(title)
-        if body is not None:
-            sets.append("body = ?")
-            params.append(body)
-        if priority is not None:
-            sets.append("priority = ?")
-            params.append(priority.value)
-        if status is not None:
-            sets.append("status = ?")
-            params.append(status.value)
-            if status == Status.DONE and existing_status != Status.DONE:
-                sets.append("done_at = ?")
-                params.append(_now().isoformat())
-            elif status != Status.DONE:
-                sets.append("done_at = ?")
-                params.append(None)
-        if not isinstance(deadline, Unset):
-            sets.append("deadline = ?")
-            params.append(deadline.isoformat() if deadline else None)
-        if tags is not None:
-            sets.append("tags = ?")
-            params.append(encode_tags(tags))
-        if not isinstance(project_id, Unset):
-            sets.append("project_id = ?")
-            params.append(project_id)
-
-        if not sets:
-            return self.get(item_id)
-
-        sets.append("updated_at = ?")
-        params.append(_now().isoformat())
-        params.append(item_id)
-
+        No field flags and no clearing sentinel: the caller changed the
+        item through its own methods, so what is stored is simply what it
+        holds — including the updated_at and done_at it decided for
+        itself.
+        """
+        self._assert_exists(item.id)
         try:
             self._conn.execute(
-                f"UPDATE todos SET {', '.join(sets)} WHERE id = ?",
-                params,
+                "UPDATE todos SET title = ?, body = ?, priority = ?, status = ?, "
+                "updated_at = ?, done_at = ?, deadline = ?, tags = ?, "
+                "project_id = ? WHERE id = ?",
+                (
+                    item.title,
+                    item.body,
+                    item.priority.value,
+                    item.status.value,
+                    item.updated_at.isoformat(),
+                    item.done_at.isoformat() if item.done_at else None,
+                    item.deadline.isoformat() if item.deadline else None,
+                    encode_tags(item.tags),
+                    item.project.id if item.project else None,
+                    item.id,
+                ),
             )
             self._commit()
         except (sqlite3.Error, OverflowError) as e:
-            raise StorageError(f"Failed to update todo #{item_id}: {e}") from e
-        return self.get(item_id)
+            raise StorageError(f"Failed to save todo {item.id.label}: {e}") from e
+        return self.get(item.id)
 
     def delete(self, item_id: ItemId) -> None:
         self._assert_exists(item_id)

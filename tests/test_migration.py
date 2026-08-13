@@ -9,6 +9,7 @@ import pytest
 
 from todo.adapters.sqlite_storage import SqliteStorage
 from todo.domain.description import Description
+from todo.domain.item_id import ItemId
 from todo.domain.project_name import ProjectName
 from todo.domain.tag import Tag
 from todo.domain.title import Title
@@ -90,7 +91,7 @@ class TestMigration:
         item = storage.get(1)
         assert item.title == "Old item"
         assert item.body == "kept"
-        assert item.tags == ["legacy"]
+        assert item.tags == frozenset({"legacy"})
         assert item.project is None
         storage.close()
 
@@ -176,7 +177,9 @@ class TestMigration:
         project = storage.add_project(
             ProjectName("infra"), description=Description("Infra work")
         )
-        storage.update(1, project_id=project.id)
+        item = storage.get(ItemId(1))
+        item.file_under(project)
+        storage.save(item)
         filed = storage.get(1)
         assert filed.project is not None and filed.project.name == "infra"
         storage.close()
@@ -248,9 +251,13 @@ class TestV4TagNormalization:
         conn.close()
 
         storage = SqliteStorage(db)
-        assert [i.title for i in storage.list(tags=["home"])] == ["padded"]
-        assert [i.title for i in storage.list(tags=["api"])] == ["spaced pair"]
-        assert [i.title for i in storage.list(tags=["web"])] == ["spaced pair"]
+        assert [i.title for i in storage.list(tags=frozenset({"home"}))] == ["padded"]
+        assert [i.title for i in storage.list(tags=frozenset({"api"}))] == [
+            "spaced pair"
+        ]
+        assert [i.title for i in storage.list(tags=frozenset({"web"}))] == [
+            "spaced pair"
+        ]
         storage.close()
 
     def test_legacy_duplicate_and_empty_tag_segments_cleaned(
@@ -269,7 +276,7 @@ class TestV4TagNormalization:
 
         storage = SqliteStorage(db)
         (item,) = [i for i in storage.list() if i.title == "dupes"]
-        assert item.tags == ["a", "b"]
+        assert item.tags == frozenset({"a", "b"})
         storage.close()
 
         conn = sqlite3.connect(str(db))
@@ -337,18 +344,18 @@ class TestV5DuplicateTagRepair:
 
         reopened = SqliteStorage(db)
         try:
-            assert reopened.get(1).tags == ["a", "b"]
+            assert reopened.get(1).tags == frozenset({"a", "b"})
         finally:
             reopened.close()
 
     def test_repairing_twice_changes_nothing(self, tmp_path: Path) -> None:
         db = tmp_path / "clean.db"
         storage = SqliteStorage(db)
-        storage.add(Title("task"), tags=[Tag("a"), Tag("b")])
+        storage.add(Title("task"), tags=frozenset({Tag("a"), Tag("b")}))
         storage.close()
 
         reopened = SqliteStorage(db)
         try:
-            assert reopened.get(1).tags == ["a", "b"]
+            assert reopened.get(1).tags == frozenset({"a", "b"})
         finally:
             reopened.close()

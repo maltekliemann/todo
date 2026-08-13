@@ -133,7 +133,7 @@ def _item_to_dict(item: TodoItem, deps: Dependencies) -> dict[str, object]:
         "updated_at": item.updated_at.isoformat(),
         "done_at": item.done_at.isoformat() if item.done_at else None,
         "deadline": item.deadline.isoformat() if item.deadline else None,
-        "tags": item.tags,
+        "tags": sorted(item.tags),
         "is_overdue": item.is_overdue,
         "blocked_by": deps.blockers_of(item.id),
         "blocking": deps.dependents_of(item.id),
@@ -266,7 +266,7 @@ class RichOutput(_JsonOutput):
         if item.project:
             lines.append(f"\nProject: {item.project.name}")
         if item.tags:
-            lines.append(f"\nTags: {', '.join(item.tags)}")
+            lines.append(f"\nTags: {', '.join(sorted(item.tags))}")
         if deps.blockers_of(item.id):
             blocked = ", ".join(i.label for i in deps.blockers_of(item.id))
             lines.append(f"\nBlocked by: {blocked}")
@@ -416,7 +416,7 @@ class PlainOutput(_JsonOutput):
         if item.project:
             print(f"Project: {item.project.name}")
         if item.tags:
-            print(f"Tags: {', '.join(item.tags)}")
+            print(f"Tags: {', '.join(sorted(item.tags))}")
         if deps.blockers_of(item.id):
             ids = ", ".join(i.label for i in deps.blockers_of(item.id))
             print(f"Blocked by: {ids}")

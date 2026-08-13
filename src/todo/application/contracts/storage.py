@@ -53,24 +53,13 @@ class StorageProtocol(Protocol):
         priority: Priority = Priority.MEDIUM,
         status: Status = Status.TODO,
         deadline: Deadline | None = None,
-        tags: list[Tag] | None = None,
+        tags: frozenset[Tag] | None = None,
         project_id: int | None = None,
     ) -> TodoItem: ...
 
     def get(self, item_id: ItemId) -> TodoItem: ...
 
-    def update(
-        self,
-        item_id: ItemId,
-        *,
-        title: Title | None = None,
-        body: str | None = None,
-        priority: Priority | None = None,
-        status: Status | None = None,
-        deadline: Deadline | None | Unset = UNSET,
-        tags: list[Tag] | None = None,
-        project_id: int | None | Unset = UNSET,
-    ) -> TodoItem: ...
+    def save(self, item: TodoItem) -> TodoItem: ...
 
     def delete(self, item_id: ItemId) -> None: ...
 

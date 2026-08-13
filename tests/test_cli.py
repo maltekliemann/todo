@@ -986,7 +986,9 @@ class TestBlockStorage:
         b = storage.add("Blocked")
         block_todo(storage, b.id, a.id)
 
-        storage.update(a.id, status=Status.DONE)
+        blocker = storage.get(a.id)
+        blocker.move_to(Status.DONE)
+        storage.save(blocker)
 
         deps = Dependencies.load(storage)
         assert deps.blockers_of(b.id) == [a.id]

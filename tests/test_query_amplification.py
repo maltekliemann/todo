@@ -7,6 +7,7 @@ import pytest
 from todo.adapters.sqlite_storage import SqliteStorage
 from todo.application.commands import add_todo, block_todo_batch
 from todo.application.dependencies import Dependencies
+from todo.domain.title import Title
 from todo.exceptions import DependencyError, NotFoundError
 
 
@@ -181,19 +182,37 @@ class TestWritePathExistenceChecks:
         delete_todo(storage, 1)
         assert calls <= 1  # only the command's victim read
 
-    def test_update_keeps_not_found_and_done_at_contracts(
-        self, storage: SqliteStorage
-    ) -> None:
+    def test_save_writes_what_the_item_holds(self, storage: SqliteStorage) -> None:
+        """The adapter no longer decides the completion stamp — it used to
+        pre-read the row's status to work it out. It writes what the item
+        holds, and the item decided that in move_to."""
         from datetime import datetime
 
+        from todo.application.commands import complete_todo, move_todo
+        from todo.domain.body import Body
+        from todo.domain.item_id import ItemId
+        from todo.domain.priority import Priority
         from todo.domain.status import Status
+        from todo.domain.todo_item import TodoItem
 
+        now = datetime.now()
+        missing = TodoItem(
+            id=ItemId(999),
+            title=Title("x"),
+            body=Body(""),
+            priority=Priority.MEDIUM,
+            status=Status.TODO,
+            created_at=now,
+            updated_at=now,
+        )
         with pytest.raises(NotFoundError):
-            storage.update(999, title="x")
+            storage.save(missing)
+
         add_todo(storage, "x")
-        done = storage.update(1, status=Status.DONE)
-        assert isinstance(done.done_at, datetime)
-        reopened = storage.update(1, status=Status.TODO)
+        completed = complete_todo(storage, ItemId(1)).item
+        assert isinstance(completed.done_at, datetime)
+
+        reopened = move_todo(storage, ItemId(1), Status.TODO).item
         assert reopened.done_at is None
 
     def test_batch_existence_validated_once_per_id(

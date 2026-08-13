@@ -75,7 +75,7 @@ def field_value(item: TodoItem, key: str, deps: Dependencies) -> str:
     if key == "deadline":
         return item.deadline.isoformat() if item.deadline else EMPTY
     if key == "tags":
-        return ", ".join(item.tags) or EMPTY
+        return ", ".join(sorted(item.tags)) or EMPTY
     if key == "project":
         return item.project.name if item.project else EMPTY
     if key == "blocked_by":
@@ -235,7 +235,7 @@ class ItemScreen(ModalScreen[bool]):
             self.app.push_screen(
                 TextPrompt(
                     "Tags (comma-separated, empty clears)",
-                    ", ".join(item.tags),
+                    ", ".join(sorted(item.tags)),
                     placeholder="tag, other tag",
                 ),
                 self._save_tags,

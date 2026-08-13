@@ -22,6 +22,7 @@ from todo.domain.project import Project
 from todo.domain.project_name import ProjectName
 from todo.domain.project_status import ProjectStatus
 from todo.domain.status import Status
+from todo.domain.tag import Tag
 from todo.domain.todo_item import TodoItem
 from todo.tui.app import TodoApp
 from todo.tui.edit_session import EditorSession
@@ -1100,8 +1101,13 @@ class TestFilters:
     @pytest.fixture()
     def tagged_storage(self, db_path: Path) -> SqliteStorage:
         storage = SqliteStorage(db_path)
-        add_todo(storage, "Backend work", priority=Priority.URGENT, tags=["backend"])
-        add_todo(storage, "Frontend work", tags=["frontend"])
+        add_todo(
+            storage,
+            "Backend work",
+            priority=Priority.URGENT,
+            tags=frozenset({"backend"}),
+        )
+        add_todo(storage, "Frontend work", tags=frozenset({"frontend"}))
         add_todo(storage, "Untagged", priority=Priority.URGENT)
         return storage
 
@@ -1889,7 +1895,7 @@ class TestSharedMetaPresenter:
             updated_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
             done_at=None,
             deadline=Deadline(2099, 1, 1),
-            tags=["a[red]b"],
+            tags=frozenset({Tag("a[red]b")}),
             project=Project(
                 id=1,
                 name=ProjectName("proj [/]"),
@@ -2357,7 +2363,7 @@ class TestItemMenu:
             "Main",
             priority=Priority.HIGH,
             deadline=date(2099, 3, 4),
-            tags=["auth", "web"],
+            tags=frozenset({"auth", "web"}),
             project_id=project.id,
         )
         add_todo(storage, "Blocker")
@@ -2493,7 +2499,7 @@ class TestItemMenu:
 
     async def test_tags_are_replaced_by_what_you_type(self, db_path: Path) -> None:
         storage = SqliteStorage(db_path)
-        add_todo(storage, "Task", tags=["old"])
+        add_todo(storage, "Task", tags=frozenset({"old"}))
 
         app = TodoApp(storage=storage)
         async with app.run_test() as pilot:
@@ -2504,7 +2510,7 @@ class TestItemMenu:
             await pilot.press("enter")
             await pilot.pause()
 
-            assert storage.get(1).tags == ["one", "two"]
+            assert storage.get(1).tags == frozenset({"one", "two"})
 
     async def test_the_project_is_picked_and_cleared(self, db_path: Path) -> None:
         """Project was context-only in the editor buffer: unreachable from

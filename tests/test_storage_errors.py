@@ -86,11 +86,29 @@ class TestOversizedIds:
         storage.close()
 
     def test_update_with_oversized_id_raises_domain_error(self, tmp_path: Path) -> None:
+        from datetime import datetime, timezone
+
+        from todo.domain.body import Body
+        from todo.domain.item_id import ItemId
+        from todo.domain.priority import Priority
+        from todo.domain.status import Status
+        from todo.domain.title import Title
+        from todo.domain.todo_item import TodoItem
         from todo.exceptions import TodoError
 
+        now = datetime.now(tz=timezone.utc)
         storage = SqliteStorage(tmp_path / "db.db")
+        oversized = TodoItem(
+            id=ItemId(10**20),
+            title=Title("x"),
+            body=Body(""),
+            priority=Priority.MEDIUM,
+            status=Status.TODO,
+            created_at=now,
+            updated_at=now,
+        )
         with pytest.raises(TodoError):
-            storage.update(10**20, title="x")
+            storage.save(oversized)
         storage.close()
 
     def test_add_blocker_with_oversized_id_raises_domain_error(

@@ -33,7 +33,7 @@ def _item_with(*, deadline: Deadline, status: Status) -> TodoItem:
         updated_at=now,
         done_at=None,
         deadline=deadline,
-        tags=[],
+        tags=frozenset(),
     )
 
 
@@ -82,7 +82,7 @@ class TestModels:
             updated_at=_NOW,
             done_at=_NOW,
             deadline=Deadline.from_date(date.today() - timedelta(days=5)),
-            tags=[],
+            tags=frozenset(),
         )
         assert item.is_overdue is False
         assert item.deadline_urgent is False

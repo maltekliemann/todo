@@ -50,12 +50,12 @@ class TestTitleNormalization:
 class TestTagValidation:
     def test_comma_tag_rejected_on_add(self, storage: SqliteStorage) -> None:
         with pytest.raises(ValueError, match="comma"):
-            add_todo(storage, "Task", tags=["a,b"])
+            add_todo(storage, "Task", tags=frozenset({"a,b"}))
 
     def test_comma_tag_rejected_on_edit(self, storage: SqliteStorage) -> None:
         add_todo(storage, "Task")
         with pytest.raises(ValueError, match="comma"):
-            edit_todo(storage, 1, tags=["x,y"])
+            edit_todo(storage, 1, tags=frozenset({"x,y"}))
 
     def test_cli_comma_tag_errors_cleanly(self, cli: CliRunner) -> None:
         result = cli.invoke(main, ["add", "Task", "-t", "a,b"])
@@ -63,8 +63,8 @@ class TestTagValidation:
         assert "comma" in result.stderr
 
     def test_whitespace_tag_normalized(self, storage: SqliteStorage) -> None:
-        item = add_todo(storage, "Task", tags=["  spaced  ", "ok"])
-        assert item.tags == ["spaced", "ok"]
+        item = add_todo(storage, "Task", tags=frozenset({"  spaced  ", "ok"}))
+        assert item.tags == frozenset({"spaced", "ok"})
 
     def test_no_phantom_tags_roundtrip(self, cli: CliRunner) -> None:
         """The original failure: 'a,b' silently became two tags."""
@@ -128,20 +128,20 @@ class TestEmptyProjectRef:
 
 class TestTagDeduplication:
     def test_duplicate_tags_deduped_on_add(self, storage: SqliteStorage) -> None:
-        item = add_todo(storage, "x", tags=["a", "a", "b", " a "])
-        assert item.tags == ["a", "b"]
+        item = add_todo(storage, "x", tags=frozenset({"a", "a", "b", " a "}))
+        assert item.tags == frozenset({"a", "b"})
 
     def test_duplicate_tags_deduped_on_edit(self, storage: SqliteStorage) -> None:
         add_todo(storage, "x")
-        result = edit_todo(storage, 1, tags=["dup", "dup"])
-        assert result.item.tags == ["dup"]
+        result = edit_todo(storage, 1, tags=frozenset({"dup", "dup"}))
+        assert result.item.tags == frozenset({"dup"})
 
     def test_tag_counts_count_items_not_occurrences(
         self, storage: SqliteStorage
     ) -> None:
         from todo.application.queries import count_tags
 
-        add_todo(storage, "x", tags=["a", "a"])
+        add_todo(storage, "x", tags=frozenset({"a", "a"}))
         assert count_tags(storage) == [("a", 1)]
 
 
@@ -208,8 +208,10 @@ class TestTagFilterNormalization:
     def test_query_layer_normalizes_filter_tags(self, storage: SqliteStorage) -> None:
         from todo.application.queries import list_todos
 
-        add_todo(storage, "x", tags=["foo"])
-        assert [i.title for i in list_todos(storage, tags=[" foo "])] == ["x"]
+        add_todo(storage, "x", tags=frozenset({"foo"}))
+        assert [i.title for i in list_todos(storage, tags=frozenset({" foo "}))] == [
+            "x"
+        ]
 
 
 class TestTagFilterValidation:
@@ -237,11 +239,11 @@ class TestTagFilterValidation:
     ) -> None:
         from todo.application.queries import list_todos
 
-        add_todo(storage, "x", tags=["a"])
+        add_todo(storage, "x", tags=frozenset({"a"}))
         with pytest.raises(ValueError, match="[Tt]ag"):
-            list_todos(storage, tags=[" "])
+            list_todos(storage, tags=frozenset({" "}))
         with pytest.raises(ValueError, match="comma"):
-            list_todos(storage, tags=["a,b"])
+            list_todos(storage, tags=frozenset({"a,b"}))
 
 
 class TestParseSinceNegative:
@@ -327,8 +329,11 @@ class TestTagColumnCodec:
         from todo.adapters.tag_column import decode_tags, encode_tags
         from todo.domain.tag import Tag
 
-        tags = [Tag("work"), Tag("two words")]
-        assert decode_tags(encode_tags(tags)) == tags
+        tags = frozenset({Tag("work"), Tag("two words")})
+        assert frozenset(decode_tags(encode_tags(tags))) == tags
+        # Sorted on the way out, so the stored string is a function of the
+        # tags and not of iteration order.
+        assert encode_tags(tags) == "two words,work"
 
     def test_the_tui_field_splits_the_same_way(self) -> None:
         """Different layer, same convention: one box, commas between."""
@@ -347,11 +352,11 @@ class TestTagWritePathParity:
         result = cli.invoke(main, ["edit", "1", "-t", ""])
         assert result.exit_code == 1
         data = json.loads(cli.invoke(main, ["show", "1", "--json"]).output)
-        assert data["tags"] == ["work", "urgent"]  # nothing lost
+        assert data["tags"] == ["urgent", "work"]  # nothing lost (a set, sorted)
 
     def test_empty_tag_rejected_on_add(self, storage: SqliteStorage) -> None:
         with pytest.raises(ValueError, match="[Tt]ag"):
-            add_todo(storage, "x", tags=["ok", "  "])
+            add_todo(storage, "x", tags=frozenset({"ok", "  "}))
 
     def test_clearing_tags_still_possible_with_empty_list(
         self, storage: SqliteStorage
@@ -359,16 +364,16 @@ class TestTagWritePathParity:
         """An explicit empty list still clears — only blank strings error."""
         from todo.application.commands import edit_todo
 
-        add_todo(storage, "x", tags=["work"])
-        assert edit_todo(storage, 1, tags=[]).item.tags == []
+        add_todo(storage, "x", tags=frozenset({"work"}))
+        assert edit_todo(storage, 1, tags=frozenset()).item.tags == frozenset()
 
     def test_tag_with_newline_normalized_to_one_line(
         self, storage: SqliteStorage
     ) -> None:
         """Tags share the single_line contract of every other field, or
         plain output stops being one line per field."""
-        item = add_todo(storage, "x", tags=["urgent\nreview"])
-        assert item.tags == ["urgent review"]
+        item = add_todo(storage, "x", tags=frozenset({"urgent\nreview"}))
+        assert item.tags == frozenset({"urgent review"})
 
     def test_multiline_tag_keeps_plain_output_one_line(self, cli: CliRunner) -> None:
         cli.invoke(main, ["add", "x", "-t", "urgent\nreview"])
@@ -398,7 +403,7 @@ class TestTagClearSentinel:
     def test_none_is_a_reserved_tag_name(self, storage: SqliteStorage) -> None:
         """Reserved so a real tag can never be shadowed by the sentinel."""
         with pytest.raises(ValueError, match="reserved"):
-            add_todo(storage, "x", tags=["none"])
+            add_todo(storage, "x", tags=frozenset({"none"}))
 
     def test_omitting_tag_flag_still_leaves_tags_untouched(
         self, cli: CliRunner

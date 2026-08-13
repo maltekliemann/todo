@@ -41,14 +41,14 @@ class TestTransactionPrimitive:
 
 class _DepVanishesStorage(SqliteStorage):
     """Simulates a concurrent 'todo rm' of a dependent between the
-    completing UPDATE and the unblock-reporting reads."""
+    completing save and the unblock-reporting reads."""
 
     def __init__(self, *a: object, **k: object) -> None:
         super().__init__(*a, **k)  # type: ignore[arg-type]
         self.vanish_id: int | None = None
 
-    def update(self, item_id: int, **kwargs: object):  # type: ignore[override]
-        result = super().update(item_id, **kwargs)  # type: ignore[arg-type]
+    def save(self, item: object):  # type: ignore[override]
+        result = super().save(item)  # type: ignore[arg-type]
         if self.vanish_id is not None:
             victim, self.vanish_id = self.vanish_id, None
             super().delete(victim)

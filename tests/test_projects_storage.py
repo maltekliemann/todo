@@ -6,6 +6,7 @@ import pytest
 
 from todo.adapters.sqlite_storage import SqliteStorage
 from todo.application.commands import add_todo
+from todo.domain.item_id import ItemId
 from todo.domain.project_status import ProjectStatus
 from todo.exceptions import DuplicateProjectError, ProjectNotFoundError
 
@@ -65,6 +66,9 @@ class TestProjectCrud:
     def test_assign_and_clear_project_on_todo(self, storage: SqliteStorage) -> None:
         project = storage.add_project("p")
         add_todo(storage, "Task")
-        assigned = storage.update(1, project_id=project.id)
+        item = storage.get(ItemId(1))
+        item.file_under(project)
+        assigned = storage.save(item)
         assert assigned.project is not None and assigned.project.name == "p"
-        assert storage.update(1, project_id=None).project is None
+        item.unfile()
+        assert storage.save(item).project is None
