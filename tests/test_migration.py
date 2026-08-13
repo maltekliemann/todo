@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 
 from todo.adapters.sqlite_storage import SqliteStorage
+from todo.domain.tag import Tag
+from todo.domain.title import Title
 
 _LEGACY_SCHEMA = """\
 CREATE TABLE todos (
@@ -303,3 +305,45 @@ class TestV3MigrationCollisions:
         titles = [i.title for i in storage.list(include_done=True)]
         assert "part one part two" in titles  # no double spaces
         storage.close()
+
+
+class TestV5DuplicateTagRepair:
+    """v4 shipped one commit before the write path started deduping, so a
+    database already at v4 could take duplicate tags and never be
+    repaired. TodoItem now refuses to load such a row, which would lock
+    someone out of their own items."""
+
+    def test_a_v4_database_with_duplicate_tags_is_repaired(
+        self, tmp_path: Path
+    ) -> None:
+        db = tmp_path / "legacy.db"
+        storage = SqliteStorage(db)
+        storage.close()
+
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "INSERT INTO todos (title, created_at, updated_at, tags) "
+            "VALUES ('task', '2026-01-01T00:00:00', '2026-01-01T00:00:00', "
+            "'a, a ,,b')"
+        )
+        conn.execute("PRAGMA user_version = 4")
+        conn.commit()
+        conn.close()
+
+        reopened = SqliteStorage(db)
+        try:
+            assert reopened.get(1).tags == ["a", "b"]
+        finally:
+            reopened.close()
+
+    def test_repairing_twice_changes_nothing(self, tmp_path: Path) -> None:
+        db = tmp_path / "clean.db"
+        storage = SqliteStorage(db)
+        storage.add(Title("task"), tags=[Tag("a"), Tag("b")])
+        storage.close()
+
+        reopened = SqliteStorage(db)
+        try:
+            assert reopened.get(1).tags == ["a", "b"]
+        finally:
+            reopened.close()

@@ -8,11 +8,12 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from todo.adapters.sqlite_migrations import MIGRATIONS, SCHEMA
+from todo.adapters.tag_column import decode_tags, encode_tags
 from todo.application.contracts.storage import (
     UNSET,
     EdgeList,
+    ItemTagLists,
     ProjectList,
-    TagStringList,
     Unset,
     UpdateList,
 )
@@ -24,7 +25,7 @@ from todo.domain.project_name import ProjectName
 from todo.domain.project_status import ProjectStatus
 from todo.domain.project_update import ProjectUpdate
 from todo.domain.status import Status
-from todo.domain.tag import Tag, split_tags
+from todo.domain.tag import Tag
 from todo.domain.title import Title
 from todo.domain.todo_item import TodoItem
 from todo.domain.update_body import UpdateBody
@@ -54,7 +55,7 @@ def _row_to_item(
     tags_raw: str = row["tags"]
     # Constructing the value objects is the read-side check that what was
     # stored is still something the domain calls valid.
-    tags = [Tag(t) for t in split_tags(tags_raw)] if tags_raw else []
+    tags = decode_tags(tags_raw) if tags_raw else []
     done_at_raw: str | None = row["done_at"]
     deadline_raw: str | None = row["deadline"]
     return TodoItem(
@@ -240,7 +241,7 @@ class SqliteStorage:
     ) -> TodoItem:
         now = _now().isoformat()
         done_at = now if status == Status.DONE else None
-        tags_str = ",".join(tags) if tags else ""
+        tags_str = encode_tags(tags) if tags else ""
         deadline_str = deadline.isoformat() if deadline else None
         try:
             cur = self._conn.execute(
@@ -350,7 +351,7 @@ class SqliteStorage:
             params.append(deadline.isoformat() if deadline else None)
         if tags is not None:
             sets.append("tags = ?")
-            params.append(",".join(tags))
+            params.append(encode_tags(tags))
         if not isinstance(project_id, Unset):
             sets.append("project_id = ?")
             params.append(project_id)
@@ -613,11 +614,15 @@ class SqliteStorage:
             ).fetchall()
         return [(r["blocker_id"], r["blocked_id"]) for r in rows]
 
-    def tag_strings(self) -> TagStringList:
-        """Raw tags column for every todo — one column scan for counting."""
+    def item_tags(self) -> ItemTagLists:
+        """Every todo's tags — one column scan for counting.
+
+        Decoded here: the comma-joined column is this adapter's encoding,
+        and handing it out raw made every caller a parser of it.
+        """
         with self._read_guard("read tags"):
             rows = self._conn.execute("SELECT tags FROM todos").fetchall()
-        return [r["tags"] for r in rows]
+        return [decode_tags(r["tags"]) for r in rows]
 
     def project_counts(self) -> dict[int, tuple[int, int]]:
         """project_id -> (open, done) item counts, computed in SQL."""

@@ -34,7 +34,7 @@ _READ_CALLS: dict[str, Callable[[SqliteStorage, int, int], object]] = {
     "list_projects": lambda s, i, p: s.list_projects(),
     "project_counts": lambda s, i, p: s.project_counts(),
     "dependency_edges": lambda s, i, p: s.dependency_edges(),
-    "tag_strings": lambda s, i, p: s.tag_strings(),
+    "item_tags": lambda s, i, p: s.item_tags(),
     "list_project_updates": lambda s, i, p: s.list_project_updates(p),
 }
 

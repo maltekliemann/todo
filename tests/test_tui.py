@@ -1916,7 +1916,7 @@ class TestStorageFailureDoesNotCrashTui:
         app = TodoApp(storage=seeded_storage)
         async with app.run_test() as pilot:
             await pilot.pause()
-            monkeypatch.setattr(SqliteStorage, "tag_strings", self._boom)
+            monkeypatch.setattr(SqliteStorage, "item_tags", self._boom)
             await pilot.press("t")
             await pilot.pause()
             assert app.is_running

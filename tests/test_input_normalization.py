@@ -313,15 +313,29 @@ class TestMatchingSemantics:
         assert "unrelated" not in result.output
 
 
-class TestSharedNormalizationHelpers:
-    """Tag splitting has one implementation; the hand-copies had diverged.
-    Single-line collapse belongs to the types that require it."""
+class TestTagColumnCodec:
+    """The comma-joined column is the adapter's encoding, and the codec
+    that reads it lives with the schema that chose it."""
 
-    def test_shared_tag_splitting(self) -> None:
-        from todo.domain.tag import split_tags
+    def test_decode_drops_blank_segments_and_normalizes(self) -> None:
+        from todo.adapters.tag_column import decode_tags
 
-        assert split_tags(" a , ,b, a ") == ["a", "b", "a"]
-        assert split_tags("") == []
+        assert decode_tags(" a , ,b, a ") == ["a", "b", "a"]
+        assert decode_tags("") == []
+
+    def test_encode_decode_round_trips(self) -> None:
+        from todo.adapters.tag_column import decode_tags, encode_tags
+        from todo.domain.tag import Tag
+
+        tags = [Tag("work"), Tag("two words")]
+        assert decode_tags(encode_tags(tags)) == tags
+
+    def test_the_tui_field_splits_the_same_way(self) -> None:
+        """Different layer, same convention: one box, commas between."""
+        from todo.tui.tag_input import parse_tag_input
+
+        assert parse_tag_input(" a , ,b ") == ["a", "b"]
+        assert parse_tag_input("") == []
 
 
 class TestTagWritePathParity:

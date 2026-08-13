@@ -10,8 +10,9 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Callable
 
+from todo.adapters.tag_column import decode_tags, encode_tags
 from todo.domain.project_name import ProjectName
-from todo.domain.tag import Tag, dedupe_tags, split_tags
+from todo.domain.tag import Tag
 from todo.domain.title import Title
 
 SCHEMA = """\
@@ -88,7 +89,13 @@ def normalize_tag_string(raw: str) -> str:
     migration that stops at strip() leaves legacy rows that can never be
     matched by the same string a new row is created with.
     """
-    return ",".join(dedupe_tags(Tag(t) for t in split_tags(raw)))
+    unique: list[Tag] = []
+    for tag in decode_tags(raw):
+        # Legacy rows predate the no-repeats rule TodoItem now enforces;
+        # repairing them here is what lets those rows load at all.
+        if tag not in unique:
+            unique.append(tag)
+    return encode_tags(unique)
 
 
 def migration_v4_normalize_tags(conn: sqlite3.Connection) -> None:
@@ -134,5 +141,11 @@ CREATE TABLE project_updates (
 );
 """,
     migration_v3_normalize,
+    migration_v4_normalize_tags,
+    # v5: re-run v4. The tag-normalizing migration shipped one commit
+    # before the write path started deduping, so a database already at v4
+    # could take duplicate tags afterwards and never be repaired — and
+    # TodoItem now refuses to load a row with them. Idempotent for
+    # everyone else.
     migration_v4_normalize_tags,
 ]

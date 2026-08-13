@@ -33,6 +33,7 @@ ProjectList = list[Project]
 UpdateList = list[ProjectUpdate]
 EdgeList = list[tuple[int, int]]
 TagStringList = list[str]
+ItemTagLists = list[list[Tag]]
 
 
 @runtime_checkable
@@ -103,7 +104,7 @@ class StorageProtocol(Protocol):
 
     def dependency_edges(self) -> EdgeList: ...
 
-    def tag_strings(self) -> TagStringList: ...
+    def item_tags(self) -> ItemTagLists: ...
 
     def update_project(
         self,

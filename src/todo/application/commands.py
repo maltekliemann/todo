@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 
@@ -20,7 +21,7 @@ from todo.domain.update_body import UpdateBody
 from todo.exceptions import DependencyError, NotFoundError
 
 
-def _to_tags(tags: list[str] | None) -> list[Tag] | None:
+def _to_tags(tags: Sequence[str] | None) -> list[Tag] | None:
     """Raw strings become Tags; None means "leave them alone".
 
     Passing an empty list still clears them, which is explicit. Tag itself
@@ -60,7 +61,7 @@ def add_todo(
     priority: Priority = Priority.MEDIUM,
     status: Status = Status.TODO,
     deadline: date | None = None,
-    tags: list[str] | None = None,
+    tags: Sequence[str] | None = None,
     project_id: int | None = None,
 ) -> TodoItem:
     return storage.add(
@@ -83,7 +84,7 @@ def edit_todo(
     priority: Priority | None = None,
     status: Status | None = None,
     deadline: date | None | Unset = Unset.UNSET,
-    tags: list[str] | None = None,
+    tags: Sequence[str] | None = None,
     project_id: int | None | Unset = Unset.UNSET,
 ) -> CompletionResult:
     return _tracked_update(
@@ -116,7 +117,7 @@ def _tracked_update(
     body: str | None = None,
     priority: Priority | None = None,
     deadline: date | None | Unset = Unset.UNSET,
-    tags: list[str] | None = None,
+    tags: Sequence[str] | None = None,
     project_id: int | None | Unset = Unset.UNSET,
 ) -> CompletionResult:
     """Apply an update; when it completes the item, report newly unblocked

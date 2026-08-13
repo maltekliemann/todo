@@ -28,13 +28,13 @@ from todo.application.contracts.storage import StorageProtocol
 from todo.application.queries import list_all_projects, show_todo
 from todo.domain.priority import Priority
 from todo.domain.status import Status
-from todo.domain.tag import split_tags
 from todo.domain.todo_item import TodoItem
 from todo.exceptions import NotFoundError, TodoError
 from todo.tui.blockers import BlockDialog, Relation
 from todo.tui.edit_session import EditorSession
 from todo.tui.prompts import ChoicePrompt, TextPrompt
 from todo.tui.render import unblocked_notices
+from todo.tui.tag_input import parse_tag_input
 
 # Shown where a field has no value. An empty cell reads as a rendering
 # bug; this reads as "nothing set yet".
@@ -281,7 +281,7 @@ class ItemScreen(ModalScreen[bool]):
     def _save_tags(self, value: str | None) -> None:
         if value is None:
             return
-        tags = split_tags(value)
+        tags = parse_tag_input(value)
         self._apply(lambda: edit_todo(self._storage, self._item.id, tags=tags))
 
     def _edit_project(self) -> None:

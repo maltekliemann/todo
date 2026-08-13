@@ -10,7 +10,7 @@ from todo.domain.project import Project
 from todo.domain.project_name import ProjectName
 from todo.domain.project_update import ProjectUpdate
 from todo.domain.status import Status
-from todo.domain.tag import Tag, split_tags
+from todo.domain.tag import Tag
 from todo.domain.todo_item import TodoItem
 from todo.exceptions import ProjectNotFoundError
 
@@ -161,8 +161,8 @@ def show_project(
 def count_tags(storage: StorageProtocol) -> list[tuple[str, int]]:
     """All tags with usage counts (done items included), most used first."""
     counts: dict[str, int] = {}
-    for raw in storage.tag_strings():
-        for tag in split_tags(raw):
+    for tags in storage.item_tags():
+        for tag in tags:
             counts[tag] = counts.get(tag, 0) + 1
     return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
 

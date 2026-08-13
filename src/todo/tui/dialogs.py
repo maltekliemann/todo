@@ -16,9 +16,9 @@ from textual.widgets import Input, Label, Select
 from todo.application.commands import add_todo
 from todo.application.contracts.storage import StorageProtocol
 from todo.domain.priority import Priority
-from todo.domain.tag import split_tags
 from todo.domain.todo_item import TodoItem
 from todo.exceptions import TodoError
+from todo.tui.tag_input import parse_tag_input
 
 
 class ConfirmDialog(ModalScreen[bool]):
@@ -242,7 +242,7 @@ class NewItemDialog(ModalScreen[TodoItem | None]):
         deadline_str = self.query_one("#new-deadline", Input).value.strip()
         deadline = date.fromisoformat(deadline_str) if deadline_str else None
         tags_str = self.query_one("#new-tags", Input).value.strip()
-        tags = split_tags(tags_str) if tags_str else None
+        tags = parse_tag_input(tags_str) if tags_str else None
 
         try:
             item = add_todo(

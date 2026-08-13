@@ -38,6 +38,17 @@ class TodoItem:
     project_id: int | None = None
     project_name: str | None = None
 
+    def __post_init__(self) -> None:
+        # The rule ranges over one item's tags, and the item has them, so
+        # this is where it belongs. Whatever builds a TodoItem dedupes on
+        # the way in — the same contract as Title: normalized, or not
+        # built at all.
+        seen: set[str] = set()
+        for tag in self.tags:
+            if tag in seen:
+                raise ValueError(f"Tag '{tag}' is repeated.")
+            seen.add(tag)
+
     @property
     def is_done(self) -> bool:
         return self.status == Status.DONE
