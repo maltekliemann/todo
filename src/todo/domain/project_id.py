@@ -8,11 +8,6 @@ class ProjectId(int):
 
     __slots__ = ()
 
-    def __new__(cls, value: int) -> ProjectId:
-        if value < 1:
-            raise ValueError(f"Project id must be positive, not {value}.")
-        return super().__new__(cls, value)
-
     @property
     def label(self) -> str:
         return f"#{int(self)}"

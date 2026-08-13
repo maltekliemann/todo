@@ -19,11 +19,6 @@ class ItemId(int):
 
     __slots__ = ()
 
-    def __new__(cls, value: int) -> ItemId:
-        if value < 1:
-            raise ValueError(f"Item id must be positive, not {value}.")
-        return super().__new__(cls, value)
-
     @property
     def label(self) -> str:
         """How the item is named on screen and on the command line."""
