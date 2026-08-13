@@ -10,7 +10,7 @@ Enter collapse into that one screen — the read-only view goes away.
 ## done
 
 1. **`ItemScreen`** — the menu. Rows: Title, Priority, Status, Deadline,
-   Tags, Project, Blocked by, Blocking (read-only), Body. ↑↓ moves,
+   Tags, Project, Blocked by, Blocking, Body. ↑↓ moves,
    Enter edits the highlighted row, Esc closes. Errors report inline and
    never close the screen; a body preview fills whatever height is left.
 2. **The editing affordances** — a text prompt (title, deadline, tags),
@@ -21,7 +21,10 @@ Enter collapse into that one screen — the read-only view goes away.
    `parse_editor_text` and the field parser go with it.
 4. **One key opens an item** — `i`, `e` and Enter all reach `ItemScreen`;
    `InspectDialog` is deleted. The footer loses an entry.
-5. **Project becomes editable** — it was context-only in the buffer and
+5. **Both ends of a dependency are editable** — `Blocking` opens the same
+   picker as `Blocked by`, asking "What waits on #1?" instead of "What
+   does #1 wait on?" and writing the edge the other way round.
+6. **Project becomes editable** — it was context-only in the buffer and
    unreachable from the TUI; the menu picks from the existing projects
    (or none).
 
@@ -52,9 +55,13 @@ to say.
 - **An item deleted while its screen is open** reports "not found" inline
   and stays; Esc closes it. Vanishing mid-keystroke was the alternative,
   and it explains less.
-- **`Blocking` is a read-only row.** Dependents are set from their own
-  side of the relation, so Enter there says where to go rather than
-  opening a picker that cannot help.
+- **Editing an item can now change what another item shows**, which is
+  worth naming but is not new: a dependency is a row in
+  `todo_dependencies`, owned by neither item. `add_blocker` writes that
+  edge and touches neither item's own row, so `b` on #1 has always
+  changed what #2's Deps column says. Editing from the `Blocking` end
+  writes the same edge with the ids swapped — same command, same cycle
+  check, no new invariant.
 
 ---
 

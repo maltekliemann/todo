@@ -1,6 +1,14 @@
-"""The blocker picker: a menu of candidates you can search from."""
+"""The dependency picker: a menu of candidates you can search from.
+
+One dialog for both ends of the relation. A dependency is an edge between
+two items, owned by neither: "#3 blocks #1" and "#1 waits on #3" are the
+same row in the same table, so the only thing that changes between the two
+directions is which way round the edge is written.
+"""
 
 from __future__ import annotations
+
+from enum import Enum
 
 from rich.text import Text
 from textual import events, on
@@ -29,13 +37,20 @@ def _matches_item(item: TodoItem, query: str) -> bool:
     return query in item.title.casefold() or _is_exact_id(item, query)
 
 
-class BlockDialog(ModalScreen[bool]):
-    """Pick what an item waits on, from a searchable list.
+class Relation(Enum):
+    """Which end of the edge the dialog is editing."""
 
-    Every other item is a candidate; the ones already blocking this item
-    are marked and sorted first, and choosing one toggles the relation.
-    Typing narrows by title or id — nobody should have to remember the
-    number of the thing that blocks them.
+    WAITS_ON = "waits on"
+    BLOCKS = "blocks"
+
+
+class BlockDialog(ModalScreen[bool]):
+    """Pick what an item waits on — or what waits on it — from a list.
+
+    Every other item is a candidate; the ones already on the chosen end of
+    the relation are marked and sorted first, and choosing one toggles the
+    edge. Typing narrows by title or id — nobody should have to remember
+    the number of the thing that blocks them.
 
     It is a menu you can search from: the list holds focus from the moment
     it opens, with a row under the cursor. Up/down walk it, Enter chooses
@@ -50,17 +65,28 @@ class BlockDialog(ModalScreen[bool]):
 
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
-    def __init__(self, storage: StorageProtocol, blocked_id: int) -> None:
+    def __init__(
+        self,
+        storage: StorageProtocol,
+        item_id: int,
+        relation: Relation = Relation.WAITS_ON,
+    ) -> None:
         super().__init__()
         self._storage = storage
-        self._blocked_id = blocked_id
+        self._item_id = item_id
+        self._relation = relation
         self._candidates: list[TodoItem] = []
-        self._blocker_ids: set[int] = set()
+        self._related_ids: set[int] = set()
         self._shown_ids: list[int] = []
 
     def compose(self) -> ComposeResult:
         with Vertical(id="block-container"):
-            yield Label(f"What does #{self._blocked_id} wait on?", id="block-title")
+            question = (
+                f"What does #{self._item_id} wait on?"
+                if self._relation is Relation.WAITS_ON
+                else f"What waits on #{self._item_id}?"
+            )
+            yield Label(question, id="block-title")
             search = Input(id="block-search", placeholder="Type to filter")
             # A readout of the filter, not a destination: focus belongs to
             # the menu, and Tab or a stray click must not move it here.
@@ -104,16 +130,20 @@ class BlockDialog(ModalScreen[bool]):
         """Read the candidates, degrading a storage failure to the inline
         error — an unreadable database must not close the dialog."""
         try:
-            item = show_todo(self._storage, self._blocked_id)
-            self._blocker_ids = set(item.blocked_by)
+            item = show_todo(self._storage, self._item_id)
+            self._related_ids = set(
+                item.blocked_by
+                if self._relation is Relation.WAITS_ON
+                else item.blocking
+            )
             self._candidates = [
                 i
                 for i in list_todos(self._storage, include_done=True)
-                if i.id != self._blocked_id
+                if i.id != self._item_id
             ]
         except TodoError as exc:
             self._candidates = []
-            self._blocker_ids = set()
+            self._related_ids = set()
             self._show_error(exc)
         self._populate()
 
@@ -126,7 +156,7 @@ class BlockDialog(ModalScreen[bool]):
                 # id prompt this replaced did. Then current blockers,
                 # which are what you came to remove.
                 not _is_exact_id(i, query),
-                i.id not in self._blocker_ids,
+                i.id not in self._related_ids,
             )
         )
 
@@ -134,7 +164,7 @@ class BlockDialog(ModalScreen[bool]):
         options.clear_options()
         self._shown_ids = [i.id for i in matches]
         for i in matches:
-            mark = "✓" if i.id in self._blocker_ids else " "
+            mark = "✓" if i.id in self._related_ids else " "
             # Text, never markup: titles are user-controlled.
             options.add_option(Option(Text(f"{mark} #{i.id}  {i.title}")))
         # A stale rejection under a fresh candidate reads as "this one is
@@ -146,7 +176,7 @@ class BlockDialog(ModalScreen[bool]):
     def _show_error(self, exc: Exception) -> None:
         # Error text can echo raw user input; never render it as markup.
         self.query_one("#block-error", Label).update(
-            Text(str(exc) or "Could not change the blocker")
+            Text(str(exc) or "Could not change the dependency")
         )
 
     def _clear_error(self) -> None:
@@ -171,15 +201,21 @@ class BlockDialog(ModalScreen[bool]):
     def _choose(self, index: int | None) -> None:
         if index is None or not (0 <= index < len(self._shown_ids)):
             return
-        blocker_id = self._shown_ids[index]
-        self._toggle(blocker_id, removing=blocker_id in self._blocker_ids)
+        other_id = self._shown_ids[index]
+        self._toggle(other_id, removing=other_id in self._related_ids)
 
-    def _toggle(self, blocker_id: int, *, removing: bool) -> None:
+    def _toggle(self, other_id: int, *, removing: bool) -> None:
+        # The edge always reads (blocked, blocker); which of the two ids is
+        # which is the only thing the direction decides.
+        if self._relation is Relation.WAITS_ON:
+            blocked_id, blocker_id = self._item_id, other_id
+        else:
+            blocked_id, blocker_id = other_id, self._item_id
         try:
             if removing:
-                unblock_todo(self._storage, self._blocked_id, blocker_id)
+                unblock_todo(self._storage, blocked_id, blocker_id)
             else:
-                block_todo(self._storage, self._blocked_id, blocker_id)
+                block_todo(self._storage, blocked_id, blocker_id)
         except TodoError as exc:
             # Cycles, unknown ids, AND storage-level failures (e.g. a locked
             # database): report inline, never crash, never close.

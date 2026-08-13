@@ -30,7 +30,7 @@ from todo.domain.enums import Priority, Status
 from todo.domain.models import TodoItem
 from todo.domain.tags import split_tags
 from todo.exceptions import NotFoundError, TodoError
-from todo.tui.blockers import BlockDialog
+from todo.tui.blockers import BlockDialog, Relation
 from todo.tui.edit_session import EditorSession
 from todo.tui.prompts import ChoicePrompt, TextPrompt
 from todo.tui.render import unblocked_notices
@@ -53,10 +53,6 @@ FIELDS: tuple[tuple[str, str], ...] = (
 )
 
 _LABEL_WIDTH = max(len(label) for _, label in FIELDS) + 2
-
-# Blocking is the only row that is not edited here: an item's dependents
-# are set from their side of the relation.
-_READ_ONLY = frozenset({"blocking"})
 
 
 def body_summary(body: str) -> str:
@@ -87,11 +83,11 @@ def field_value(item: TodoItem, key: str) -> str:
     return body_summary(item.body)
 
 
-def _row(label: str, value: str, *, read_only: bool) -> Text:
+def _row(label: str, value: str) -> Text:
     # Text, never markup: titles, tags and project names are user text.
     row = Text()
     row.append(label.ljust(_LABEL_WIDTH), style="dim")
-    row.append(value, style="dim" if read_only else "")
+    row.append(value)
     return row
 
 
@@ -146,9 +142,7 @@ class ItemScreen(ModalScreen[bool]):
         highlighted = options.highlighted
         options.clear_options()
         for key, label in FIELDS:
-            options.add_option(
-                Option(_row(label, field_value(item, key), read_only=key in _READ_ONLY))
-            )
+            options.add_option(Option(_row(label, field_value(item, key))))
         options.highlighted = 0 if highlighted is None else highlighted
 
         self.query_one("#item-body", Static).update(
@@ -245,11 +239,9 @@ class ItemScreen(ModalScreen[bool]):
         elif key == "project":
             self._edit_project()
         elif key == "blocked_by":
-            self._edit_blockers()
+            self._edit_dependencies(Relation.WAITS_ON)
         elif key == "blocking":
-            self.notify(
-                "Blocking is set from the other item: open it and edit its blockers."
-            )
+            self._edit_dependencies(Relation.BLOCKS)
         elif key == "body":
             self._edit_body()
 
@@ -311,13 +303,20 @@ class ItemScreen(ModalScreen[bool]):
             lambda: edit_todo(self._storage, self._item.id, project_id=project_id)
         )
 
-    def _edit_blockers(self) -> None:
+    def _edit_dependencies(self, relation: Relation) -> None:
+        """Edit either end of the relation.
+
+        The other direction writes the same edge with the ids the other way
+        round — a dependency belongs to neither item, so there is nothing
+        special about editing it from this side.
+        """
+
         def after(changed: bool | None) -> None:
             if changed:
                 self._changed = True
                 self._reload()
 
-        self.app.push_screen(BlockDialog(self._storage, self._item.id), after)
+        self.app.push_screen(BlockDialog(self._storage, self._item.id, relation), after)
 
     def _edit_body(self) -> None:
         result = EditorSession(self, self._storage).run(self._item)

@@ -2529,26 +2529,97 @@ class TestItemMenu:
             assert storage.get(1).blocked_by == []
             assert "Blocked by  —" in "\n".join(self._rows(app.screen))
 
-    async def test_blocking_is_read_only(self, db_path: Path) -> None:
-        """Dependents are set from their own side; the row says so instead
-        of opening something that cannot help."""
-        from todo.tui.item_screen import ItemScreen
+    async def test_a_dependent_is_added_from_the_blocking_row(
+        self, db_path: Path
+    ) -> None:
+        """Both ends of the relation are editable: a dependency belongs to
+        neither item, so it can be written from either side."""
+        from todo.tui.blockers import BlockDialog
 
         storage = SqliteStorage(db_path)
         add_todo(storage, "Main")
-        add_todo(storage, "Dependent")
+        add_todo(storage, "Later")
+
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await self._open(pilot)  # #1
+            await self._row(pilot, "blocking")
+            assert isinstance(app.screen, BlockDialog)
+            await pilot.press("enter")  # the only candidate, #2
+            await pilot.pause()
+
+            assert storage.get(2).blocked_by == [1]
+            assert storage.get(1).blocking == [2]
+            assert "Blocking    #2" in "\n".join(self._rows(app.screen))
+
+    async def test_a_dependent_is_removed_from_the_blocking_row(
+        self, db_path: Path
+    ) -> None:
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Main")
+        add_todo(storage, "Waiting")
         block_todo(storage, 2, 1)
 
         app = TodoApp(storage=storage)
         async with app.run_test() as pilot:
             await pilot.pause()
-            screen = await self._open(pilot)
-            notices: list[str] = []
-            screen.notify = lambda msg, **kw: notices.append(str(msg))  # type: ignore[method-assign]
+            await self._open(pilot)  # #1
             await self._row(pilot, "blocking")
+            options = app.screen.query_one("#block-options", OptionList)
+            # The existing dependent is marked and sorted first.
+            assert str(options.get_option_at_index(0).prompt).startswith("✓ #2")
+            await pilot.press("enter")
+            await pilot.pause()
 
-            assert isinstance(app.screen, ItemScreen)  # nothing opened
-            assert notices and "other item" in notices[0]
+            assert storage.get(2).blocked_by == []
+            assert "Blocking    —" in "\n".join(self._rows(app.screen))
+
+    async def test_the_two_directions_ask_different_questions(
+        self, db_path: Path
+    ) -> None:
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Main")
+        add_todo(storage, "Other")
+
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await self._open(pilot)
+            await self._row(pilot, "blocked_by")
+            waits_on = str(app.screen.query_one("#block-title", Label).render())
+            await pilot.press("escape")
+            await pilot.pause()
+            await self._row(pilot, "blocking")
+            blocks = str(app.screen.query_one("#block-title", Label).render())
+
+            assert waits_on == "What does #1 wait on?"
+            assert blocks == "What waits on #1?"
+
+    async def test_a_cycle_from_the_blocking_side_is_refused_inline(
+        self, db_path: Path
+    ) -> None:
+        """The cycle check does not care which end you entered from."""
+        from todo.tui.blockers import BlockDialog
+
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Main")
+        add_todo(storage, "Blocker")
+        block_todo(storage, 1, 2)  # #1 waits on #2
+
+        app = TodoApp(storage=storage)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await self._open(pilot)  # #1
+            await self._row(pilot, "blocking")
+            # Making #2 wait on #1 as well would close the loop.
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert isinstance(app.screen, BlockDialog)  # still open
+            error = str(app.screen.query_one("#block-error", Label).render())
+            assert "cycle" in error
+            assert storage.get(2).blocked_by == []
 
     async def test_the_body_row_hands_off_to_the_editor(self, db_path: Path) -> None:
         from todo.tui import item_screen as item_screen_module
