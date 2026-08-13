@@ -987,7 +987,7 @@ class TestBlockStorage:
         block_todo(storage, b.id, a.id)
 
         blocker = storage.get(a.id)
-        blocker.move_to(Status.DONE)
+        blocker.set_status(Status.DONE)
         storage.save(blocker)
 
         deps = Dependencies.load(storage)

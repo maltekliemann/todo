@@ -165,7 +165,7 @@ def _tracked_update(
                 storage.get_project(project_id) if project_id is not None else None
             )
         if status is not None:
-            item.move_to(status)
+            item.set_status(status)
 
         saved = storage.save(item)
         unblocked: list[TodoItem] = []
