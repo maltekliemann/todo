@@ -314,19 +314,14 @@ class TestMatchingSemantics:
 
 
 class TestSharedNormalizationHelpers:
-    """One implementation each for tag splitting and single-line collapse
-    — the five hand-copies had already diverged."""
+    """Tag splitting has one implementation; the hand-copies had diverged.
+    Single-line collapse belongs to the types that require it."""
 
     def test_shared_tag_splitting(self) -> None:
         from todo.domain.tag import split_tags
 
         assert split_tags(" a , ,b, a ") == ["a", "b", "a"]
         assert split_tags("") == []
-
-    def test_shared_single_line(self) -> None:
-        from todo.domain.text import single_line
-
-        assert single_line(" a\n\n b\tc ") == "a b c"
 
 
 class TestTagWritePathParity:

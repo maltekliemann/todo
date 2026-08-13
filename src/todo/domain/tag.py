@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from todo.domain.text import single_line
-
 
 class Tag(str):
     """A single-line, non-empty, comma-free label.
@@ -19,7 +17,7 @@ class Tag(str):
     __slots__ = ()
 
     def __new__(cls, value: str) -> Tag:
-        normalized = single_line(value)
+        normalized = " ".join(value.split())
         if not normalized:
             raise ValueError("Tag cannot be empty.")
         if "," in normalized:

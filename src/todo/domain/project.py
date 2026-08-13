@@ -5,14 +5,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
+from todo.domain.description import Description
+from todo.domain.project_name import ProjectName
 from todo.domain.project_status import ProjectStatus
 
 
 @dataclass(frozen=True)
 class Project:
     id: int
-    name: str
-    description: str
+    name: ProjectName
+    description: Description
     status: ProjectStatus
     created_at: datetime
     updated_at: datetime

@@ -6,14 +6,17 @@ from enum import Enum, auto
 from typing import Protocol, runtime_checkable
 
 from todo.domain.deadline import Deadline
+from todo.domain.description import Description
 from todo.domain.priority import Priority
 from todo.domain.project import Project
+from todo.domain.project_name import ProjectName
 from todo.domain.project_status import ProjectStatus
 from todo.domain.project_update import ProjectUpdate
 from todo.domain.status import Status
 from todo.domain.tag import Tag
 from todo.domain.title import Title
 from todo.domain.todo_item import TodoItem
+from todo.domain.update_body import UpdateBody
 
 
 class Unset(Enum):
@@ -86,7 +89,9 @@ class StorageProtocol(Protocol):
         include_done: bool = False,
     ) -> list[TodoItem]: ...
 
-    def add_project(self, name: str, *, description: str = "") -> Project: ...
+    def add_project(
+        self, name: ProjectName, *, description: Description | str = ""
+    ) -> Project: ...
 
     def get_project(self, project_id: int) -> Project: ...
 
@@ -111,6 +116,8 @@ class StorageProtocol(Protocol):
 
     def delete_project(self, project_id: int) -> None: ...
 
-    def add_project_update(self, project_id: int, body: str) -> ProjectUpdate: ...
+    def add_project_update(
+        self, project_id: int, body: UpdateBody
+    ) -> ProjectUpdate: ...
 
     def list_project_updates(self, project_id: int) -> UpdateList: ...

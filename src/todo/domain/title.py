@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from todo.domain.text import single_line
-
 
 class Title(str):
     """A single-line, non-empty title.
@@ -21,7 +19,7 @@ class Title(str):
     __slots__ = ()
 
     def __new__(cls, value: str) -> Title:
-        normalized = single_line(value)
+        normalized = " ".join(value.split())
         if not normalized:
             raise ValueError("Title cannot be empty.")
         return super().__new__(cls, normalized)

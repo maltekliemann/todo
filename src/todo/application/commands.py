@@ -6,15 +6,17 @@ from datetime import date
 from todo.application.contracts.storage import StorageProtocol, Unset
 from todo.domain.deadline import Deadline
 from todo.domain.dependency_graph import DependencyGraph
+from todo.domain.description import Description
 from todo.domain.priority import Priority
 from todo.domain.project import Project
+from todo.domain.project_name import ProjectName
 from todo.domain.project_status import ProjectStatus
 from todo.domain.project_update import ProjectUpdate
 from todo.domain.status import Status
 from todo.domain.tag import Tag
-from todo.domain.text import single_line
 from todo.domain.title import Title
 from todo.domain.todo_item import TodoItem
+from todo.domain.update_body import UpdateBody
 from todo.exceptions import DependencyError, NotFoundError
 
 
@@ -272,22 +274,14 @@ def unblock_todo_batch(
         return storage.get(blocked_id)
 
 
-def _normalize_project_name(name: str) -> str:
-    # Same single-line contract as titles (plain output is one row per
-    # project), plus: "none" is the CLI's clear-sentinel for --project; a
-    # project by that name would be unreachable from edit.
-    normalized = single_line(name)
-    if not normalized:
-        raise ValueError("Project name cannot be empty.")
-    if normalized.lower() == "none":
+def _to_project_name(name: str) -> ProjectName:
+    # ProjectName carries the single-line contract. "none" is the CLI's
+    # clear-sentinel for --project, so a project by that name would be
+    # unreachable from edit — a fact about the flag, not about the name.
+    project_name = ProjectName(name)
+    if project_name.lower() == "none":
         raise ValueError("'none' is a reserved project name.")
-    return normalized
-
-
-def _normalize_description(description: str) -> str:
-    # Descriptions render inside the one-row-per-project list output, so
-    # they share the single-line contract; empty stays allowed.
-    return single_line(description)
+    return project_name
 
 
 def add_project(
@@ -297,8 +291,8 @@ def add_project(
     description: str = "",
 ) -> Project:
     return storage.add_project(
-        _normalize_project_name(name),
-        description=_normalize_description(description),
+        _to_project_name(name),
+        description=Description(description),
     )
 
 
@@ -309,13 +303,11 @@ def edit_project(
     name: str | None = None,
     description: str | None = None,
 ) -> Project:
-    normalized = _normalize_project_name(name) if name is not None else None
+    normalized = _to_project_name(name) if name is not None else None
     return storage.update_project(
         project_id,
         name=normalized,
-        description=(
-            _normalize_description(description) if description is not None else None
-        ),
+        description=(Description(description) if description is not None else None),
     )
 
 
@@ -338,9 +330,4 @@ def log_project_update(
     project_id: int,
     body: str,
 ) -> ProjectUpdate:
-    # Log entries render as one timestamped row; an empty body would leave
-    # a dangling timestamp with no way to delete the entry.
-    normalized = single_line(body)
-    if not normalized:
-        raise ValueError("Update body cannot be empty.")
-    return storage.add_project_update(project_id, normalized)
+    return storage.add_project_update(project_id, UpdateBody(body))

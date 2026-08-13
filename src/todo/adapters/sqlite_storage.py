@@ -17,14 +17,17 @@ from todo.application.contracts.storage import (
     UpdateList,
 )
 from todo.domain.deadline import Deadline
+from todo.domain.description import Description
 from todo.domain.priority import Priority
 from todo.domain.project import Project
+from todo.domain.project_name import ProjectName
 from todo.domain.project_status import ProjectStatus
 from todo.domain.project_update import ProjectUpdate
 from todo.domain.status import Status
 from todo.domain.tag import Tag, split_tags
 from todo.domain.title import Title
 from todo.domain.todo_item import TodoItem
+from todo.domain.update_body import UpdateBody
 from todo.exceptions import (
     DuplicateProjectError,
     NotFoundError,
@@ -76,8 +79,8 @@ def _row_to_item(
 def _row_to_project(row: sqlite3.Row) -> Project:
     return Project(
         id=row["id"],
-        name=row["name"],
-        description=row["description"],
+        name=ProjectName(row["name"]),
+        description=Description(row["description"]),
         status=ProjectStatus(row["status"]),
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
@@ -552,7 +555,9 @@ class SqliteStorage:
             rows = self._conn.execute(query, params).fetchall()
             return self._hydrate_dependencies(rows)
 
-    def add_project(self, name: str, *, description: str = "") -> Project:
+    def add_project(
+        self, name: ProjectName, *, description: Description | str = ""
+    ) -> Project:
         now = _now().isoformat()
         try:
             cur = self._conn.execute(
@@ -682,7 +687,7 @@ class SqliteStorage:
         except (sqlite3.Error, OverflowError) as e:
             raise StorageError(f"Failed to delete project #{project_id}: {e}") from e
 
-    def add_project_update(self, project_id: int, body: str) -> ProjectUpdate:
+    def add_project_update(self, project_id: int, body: UpdateBody) -> ProjectUpdate:
         self.get_project(project_id)  # raises ProjectNotFoundError if missing
         now = _now().isoformat()
         try:

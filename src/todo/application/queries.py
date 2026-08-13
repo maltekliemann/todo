@@ -9,8 +9,7 @@ from todo.domain.priority import Priority
 from todo.domain.project import Project
 from todo.domain.project_update import ProjectUpdate
 from todo.domain.status import Status
-from todo.domain.tag import split_tags
-from todo.domain.text import single_line
+from todo.domain.tag import Tag, split_tags
 from todo.domain.todo_item import TodoItem
 from todo.exceptions import ProjectNotFoundError
 
@@ -37,17 +36,13 @@ def list_todos(
     if tags is not None:
         cleaned: list[str] = []
         for tag in tags:
-            # single_line, not strip: the write path normalizes internal
-            # whitespace runs too, so anything less means the exact string
-            # that created a tag can fail to match it.
-            normalized = single_line(tag)
-            if not normalized:
-                raise ValueError("Tag filter cannot be empty.")
-            if "," in normalized:
-                raise ValueError(
-                    f"Tag filter '{normalized}' contains a comma; "
-                    "use separate --tag flags."
-                )
+            # Normalized by Tag itself, not by a lookalike: a filter that
+            # normalizes differently from the write path cannot match the
+            # exact string that created the tag.
+            try:
+                normalized = Tag(tag)
+            except ValueError as exc:
+                raise ValueError(f"Cannot filter by that tag: {exc}") from None
             cleaned.append(normalized)
         tags = cleaned
     items = storage.list(

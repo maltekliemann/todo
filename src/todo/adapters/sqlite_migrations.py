@@ -10,8 +10,9 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Callable
 
-from todo.domain.tag import dedupe_tags, split_tags
-from todo.domain.text import single_line
+from todo.domain.project_name import ProjectName
+from todo.domain.tag import Tag, dedupe_tags, split_tags
+from todo.domain.title import Title
 
 SCHEMA = """\
 CREATE TABLE IF NOT EXISTS todos (
@@ -37,22 +38,26 @@ CREATE TABLE IF NOT EXISTS todo_dependencies (
 def migration_v3_normalize(conn: sqlite3.Connection) -> None:
     """Normalize rows written before single-line normalization existed.
 
-    Uses the shared domain helper so migrated rows equal what the write
-    path produces, and project-name collisions get a unique ' #id' suffix
+    Builds the same value objects the write path builds, so a migrated row
+    equals what a new row would be, and project-name collisions get a
+    unique ' #id' suffix
     instead of blowing up the UNIQUE constraint and locking the user out
     of the database.
     """
     for item_id, title in conn.execute("SELECT id, title FROM todos").fetchall():
-        normalized = single_line(title) or f"Untitled #{item_id}"
+        try:
+            normalized = str(Title(title))
+        except ValueError:
+            normalized = f"Untitled #{item_id}"
         if normalized != title:
             conn.execute(
                 "UPDATE todos SET title = ? WHERE id = ?", (normalized, item_id)
             )
 
     projects = conn.execute("SELECT id, name FROM projects ORDER BY id").fetchall()
-    taken = {name for _, name in projects if single_line(name) == name}
+    taken = {name for _, name in projects if _clean_name(name, 0) == name}
     for project_id, name in projects:
-        normalized = single_line(name) or f"project #{project_id}"
+        normalized = _clean_name(name, project_id)
         if normalized == name:
             continue
         while normalized in taken:
@@ -63,15 +68,27 @@ def migration_v3_normalize(conn: sqlite3.Connection) -> None:
         taken.add(normalized)
 
 
+def _clean_name(name: str, project_id: int) -> str:
+    """A legacy project name as ProjectName would have it, or a stand-in.
+
+    Migrations run on rows written before the rules existed, so an
+    unbuildable name gets a placeholder rather than stopping the upgrade.
+    """
+    try:
+        return str(ProjectName(name))
+    except ValueError:
+        return f"project #{project_id}"
+
+
 def normalize_tag_string(raw: str) -> str:
     """The stored form every read path derives its display from.
 
-    Must produce exactly what the write path produces (single_line per
-    segment, empties dropped, duplicates removed, order preserved) — a
+    Must produce exactly what the write path produces (each segment a
+    Tag, empties dropped, duplicates removed, order preserved) — a
     migration that stops at strip() leaves legacy rows that can never be
     matched by the same string a new row is created with.
     """
-    return ",".join(dedupe_tags(single_line(t) for t in split_tags(raw)))
+    return ",".join(dedupe_tags(Tag(t) for t in split_tags(raw)))
 
 
 def migration_v4_normalize_tags(conn: sqlite3.Connection) -> None:
