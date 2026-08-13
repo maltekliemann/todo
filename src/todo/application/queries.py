@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 from todo.application.contracts.storage import StorageProtocol
 from todo.domain.priority import Priority
 from todo.domain.project import Project
+from todo.domain.project_name import ProjectName
 from todo.domain.project_update import ProjectUpdate
 from todo.domain.status import Status
 from todo.domain.tag import Tag, split_tags
@@ -75,9 +76,13 @@ def resolve_project(storage: StorageProtocol, ref: str) -> Project:
     numeric refs — name-first resolution let a numerically-named project
     shadow another project's id in every command, including `project rm`.
     """
-    # Refs get the same whitespace normalization the write path applied to
-    # names — the exact string a project was created with must resolve.
-    ref = " ".join(ref.split())
+    # Normalized by ProjectName itself, not by a lookalike: the exact
+    # string a project was created with has to resolve to it. A ref that
+    # is not a nameable string names no project.
+    try:
+        ref = ProjectName(ref)
+    except ValueError:
+        raise ProjectNotFoundError(ref) from None
     # isdecimal (not isdigit: '²'.isdigit() is True but int('²') raises) and
     # a length cap (SQLite binds 64-bit ints) decide what counts as an id.
     if ref.isdecimal() and len(ref) <= 18:
