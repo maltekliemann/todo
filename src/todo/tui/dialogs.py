@@ -24,11 +24,15 @@ from todo.exceptions import TodoError
 from todo.tui.render import escape_markup, meta_lines
 
 
+def _is_exact_id(item: TodoItem, query: str) -> bool:
+    return bool(query) and query.lstrip("#") == str(item.id)
+
+
 def _matches_item(item: TodoItem, query: str) -> bool:
     """Search matches the title or the id, with or without the '#'."""
     if not query:
         return True
-    return query in item.title.casefold() or query.lstrip("#") == str(item.id)
+    return query in item.title.casefold() or _is_exact_id(item, query)
 
 
 class ConfirmDialog(ModalScreen[bool]):
@@ -304,6 +308,11 @@ class BlockDialog(ModalScreen[bool]):
     Choosing applies the change and closes, as it always has. The command
     call happens here so validation, cycle and storage errors show inline
     instead of closing the dialog on the user's work.
+
+    Nothing is highlighted until the user narrows or moves: this dialog is
+    also how you look at what an item waits on, and a reflexive Return over
+    a pre-selected first row deleted the very relation you opened it to
+    read.
     """
 
     BINDINGS = [
@@ -352,8 +361,15 @@ class BlockDialog(ModalScreen[bool]):
     def _populate(self) -> None:
         query = self.query_one("#block-search", Input).value.strip().casefold()
         matches = [i for i in self._candidates if _matches_item(i, query)]
-        # Current blockers first: they are what you came to remove.
-        matches.sort(key=lambda i: i.id not in self._blocker_ids)
+        matches.sort(
+            key=lambda i: (
+                # An id typed exactly designates that item, the way the
+                # id prompt this replaced did. Then current blockers,
+                # which are what you came to remove.
+                not _is_exact_id(i, query),
+                i.id not in self._blocker_ids,
+            )
+        )
 
         options = self.query_one("#block-options", OptionList)
         options.clear_options()
@@ -362,14 +378,20 @@ class BlockDialog(ModalScreen[bool]):
             mark = "✓" if i.id in self._blocker_ids else " "
             # Text, never markup: titles are user-controlled.
             options.add_option(Option(Text(f"{mark} #{i.id}  {i.title}")))
-        if self._shown_ids:
-            options.highlighted = 0
+        # A stale rejection under a fresh candidate reads as "this one is
+        # no good either".
+        self._clear_error()
+        # Only a narrowed list is safe to pre-select; see the class docstring.
+        options.highlighted = 0 if (query and self._shown_ids) else None
 
     def _show_error(self, exc: Exception) -> None:
         # Error text can echo raw user input; never render it as markup.
         self.query_one("#block-error", Label).update(
             Text(str(exc) or "Could not change the blocker")
         )
+
+    def _clear_error(self) -> None:
+        self.query_one("#block-error", Label).update("")
 
     @on(Input.Changed, "#block-search")
     def on_search_changed(self) -> None:
@@ -383,13 +405,15 @@ class BlockDialog(ModalScreen[bool]):
 
     @on(Input.Submitted, "#block-search")
     def on_submit(self) -> None:
-        value = self.query_one("#block-search", Input).value.strip()
-        # "-3" still removes blocker #3 outright, as it always has.
-        if value.startswith("-") and value[1:].isdigit():
-            self._toggle(int(value[1:]), removing=True)
-            return
-        options = self.query_one("#block-options", OptionList)
-        index = options.highlighted
+        self._choose(self.query_one("#block-options", OptionList).highlighted)
+
+    @on(OptionList.OptionSelected, "#block-options")
+    def on_option_selected(self, event: OptionList.OptionSelected) -> None:
+        # Clicking a candidate is choosing it. Without this the click only
+        # moved focus into the list, leaving the dialog inert.
+        self._choose(event.option_index)
+
+    def _choose(self, index: int | None) -> None:
         if index is None or not (0 <= index < len(self._shown_ids)):
             return
         blocker_id = self._shown_ids[index]

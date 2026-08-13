@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from rich.text import Text
 from textual.coordinate import Coordinate
-from textual.widgets import DataTable, Label, Static
+from textual.widgets import DataTable, Input, Label, Static
 
 from todo.adapters.sqlite_storage import SqliteStorage
 from todo.application.commands import add_todo
@@ -267,6 +267,7 @@ class TestBlockerPicker:
             await pilot.pause()
             options = self._options(app)
             assert options[0].startswith("✓"), options
+            await pilot.press("down")  # nothing is preselected, by design
             await pilot.press("enter")
             await pilot.pause()
             assert several.get(1).blocked_by == []
@@ -282,6 +283,136 @@ class TestBlockerPicker:
             assert "Deploy the frontend" in options[0]
             assert options[0].startswith("✓")
             assert not any(o.startswith("✓") for o in options[1:])
+
+    async def test_bare_enter_changes_nothing(self, several: SqliteStorage) -> None:
+        """Opening the picker to look, then pressing Return, must not
+        commit whatever happens to be first — that silently destroyed the
+        relation the user opened the dialog to read."""
+        several.add_blocker(1, 3)
+        app = TodoApp(storage=several)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("b")
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert several.get(1).blocked_by == [3]
+
+    async def test_bare_enter_creates_nothing(self, several: SqliteStorage) -> None:
+        app = TodoApp(storage=several)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("b")
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert several.get(1).blocked_by == []
+
+    async def test_an_exactly_typed_id_wins_over_a_title_match(
+        self, db_path: Path
+    ) -> None:
+        """The dialog this replaced acted on the id you typed. Typing an id
+        must still designate that item, not a title that happens to contain
+        the digit."""
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Ship the release")
+        add_todo(storage, "Fix bug 3 in parser")
+        add_todo(storage, "Rotate certificates")
+        app = TodoApp(storage=storage)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("b")
+            await pilot.pause()
+            await pilot.press("3")
+            await pilot.pause()
+            assert self._options(app)[0].endswith("Rotate certificates")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert storage.get(1).blocked_by == [3]
+
+    async def test_a_dash_query_is_a_search_not_a_removal(self, db_path: Path) -> None:
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Main")
+        add_todo(storage, "Ship v1")
+        add_todo(storage, "Fix bug-2 crash")
+        storage.add_blocker(1, 2)
+        app = TodoApp(storage=storage)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("b")
+            await pilot.pause()
+            await pilot.press("minus", "2")
+            await pilot.pause()
+            assert self._options(app) == ["  #3  Fix bug-2 crash"]
+            await pilot.press("enter")
+            await pilot.pause()
+            # The #2 relation is untouched and #3 was added.
+            assert storage.get(1).blocked_by == [2, 3]
+
+    async def test_a_non_decimal_digit_does_not_crash(self, db_path: Path) -> None:
+        """'²'.isdigit() is True but int('²') raises; a German keyboard
+        produces it with AltGr+2."""
+        storage = SqliteStorage(db_path)
+        add_todo(storage, "Main")
+        add_todo(storage, "Other")
+        app = TodoApp(storage=storage)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("b")
+            await pilot.pause()
+            app.screen.query_one("#block-search", Input).value = "-²"
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.is_running
+
+    async def test_clicking_a_candidate_chooses_it(
+        self, several: SqliteStorage
+    ) -> None:
+        app = TodoApp(storage=several)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("b")
+            await pilot.pause()
+            await pilot.click("#block-options", offset=(2, 0))
+            await pilot.pause()
+            assert several.get(1).blocked_by == [2]
+
+    async def test_a_new_search_clears_the_previous_error(
+        self, several: SqliteStorage
+    ) -> None:
+        several.add_blocker(2, 1)  # a cycle awaits anyone choosing #2
+        app = TodoApp(storage=several)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("b")
+            await pilot.pause()
+            for ch in "gateway":
+                await pilot.press(ch)
+            await pilot.press("enter")
+            await pilot.pause()
+            assert str(app.screen.query_one("#block-error", Label).render())
+
+            app.screen.query_one("#block-search", Input).value = "certificates"
+            await pilot.pause()
+            assert str(app.screen.query_one("#block-error", Label).render()) == ""
+
+    @pytest.mark.parametrize("size", [(80, 20), (80, 24), (100, 40)])
+    async def test_the_dialog_fits_the_terminal(
+        self, several: SqliteStorage, size: tuple[int, int]
+    ) -> None:
+        """The inline error is the dialog's whole error strategy; if the
+        box overflows a short terminal, a rejected choice looks like a
+        keypress that did nothing."""
+        app = TodoApp(storage=several)
+        async with app.run_test(size=size) as pilot:
+            await pilot.pause()
+            await pilot.press("b")
+            await pilot.pause()
+            height = size[1]
+            for widget_id in ("#block-search", "#block-options", "#block-error"):
+                region = app.screen.query_one(widget_id).region
+                assert region.bottom <= height, f"{widget_id} at {region}"
 
     async def test_a_cycle_reports_inline_and_stays_open(
         self, several: SqliteStorage
@@ -340,6 +471,22 @@ class TestDepsColumn:
             assert self._deps_cell(table, "Task 2") == "→3"
             assert self._deps_cell(table, "Task 3") == "→1"
             assert self._deps_cell(table, "Task 6") == ""
+
+    async def test_a_done_blocker_is_not_something_you_wait_on(
+        self, linked: SqliteStorage
+    ) -> None:
+        """The row drops its 🚧 marker the moment its last blocker is done;
+        the Deps cell must agree instead of still claiming a wait."""
+        from todo.application.commands import complete_todo
+
+        complete_todo(linked, 2)
+        complete_todo(linked, 3)
+        app = TodoApp(storage=linked)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            table = app.query_one("#item-list", DataTable)
+            assert linked.get(1).is_blocked is False
+            assert self._deps_cell(table, "Task 1") == ""
 
     async def test_shows_both_directions_at_once(self, linked: SqliteStorage) -> None:
         # #3 already blocks #1; make it wait on #6 too, so its cell has to
@@ -1424,9 +1571,12 @@ class TestBlocking:
             assert isinstance(app.screen, BlockDialog)  # nothing to choose
             assert seeded_storage.get(1).blocked_by == []
 
-    async def test_b_block_dialog_negative_id_removes_relation(
+    async def test_b_block_dialog_removes_an_existing_blocker(
         self, seeded_storage: SqliteStorage
     ) -> None:
+        """Removal is choosing the marked candidate. The old "-2" shorthand
+        is gone: it collided with the search box, where "-2" is a perfectly
+        good query for a title containing "-2"."""
         from todo.application.commands import block_todo
 
         block_todo(seeded_storage, 1, 2)
@@ -1435,10 +1585,9 @@ class TestBlocking:
         app = TodoApp(storage=seeded_storage)
         async with app.run_test() as pilot:
             await pilot.pause()
-            # Cursor on item #1; remove blocker #2 via "-2".
             await pilot.press("b")
             await pilot.pause()
-            await pilot.press("minus", "2")
+            await pilot.press("down")  # #2 is marked and sorted first
             await pilot.press("enter")
             await pilot.pause()
 

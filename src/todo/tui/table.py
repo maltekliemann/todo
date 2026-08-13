@@ -156,9 +156,14 @@ def deps_cell(item: TodoItem) -> str:
     '←#2,#3' are the blockers by id — you need the id to act on them —
     while '→3' is only a count, because the ids of dependents are not
     something you act on from this row.
+
+    The '←' half is gated on is_blocked, the same flag that decides the 🚧
+    marker: once every blocker is done the item waits on nothing, and a
+    cell still naming them would contradict the marker beside it. The full
+    history stays in the detail pane.
     """
     parts = []
-    if item.blocked_by:
+    if item.blocked_by and item.is_blocked:
         shown = item.blocked_by[:_MAX_BLOCKER_IDS]
         ids = ",".join(f"#{i}" for i in shown)
         hidden = len(item.blocked_by) - len(shown)
