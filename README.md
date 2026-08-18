@@ -13,7 +13,7 @@ Two interfaces:
 - **Four priorities**: urgent, high, medium, low (color-coded)
 - **Deadlines**: optional due dates with visual warnings (overdue, due soon)
 - **Tags**: categorize and filter items (AND-combine filters, usage counts)
-- **Blockers**: items can block each other; blocked items are marked 🚧 and
+- **Blockers**: items can block each other; blocked items are marked 🚫 and
   cycles are rejected; completing a blocker tells you what got unblocked
 - **Projects**: first-class containers with description, archive lifecycle,
   and per-project progress
@@ -80,7 +80,7 @@ todo summary --since PERIOD       Show completed items in a time window
 todo ui                           Launch the interactive TUI
 ```
 
-Projects are referenced by name or id. Blocked items render with a 🚧 marker;
+Projects are referenced by name or id. Blocked items render with a 🚫 marker;
 `todo list --blocked` shows only blocked items and `todo list --ready` shows
 what's actionable right now (not done, not blocked).
 
@@ -173,6 +173,41 @@ The database is stored at `~/.todo/todos.db` by default. Override with the `TODO
 ```bash
 export TODO_DB=/path/to/custom.db
 ```
+
+## Backup
+
+Everything lives in one SQLite file, so losing the machine means losing the
+data. The recommended setup is a consistent snapshot shipped to a remote
+host with client-side encryption:
+
+1. **Snapshot with SQLite's online backup** — never copy the live file
+   directly; a `cp` taken mid-write can be corrupt:
+
+   ```bash
+   sqlite3 ~/.todo/todos.db ".backup '/tmp/todos-snapshot.db'"
+   ```
+
+2. **Ship it with [restic](https://restic.net)** — encrypted before it
+   leaves the machine (the server only ever sees ciphertext), deduplicated,
+   and versioned. Any host with SSH works as an SFTP backend:
+
+   ```bash
+   # once: create the repository and choose a repo password
+   restic -r sftp:you@your-server:/backups/todo init
+
+   # recurring
+   sqlite3 ~/.todo/todos.db ".backup '/tmp/todos-snapshot.db'"
+   restic -r sftp:you@your-server:/backups/todo backup /tmp/todos-snapshot.db
+   restic -r sftp:you@your-server:/backups/todo forget \
+       --keep-daily 14 --keep-weekly 8 --prune
+   ```
+
+3. **Automate it** — on macOS, a LaunchAgent beats cron: a run missed while
+   the laptop was asleep fires on the next wake.
+
+Two rules that make it an actual backup: keep the restic repo password in a
+password manager (losing it makes the remote ciphertext worthless), and run
+`restic restore` once now to prove the round trip works.
 
 ## Development
 

@@ -382,7 +382,7 @@ class TestBlock:
 
     def test_plain_list_has_no_blocked_marker(self, invoke) -> None:
         """This test previously asserted the opposite: that plain output
-        carried a 🚧 marker. That broke the machine-parseable contract of
+        carried a 🚫 marker. That broke the machine-parseable contract of
         piped output, so the marker is Rich/TUI-only now."""
         invoke("add Blocker")
         invoke("add Blocked")
@@ -390,7 +390,7 @@ class TestBlock:
 
         r = invoke("list")
         assert r.exit_code == 0
-        assert "\U0001f6a7" not in r.output
+        assert "\U0001f6ab" not in r.output
         assert "Blocked" in r.output
 
 
@@ -773,7 +773,7 @@ class TestProjectCli:
         result = invoke("list")
         lines = [ln for ln in result.output.split("\n") if "Waiting" in ln]
         assert lines, result.output
-        assert "\U0001f6a7" not in lines[0]
+        assert "\U0001f6ab" not in lines[0]
 
     def test_project_show_lists_its_items(self, items: SqliteItemStore, invoke) -> None:
         invoke("project add infra")

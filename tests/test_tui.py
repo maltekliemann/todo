@@ -532,7 +532,7 @@ class TestDepsColumn:
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
             table = app.query_one("#item-list", DataTable)
-            assert self._deps_cell(table, "\U0001f6a7 Task 1") == "←#2,#3"
+            assert self._deps_cell(table, "\U0001f6ab Task 1") == "←#2,#3"
             assert self._deps_cell(table, "Task 2") == "→3"
             assert self._deps_cell(table, "Task 3") == "→1"
             assert self._deps_cell(table, "Task 6") == ""
@@ -540,7 +540,7 @@ class TestDepsColumn:
     async def test_a_done_blocker_is_not_something_you_wait_on(
         self, items: SqliteItemStore, dependencies: SqliteDependencyStore, linked: Path
     ) -> None:
-        """The row drops its 🚧 marker the moment its last blocker is done;
+        """The row drops its 🚫 marker the moment its last blocker is done;
         the Deps cell must agree instead of still claiming a wait."""
         from tests.factory import set_status
 
@@ -563,8 +563,8 @@ class TestDepsColumn:
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
             table = app.query_one("#item-list", DataTable)
-            assert self._deps_cell(table, "\U0001f6a7 Task 3") == "←#6 →1"
-            assert self._deps_cell(table, "\U0001f6a7 Task 4") == "←#2"
+            assert self._deps_cell(table, "\U0001f6ab Task 3") == "←#6 →1"
+            assert self._deps_cell(table, "\U0001f6ab Task 4") == "←#2"
 
     async def test_long_blocker_lists_are_capped(
         self, dependencies: SqliteDependencyStore, items: SqliteItemStore, db_path: Path
@@ -577,7 +577,7 @@ class TestDepsColumn:
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
             table = app.query_one("#item-list", DataTable)
-            cell = self._deps_cell(table, "\U0001f6a7 Task 1")
+            cell = self._deps_cell(table, "\U0001f6ab Task 1")
             assert cell == "←#2,#3+3", cell
 
 
@@ -845,7 +845,7 @@ class TestPriorityAndDeadlineStyling:
         async with app.run_test() as pilot:
             await pilot.pause()
             table = app.query_one("#item-list", DataTable)
-            cells = self._cells(table, "\U0001f6a7 Urgent one")
+            cells = self._cells(table, "\U0001f6ab Urgent one")
             assert all("dim" in str(c.style) for c in cells)
             assert "red" in str(cells[COLUMNS.index("Pri")].style)
 
@@ -1545,11 +1545,11 @@ class TestBlocking:
                 return str(table.get_row_at(row_index)[3])
 
             blocked_title = _title_cell(1)
-            assert "\U0001f6a7" in blocked_title
+            assert "\U0001f6ab" in blocked_title
             assert "Blocked item" in blocked_title
             # The blocker itself is not marked.
             blocker_title = _title_cell(2)
-            assert "\U0001f6a7" not in blocker_title
+            assert "\U0001f6ab" not in blocker_title
 
     async def test_b_opens_block_dialog(
         self, seeded: Path, items: SqliteItemStore

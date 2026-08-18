@@ -254,7 +254,7 @@ class RichOutput(_JsonOutput):
             dl_style = _deadline_style(item)
             status_icon = _status_icon(item.status)
             title = (
-                f"\U0001f6a7 {item.title}"
+                f"\U0001f6ab {item.title}"
                 if graph.is_blocked(item.id, done)
                 else item.title
             )

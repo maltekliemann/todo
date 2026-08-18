@@ -166,7 +166,7 @@ def deps_cell(item: TodoItem, graph: DependencyGraph, done: frozenset[ItemId]) -
     while '→3' is only a count, because the ids of dependents are not
     something you act on from this row.
 
-    The '←' half is gated on is_blocked, the same flag that decides the 🚧
+    The '←' half is gated on is_blocked, the same flag that decides the 🚫
     marker: once every blocker is done the item waits on nothing, and a
     cell still naming them would contradict the marker beside it. The full
     history stays in the detail pane.
@@ -219,7 +219,7 @@ def _cells(
         str(item.id),
         priority_label(item.priority),
         f"{status_icon(item.status)} {item.status.value}",
-        f"\U0001f6a7 {item.title}" if graph.is_blocked(item.id, done) else item.title,
+        f"\U0001f6ab {item.title}" if graph.is_blocked(item.id, done) else item.title,
         tags_cell(item),
         deps_cell(item, graph, done),
         deadline_text,

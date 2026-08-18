@@ -117,7 +117,7 @@ class TestRichLists:
         out = capsys.readouterr().out
         assert "Overdue" in out
         assert "Urgent soon" in out
-        assert "\U0001f6a7" in out
+        assert "\U0001f6ab" in out
         assert "4 items" in out
 
     def test_item_full_detail(self, rich_out: RichOutput, capsys) -> None:
