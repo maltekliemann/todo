@@ -24,11 +24,16 @@ from todo.tui.render import (
 
 SEPARATOR_PREFIX = "__sep_"
 
-COLUMNS = ("#", "Pri", "Status", "Title", "Deps", "Deadline", "Age")
+COLUMNS = ("#", "Pri", "Status", "Title", "Tags", "Deps", "Deadline", "Age")
 
 # Blocker ids past this many collapse into a "+n" tail: the column has to
 # stay narrow enough to leave the title room.
 _MAX_BLOCKER_IDS = 2
+
+# Same deal for tags, but measured in columns rather than tags: what
+# squeezes the title is width, and three long tags take more of it than
+# five short ones. The full list stays in the detail pane.
+_TAG_BUDGET = 24
 
 # Groups in reading order: what you are doing, then what is next, then
 # what is parked, then what is finished.
@@ -179,6 +184,27 @@ def deps_cell(item: TodoItem, graph: DependencyGraph, done: frozenset[ItemId]) -
     return " ".join(parts)
 
 
+def tags_cell(item: TodoItem) -> str:
+    """Whole tags by name up to the width budget, '+n' tail for the rest.
+
+    Never cut mid-tag: a cut tag cannot be read back, and two different
+    tags could truncate to the same text. The one exception is a single
+    tag wider than the whole budget — it is cut with a visible ellipsis,
+    because a bare '+n' would name no tag at all.
+    """
+    tags = sorted(item.tags)
+    shown: list[str] = []
+    for tag in tags:
+        if shown and len(", ".join([*shown, tag])) > _TAG_BUDGET:
+            break
+        shown.append(tag)
+    hidden = len(tags) - len(shown)
+    text = ", ".join(shown)
+    if len(text) > _TAG_BUDGET:
+        text = text[: _TAG_BUDGET - 1] + "…"
+    return f"{text} +{hidden}" if hidden else text
+
+
 def _cells(
     item: TodoItem, graph: DependencyGraph, done: frozenset[ItemId]
 ) -> list[Text]:
@@ -194,6 +220,7 @@ def _cells(
         priority_label(item.priority),
         f"{status_icon(item.status)} {item.status.value}",
         f"\U0001f6a7 {item.title}" if graph.is_blocked(item.id, done) else item.title,
+        tags_cell(item),
         deps_cell(item, graph, done),
         deadline_text,
         relative_age(item.created_at),
@@ -201,6 +228,8 @@ def _cells(
     row_style = "dim" if graph.is_blocked(item.id, done) else ""
     styles = [row_style] * len(values)
     styles[COLUMNS.index("Pri")] = join_styles(row_style, priority_style(item.priority))
+    # Dim always: tags are for finding the row, the title is for reading it.
+    styles[COLUMNS.index("Tags")] = join_styles(row_style, "dim")
     if deadline_text:
         styles[COLUMNS.index("Deadline")] = join_styles(row_style, deadline_style(item))
     return [Text(v, style=s) for v, s in zip(values, styles)]

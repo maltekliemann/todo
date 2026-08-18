@@ -581,6 +581,73 @@ class TestDepsColumn:
             assert cell == "←#2,#3+3", cell
 
 
+class TestTagsColumn:
+    """Tags belong on the row: they are how a list is scanned, and the
+    detail pane only shows them for the one item under the cursor."""
+
+    @staticmethod
+    def _tags_cell(table: DataTable, title: str) -> str:
+        column = COLUMNS.index("Tags")
+        for row in range(table.row_count):
+            cells = table.get_row_at(row)
+            if any(title == str(c) for c in cells):
+                return str(cells[column])
+        raise AssertionError(f"no row titled {title!r}")
+
+    async def test_shows_tags_sorted_and_nothing_when_bare(
+        self, items: SqliteItemStore, db_path: Path
+    ) -> None:
+        add_todo(items, NewItem(title="Tagged", tags=frozenset({"web", "auth"})))
+        add_todo(items, NewItem(title="Bare"))
+        app = TodoApp(db_path)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            table = app.query_one("#item-list", DataTable)
+            assert self._tags_cell(table, "Tagged") == "auth, web"
+            assert self._tags_cell(table, "Bare") == ""
+
+    async def test_the_cap_is_width_not_count(
+        self, items: SqliteItemStore, db_path: Path
+    ) -> None:
+        """Five short tags fit where two long ones do not: what squeezes
+        the title is columns, so columns are what the cap measures."""
+        add_todo(
+            items,
+            NewItem(title="Task", tags=frozenset({"api", "cli", "db", "ui", "web"})),
+        )
+        add_todo(
+            items,
+            NewItem(
+                title="Wide",
+                tags=frozenset({"backend-infrastructure", "frontend"}),
+            ),
+        )
+        app = TodoApp(db_path)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            table = app.query_one("#item-list", DataTable)
+            assert self._tags_cell(table, "Task") == "api, cli, db, ui, web"
+            assert self._tags_cell(table, "Wide") == "backend-infrastructure +1"
+
+    async def test_a_tag_wider_than_the_budget_is_cut_visibly(
+        self, items: SqliteItemStore, db_path: Path
+    ) -> None:
+        """A bare '+n' would name no tag at all, so the overwide tag shows
+        as much of itself as the budget allows, ellipsis marking the cut."""
+        add_todo(
+            items,
+            NewItem(
+                title="Task",
+                tags=frozenset({"a-single-tag-longer-than-the-budget", "tiny"}),
+            ),
+        )
+        app = TodoApp(db_path)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            table = app.query_one("#item-list", DataTable)
+            assert self._tags_cell(table, "Task") == "a-single-tag-longer-tha… +1"
+
+
 class TestStayCursorMode:
     """Stay mode exists so a run of items can be moved without chasing the
     cursor. Holding a visual row index is not enough: a status step re-sorts
