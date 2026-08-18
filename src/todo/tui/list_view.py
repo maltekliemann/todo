@@ -293,10 +293,15 @@ class TodoListView(Widget):
     def action_new(self) -> None:
         def after(item: TodoItem | None) -> None:
             if item is not None:
-                self._refresh_list()
+                # The next action is almost always about the new item, so
+                # it lands under the cursor — unless a filter hides it, in
+                # which case select_id is ignored and the cursor stays.
+                self._refresh_list(select_id=item.id)
 
         self.app.push_screen(
-            NewItemDialog(self._item_store, self._item_id_counter),
+            NewItemDialog(
+                self._item_store, self._dependency_store, self._item_id_counter
+            ),
             after,
         )
 

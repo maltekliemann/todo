@@ -46,6 +46,9 @@ NewItemDialog {
 NewItemDialog > #dialog-container {
     width: 60;
     height: auto;
+    /* Every field the item has no longer fits a short terminal; the
+       container scrolls the focused field into view instead. */
+    max-height: 90%;
     padding: 1 2;
     background: $surface;
     border: thick $primary;
@@ -53,6 +56,21 @@ NewItemDialog > #dialog-container {
 
 NewItemDialog Label {
     margin-top: 1;
+}
+
+/* Dressed like an Input so the form reads as one column of fields, but
+   these are displays: their values are made in the picker or $EDITOR,
+   never typed here. */
+NewItemDialog BlockerField,
+NewItemDialog BodyField {
+    height: 3;
+    padding: 0 1;
+    border: tall $panel;
+}
+
+NewItemDialog BlockerField:focus,
+NewItemDialog BodyField:focus {
+    border: tall $accent;
 }
 
 #dialog-title {

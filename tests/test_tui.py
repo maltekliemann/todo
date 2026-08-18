@@ -934,6 +934,184 @@ class TestNewDialog:
             count_before = len(items.find(ItemFilter(include_done=True)))
             assert count_before == 3
 
+    async def test_a_new_item_lands_under_the_cursor(
+        self, seeded: Path, items: SqliteItemStore
+    ) -> None:
+        """The next action after creating is almost always about the new
+        item, so the refresh that follows the dialog selects it."""
+        app = TodoApp(seeded)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("n")
+            await pilot.pause()
+            for ch in "Fresh":
+                await pilot.press(ch)
+            # Title → Priority → Deadline → Tags → Blocked by → Body →
+            # Save, all defaults.
+            for _ in range(6):
+                await pilot.press("enter")
+                await pilot.pause()
+
+            new_item = next(
+                i
+                for i in items.find(ItemFilter(include_done=True))
+                if i.title == "Fresh"
+            )
+            table = app.query_one("#item-list", DataTable)
+            key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
+            assert key == str(new_item.id)
+
+    async def test_body_and_blockers_can_be_set_at_creation(
+        self,
+        seeded: Path,
+        items: SqliteItemStore,
+        dependencies: SqliteDependencyStore,
+    ) -> None:
+        """Every field the item has is settable where the item is made —
+        and blockers are picked from a menu, never typed as ids."""
+        from todo.tui.blockers import BlockerPicker
+
+        app = TodoApp(seeded)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("n")
+            await pilot.pause()
+
+            for ch in "Born blocked":
+                await pilot.press(ch)
+            # Title → Priority → Deadline → Tags, all defaults.
+            for _ in range(4):
+                await pilot.press("enter")
+                await pilot.pause()
+
+            # Space opens the picker; an exactly typed id designates the
+            # item, and Enter toggles its mark.
+            await pilot.press("space")
+            await pilot.pause()
+            assert isinstance(app.screen, BlockerPicker)
+            await pilot.press("1")
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            await pilot.press("backspace")
+            await pilot.press("3")
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            await pilot.press("escape")
+            await pilot.pause()
+
+            # Back on the form: Enter walks on to the body, where Space
+            # opens $EDITOR — faked here — and Enter creates the item.
+            await pilot.press("enter")
+            await pilot.pause()
+
+            class FakeSession:
+                def __init__(self, view: object, items: object) -> None:
+                    pass
+
+                def run_text(self, text: str) -> str:
+                    return "waits on setup"
+
+            import todo.tui.dialogs as dialogs_module
+
+            with monkeypatched(dialogs_module, "EditorSession", FakeSession):
+                await pilot.press("space")
+                await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+
+            new_item = next(
+                i
+                for i in items.find(ItemFilter(include_done=True))
+                if i.title == "Born blocked"
+            )
+            assert new_item.body == "waits on setup"
+            assert dependencies.load().blockers_of(new_item.id) == [
+                ItemId(1),
+                ItemId(3),
+            ]
+
+    async def test_a_reopened_picker_starts_from_what_was_chosen(
+        self, seeded: Path, items: SqliteItemStore
+    ) -> None:
+        """The field remembers its selection: opening the picker again
+        shows the mark, and toggling it off clears the choice."""
+        from todo.tui.dialogs import BlockerField
+
+        app = TodoApp(seeded)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("n")
+            await pilot.pause()
+            for ch in "Fickle":
+                await pilot.press(ch)
+            for _ in range(4):
+                await pilot.press("enter")
+                await pilot.pause()
+
+            # Pick #1, close.
+            await pilot.press("space")
+            await pilot.pause()
+            await pilot.press("1")
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.press("escape")
+            await pilot.pause()
+            field = app.screen.query_one("#new-blockers", BlockerField)
+            assert field.value == [ItemId(1)]
+
+            # Reopen: the marked row leads the menu; Enter un-marks it.
+            await pilot.press("space")
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.press("escape")
+            await pilot.pause()
+            assert field.value == []
+
+    async def test_a_vanished_blocker_creates_nothing(
+        self,
+        seeded: Path,
+        items: SqliteItemStore,
+        dependencies: SqliteDependencyStore,
+    ) -> None:
+        """Picked from the list, deleted by another process before save:
+        the whole form fails — no half-made item that exists but does not
+        wait on what it was told to wait on."""
+        from tests.factory import delete_todo
+
+        app = TodoApp(seeded)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("n")
+            await pilot.pause()
+
+            for ch in "Doomed":
+                await pilot.press(ch)
+            for _ in range(4):
+                await pilot.press("enter")
+                await pilot.pause()
+            await pilot.press("space")
+            await pilot.pause()
+            await pilot.press("1")
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.press("escape")
+            await pilot.pause()
+
+            delete_todo(items, dependencies, 1)
+
+            await pilot.press("enter")  # blockers -> body
+            await pilot.pause()
+            await pilot.press("enter")  # body (skip) -> save attempt
+            await pilot.pause()
+
+            error = str(app.screen.query_one("#dialog-error", Label).render())
+            assert "#1" in error
+            assert not any(
+                i.title == "Doomed" for i in items.find(ItemFilter(include_done=True))
+            )
+
     async def test_enter_advances_through_fields_then_saves(
         self, seeded: Path, items: SqliteItemStore
     ) -> None:
@@ -965,9 +1143,15 @@ class TestNewDialog:
             await pilot.press("enter")
             await pilot.pause()
 
-            # Tags -> Save
+            # Tags -> Blocked by
             for ch in "demo":
                 await pilot.press(ch)
+            await pilot.press("enter")
+            await pilot.pause()
+
+            # Blocked by (skip) -> Body, Body (skip) -> Save
+            await pilot.press("enter")
+            await pilot.pause()
             await pilot.press("enter")
             await pilot.pause()
 
@@ -989,15 +1173,11 @@ class TestNewDialog:
 
             for ch in "Default pri":
                 await pilot.press(ch)
-            # Title → Priority (default medium) → Deadline → Tags → Save
-            await pilot.press("enter")
-            await pilot.pause()
-            await pilot.press("enter")
-            await pilot.pause()
-            await pilot.press("enter")
-            await pilot.pause()
-            await pilot.press("enter")
-            await pilot.pause()
+            # Title → Priority (default medium) → Deadline → Tags →
+            # Blocked by → Body → Save
+            for _ in range(6):
+                await pilot.press("enter")
+                await pilot.pause()
 
             new_item = next(
                 i
@@ -1056,7 +1236,7 @@ class TestNewDialog:
         """Down advances and Up retreats on every field in the dialog."""
         from textual.widgets import Input
 
-        from todo.tui.dialogs import AdvancingSelect
+        from todo.tui.dialogs import AdvancingSelect, BlockerField, BodyField
 
         app = TodoApp(seeded)
         async with app.run_test() as pilot:
@@ -1083,7 +1263,27 @@ class TestNewDialog:
             await pilot.pause()
             assert app.screen.query_one("#new-tags", Input).has_focus
 
-            # Tags <- Deadline (up)
+            # Tags -> Blocked by
+            await pilot.press("down")
+            await pilot.pause()
+            assert app.screen.query_one("#new-blockers", BlockerField).has_focus
+
+            # Blocked by -> Body
+            await pilot.press("down")
+            await pilot.pause()
+            assert app.screen.query_one("#new-body", BodyField).has_focus
+
+            # Body <- Blocked by (up)
+            await pilot.press("up")
+            await pilot.pause()
+            assert app.screen.query_one("#new-blockers", BlockerField).has_focus
+
+            # Blocked by <- Tags
+            await pilot.press("up")
+            await pilot.pause()
+            assert app.screen.query_one("#new-tags", Input).has_focus
+
+            # Tags <- Deadline
             await pilot.press("up")
             await pilot.pause()
             assert app.screen.query_one("#new-deadline", Input).has_focus

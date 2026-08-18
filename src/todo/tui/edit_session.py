@@ -50,6 +50,33 @@ class EditorSession:
 
         return self.apply(item.id, text, edited, tmp_path)
 
+    def run_text(self, text: str) -> str | None:
+        """One $EDITOR round trip over bare text, applied by the caller.
+
+        For the body of an item that does not exist yet: same buffer, same
+        suspend, same failure reporting — but what comes back is only
+        text, and storing it is the caller's business. Returns None when
+        nothing was changed, under the same single-trailing-newline rule
+        as `apply`.
+        """
+        try:
+            tmp_path = self.write_buffer(text)
+        except OSError as exc:
+            self._error(f"Editor failed: {escape_markup(str(exc))}")
+            return None
+
+        if not self._run_editor(tmp_path):
+            return None
+
+        edited = self.read_buffer(tmp_path)
+        if edited is None:
+            return None
+
+        os.unlink(tmp_path)
+        if edited in (text, text + "\n"):
+            return None
+        return edited[:-1] if edited.endswith("\n") else edited
+
     def _error(self, message: str, *, timeout: float | None = None) -> None:
         self._view.notify(message, severity="error", timeout=timeout)
 

@@ -238,3 +238,125 @@ class BlockDialog(ModalScreen[bool]):
 
     def action_cancel(self) -> None:
         self.dismiss(False)
+
+
+class BlockerPicker(ModalScreen[frozenset[ItemId]]):
+    """Mark what a not-yet-created item will wait on.
+
+    The same searchable menu as BlockDialog, with one difference of
+    contract: the item does not exist yet, so there is no edge to write.
+    Choosing toggles a mark instead of applying a change, and Esc hands
+    the marked set back to the form that opened it. Closing and being
+    done are the same thing — what is marked is what was chosen, and a
+    picker opened again starts from that.
+    """
+
+    BINDINGS = [Binding("escape", "done", "Done")]
+
+    def __init__(self, items: ItemStore, selected: frozenset[ItemId]) -> None:
+        super().__init__()
+        self._items = items
+        self._selected: set[ItemId] = set(selected)
+        self._candidates: list[TodoItem] = []
+        self._shown_ids: list[ItemId] = []
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="block-container"):
+            yield Label("What will this wait on?", id="block-title")
+            search = Input(id="block-search", placeholder="Type to filter")
+            # A readout of the filter, not a destination: focus belongs to
+            # the menu, and Tab or a stray click must not move it here.
+            search.can_focus = False
+            yield search
+            yield OptionList(id="block-options")
+            yield Label("", id="block-error")
+            yield Label(
+                "↑↓ move · Enter toggle · type to filter · Esc done",
+                id="block-hint",
+            )
+
+    def on_mount(self) -> None:
+        self._load()
+        self.query_one("#block-options", OptionList).focus()
+
+    def on_key(self, event: events.Key) -> None:
+        """Typing filters the menu without leaving it — same contract as
+        BlockDialog's."""
+        if event.key == "backspace":
+            self._set_query(self._query[:-1])
+            event.stop()
+        elif event.character is not None and event.character.isprintable():
+            self._set_query(self._query + event.character)
+            event.stop()
+
+    @property
+    def _query(self) -> str:
+        return self.query_one("#block-search", Input).value
+
+    def _set_query(self, value: str) -> None:
+        self.query_one("#block-search", Input).value = value
+
+    def _load(self) -> None:
+        try:
+            self._candidates = ListTodos(self._items).execute(
+                ItemFilter(include_done=True)
+            )
+        except TodoError as exc:
+            self._candidates = []
+            self._show_error(exc)
+        # Marked rows first, decided ONCE at load: a picker opened again
+        # leads with what was chosen before, but a toggle never resorts
+        # the menu under the cursor.
+        self._candidates.sort(key=lambda i: i.id not in self._selected)
+        self._populate()
+
+    def _populate(self) -> None:
+        query = self.query_one("#block-search", Input).value.strip().casefold()
+        matches = [i for i in self._candidates if _matches_item(i, query)]
+        # An id typed exactly designates that item.
+        matches.sort(key=lambda i: not _is_exact_id(i, query))
+
+        options = self.query_one("#block-options", OptionList)
+        highlighted = options.highlighted
+        options.clear_options()
+        self._shown_ids = [i.id for i in matches]
+        for i in matches:
+            mark = "✓" if i.id in self._selected else " "
+            # Text, never markup: titles are user-controlled.
+            options.add_option(Option(Text(f"{mark} #{i.id}  {i.title}")))
+        if not self._shown_ids:
+            options.highlighted = None
+        elif highlighted is None:
+            options.highlighted = 0
+        else:
+            # A toggle redraws the marks; the cursor stays on its row so
+            # several blockers can be marked without re-navigating.
+            options.highlighted = min(highlighted, len(self._shown_ids) - 1)
+
+    def _show_error(self, exc: Exception) -> None:
+        # Error text can echo raw user input; never render it as markup.
+        self.query_one("#block-error", Label).update(
+            Text(str(exc) or "Could not read the items")
+        )
+
+    @on(Input.Changed, "#block-search")
+    def on_search_changed(self) -> None:
+        # A changed filter is a fresh navigation: the cursor belongs on
+        # the first match, not wherever it sat in the old rows.
+        self.query_one("#block-options", OptionList).highlighted = None
+        self._populate()
+
+    @on(OptionList.OptionSelected, "#block-options")
+    def on_option_selected(self, event: OptionList.OptionSelected) -> None:
+        index = event.option_index
+        if not (0 <= index < len(self._shown_ids)):
+            return
+        toggled = self._shown_ids[index]
+        if toggled in self._selected:
+            self._selected.discard(toggled)
+        else:
+            self._selected.add(toggled)
+        self._populate()
+
+    def action_done(self) -> None:
+        self.dismiss(frozenset(self._selected))
