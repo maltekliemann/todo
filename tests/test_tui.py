@@ -1599,6 +1599,27 @@ class TestDetailPanel:
             title = app.query_one("#detail-title", Static)
             assert "High task" in str(title.render())
 
+    async def test_the_pane_never_changes_size(
+        self, items: SqliteItemStore, db_path: Path
+    ) -> None:
+        """Fixed, never grown to content: a pane that swells under a long
+        body squeezes the table until it covers the cursor row, and a
+        preview that resizes on every cursor move is its own irritation."""
+        add_todo(items, NewItem(title="Small"))
+        add_todo(items, NewItem(title="Huge", body="line\n" * 40))
+        app = TodoApp(db_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            pane = app.query_one("#detail-panel")
+            table = app.query_one("#item-list", DataTable)
+            pane_height, table_height = pane.region.height, table.region.height
+
+            await pilot.press("down")
+            await pilot.pause()
+            assert "Huge" in str(app.query_one("#detail-title", Static).render())
+            assert pane.region.height == pane_height == 13
+            assert table.region.height == table_height
+
 
 class TestOpenItem:
     """One screen for reading an item and for changing it."""
@@ -2057,6 +2078,11 @@ class TestSharedMetaPresenter:
         assert "Blocking: #2, #3" in joined
         # User text is escaped for markup-parsing widgets.
         assert "a[red]b" not in joined
+        # The fixed pane crops from the bottom, so the lines the table
+        # cannot show come before the ones that repeat its columns.
+        assert joined.index("Tags:") < joined.index("Priority: high")
+        assert joined.index("Blocked by: #1") < joined.index("Priority: high")
+        assert joined.index("Priority: high") < joined.index("Created:")
 
 
 class TestStorageFailureDoesNotCrashTui:

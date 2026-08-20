@@ -13,8 +13,12 @@ TodoListView {
 }
 
 #detail-panel {
-    height: auto;
-    max-height: 15;
+    /* Fixed, never grown to content: a pane that swells under a long
+       body squeezes the table until it covers the cursor row, and a
+       preview that changes size on every cursor move is its own
+       irritation. 13 rows is about five lines of body next to typical
+       metadata; the full body lives in the item screen. */
+    height: 13;
     padding: 1 2;
     background: $panel;
     border-top: solid $primary;

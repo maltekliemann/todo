@@ -112,21 +112,15 @@ def relative_age(dt: datetime) -> str:
 
 
 def meta_lines(item: TodoItem, graph: DependencyGraph) -> list[str]:
-    """The metadata block shared by the detail pane and the item screen.
+    """The metadata block of the detail pane. User text (tags) is escaped
+    — the widget parses markup.
 
-    One source of truth so the two renderings can never drift. User text
-    (tags) is escaped — both widgets parse markup.
+    Ordered by what the crop may eat: the pane under the table has a fixed
+    height, a wrapped title or a short terminal crops it from the bottom,
+    so the lines the table cannot show — tags in full, the blocker ids —
+    come first, and the lines that only repeat its columns come last.
     """
-    first = f"Priority: {item.priority.value}    Status: {item.status.value}"
-    if item.deadline:
-        first += f"    Deadline: {deadline_str(item)}"
-    second = (
-        f"Created: {item.created_at.strftime('%b %d, %Y %H:%M')}    "
-        f"Updated: {item.updated_at.strftime('%b %d, %Y %H:%M')}"
-    )
-    if item.done_at:
-        second += f"    Done: {item.done_at.strftime('%b %d, %Y %H:%M')}"
-    lines = [first, second]
+    lines: list[str] = []
     if item.tags:
         lines.append(f"Tags: {escape_markup(', '.join(sorted(item.tags)))}")
     blockers = graph.blockers_of(item.id)
@@ -135,6 +129,16 @@ def meta_lines(item: TodoItem, graph: DependencyGraph) -> list[str]:
     blocks = graph.dependents_of(item.id)
     if blocks:
         lines.append(f"Blocking: {', '.join(i.label for i in blocks)}")
+    status = f"Priority: {item.priority.value}    Status: {item.status.value}"
+    if item.deadline:
+        status += f"    Deadline: {deadline_str(item)}"
+    stamps = (
+        f"Created: {item.created_at.strftime('%b %d, %Y %H:%M')}    "
+        f"Updated: {item.updated_at.strftime('%b %d, %Y %H:%M')}"
+    )
+    if item.done_at:
+        stamps += f"    Done: {item.done_at.strftime('%b %d, %Y %H:%M')}"
+    lines += [status, stamps]
     return lines
 
 
